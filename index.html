@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>تابلوی کارگاه | پیگیری قراردادها</title>
+
+<link rel="manifest" href="./manifest.json">
+<meta name="theme-color" content="#213B48">
+<link rel="icon" href="./icon-192.png">
+<link rel="apple-touch-icon" href="./icon-192.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="تابلوی کارگاه">
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#EFE9DD; --paper:#FBF8F2; --ink:#2B2620; --ink-soft:#6B6255; --line:#DCD3C1;
+    --steel:#35586B; --steel-deep:#213B48; --amber:#B9793B; --green:#4C7A5E; --red:#A94438;
+  }
+  *{box-sizing:border-box;}
+  html,body{margin:0;padding:0;}
+  body{
+    background:var(--bg);
+    background-image: radial-gradient(circle at 1px 1px, rgba(43,38,32,0.06) 1px, transparent 0);
+    background-size: 22px 22px;
+    color:var(--ink); font-family:'Vazirmatn',sans-serif; min-height:100vh; padding-bottom:40px;
+  }
+  header{ background:var(--steel-deep); color:#F2EFE6; padding:22px 18px 26px; position:relative; overflow:hidden; }
+  header::after{ content:""; position:absolute; inset:0; background: repeating-linear-gradient(135deg, rgba(255,255,255,0.035) 0 10px, transparent 10px 20px); }
+  header h1{ margin:0; font-size:20px; font-weight:900; position:relative; }
+  header p{ margin:6px 0 0; font-size:12.5px; color:#B9C6CC; position:relative; }
+  .eyebrow{ display:inline-block; font-family:'JetBrains Mono',monospace; font-size:10.5px; letter-spacing:1.5px; color:var(--amber); background:rgba(185,121,59,0.15); padding:3px 8px; border-radius:3px; margin-bottom:8px; position:relative; }
+  .wrap{ max-width:640px; margin:0 auto; padding:0 14px; }
+  .toolbar{ display:flex; gap:8px; margin:-14px 0 16px; position:relative; z-index:2; }
+  .toolbar button{ flex:1; border:none; cursor:pointer; font-family:'Vazirmatn',sans-serif; font-weight:700; font-size:13.5px; padding:12px 10px; border-radius:10px; box-shadow:0 3px 0 rgba(0,0,0,0.15); }
+  .btn-primary{ background:var(--amber); color:#fff; }
+  .btn-secondary{ background:var(--paper); color:var(--steel-deep); border:1px solid var(--line) !important; box-shadow:none !important; }
+  #installBtn{ display:none; }
+  .empty{ background:var(--paper); border:1.5px dashed var(--line); border-radius:14px; padding:32px 16px; text-align:center; color:var(--ink-soft); font-size:13.5px; }
+  .card{ background:var(--paper); border:1px solid var(--line); border-radius:14px; margin-bottom:14px; overflow:hidden; box-shadow:0 2px 0 rgba(43,38,32,0.04); }
+  .card-head{ display:flex; align-items:center; justify-content:space-between; padding:14px 16px 10px; cursor:pointer; }
+  .card-title{ display:flex; flex-direction:column; gap:3px; }
+  .card-name{ font-weight:900; font-size:16px; }
+  .card-sub{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--ink-soft); }
+  .stage-pill{ font-size:11.5px; font-weight:700; padding:5px 11px; border-radius:20px; white-space:nowrap; }
+  .stamp-row{ display:flex; gap:4px; padding:0 16px 14px; }
+  .stamp{ flex:1; height:6px; border-radius:3px; background:var(--line); }
+  .stamp.done{ background:var(--green); }
+  .stamp.current{ background:var(--amber); }
+  .body-panel{ border-top:1px dashed var(--line); padding:14px 16px 16px; display:none; }
+  .body-panel.open{ display:block; }
+  .stage-buttons{ display:flex; flex-wrap:wrap; gap:6px; margin-bottom:14px; }
+  .stage-buttons button{ font-family:'Vazirmatn',sans-serif; font-size:12px; font-weight:700; border:1.5px solid var(--line); background:#fff; color:var(--ink); padding:7px 12px; border-radius:8px; cursor:pointer; }
+  .stage-buttons button.active{ background:var(--amber); border-color:var(--amber); color:#fff; }
+  .hist-title{ font-size:11px; color:var(--ink-soft); margin-bottom:6px; font-weight:700; }
+  .hist-item{ display:flex; justify-content:space-between; font-size:12px; padding:6px 0; border-bottom:1px solid var(--line); }
+  .hist-item:last-child{ border-bottom:none; }
+  .hist-time{ font-family:'JetBrains Mono',monospace; color:var(--ink-soft); font-size:11px; }
+  .del-row{ margin-top:12px; text-align:left; }
+  .del-row button{ background:none; border:none; color:var(--red); font-size:11.5px; cursor:pointer; font-family:'Vazirmatn',sans-serif; text-decoration:underline; }
+  .modal-bg{ position:fixed; inset:0; background:rgba(33,29,24,0.55); display:none; align-items:flex-end; justify-content:center; z-index:50; }
+  .modal-bg.open{ display:flex; }
+  .modal{ background:var(--paper); width:100%; max-width:640px; border-radius:18px 18px 0 0; padding:20px 18px 26px; }
+  .modal h3{ margin:0 0 14px; font-size:15px; }
+  .modal input, .modal textarea{ width:100%; font-family:'Vazirmatn',sans-serif; font-size:14px; padding:11px 12px; border:1.5px solid var(--line); border-radius:9px; margin-bottom:10px; background:#fff; color:var(--ink); }
+  .modal .row{ display:flex; gap:8px; margin-top:6px; }
+  .modal .row button{ flex:1; border:none; padding:11px; border-radius:9px; font-weight:700; font-size:13.5px; cursor:pointer; font-family:'Vazirmatn',sans-serif; }
+  .save-btn{ background:var(--steel-deep); color:#fff; }
+  .cancel-btn{ background:#EDE7DA; color:var(--ink); }
+  .sync-note{ text-align:center; font-size:10.5px; color:var(--ink-soft); font-family:'JetBrains Mono',monospace; margin:14px 0 4px; display:flex; align-items:center; justify-content:center; gap:6px; }
+  .dot{ width:7px; height:7px; border-radius:50%; background:var(--green); }
+  .dot.off{ background:var(--red); }
+  .stagelist-edit{ font-size:11px; color:var(--ink-soft); margin-bottom:6px; }
+  .setup-warning{ background:#fff3e0; border:1.5px solid var(--amber); border-radius:12px; padding:14px; font-size:12.5px; line-height:1.9; margin-bottom:16px; }
+  .setup-warning b{ color:var(--red); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="wrap">
+    <div class="eyebrow">تابلوی کنترل تولید</div>
+    <h1>وضعیت قراردادها</h1>
+    <p>مراحل ساخت و نصب هر سفارش، با زمان دقیق ثبت هر مرحله — به‌صورت آنلاین و لحظه‌ای</p>
+  </div>
+</header>
+
+<div class="wrap">
+  <div id="configWarning" class="setup-warning" style="display:none;">
+    <b>راه‌اندازی کامل نشده:</b> کلیدهای Firebase در فایل <code>firebase-config.js</code> هنوز جایگزین نشده‌اند.
+    مراحل آن در README.md توضیح داده شده — بدون این مرحله، اطلاعات بین گوشی‌ها همگام نمی‌شود.
+  </div>
+
+  <div class="toolbar">
+    <button class="btn-primary" onclick="openAddModal()">+ قرارداد جدید</button>
+    <button class="btn-secondary" onclick="openStageModal()">مراحل کاری</button>
+  </div>
+  <div class="toolbar">
+    <button id="installBtn" class="btn-secondary" onclick="installApp()">نصب اپلیکیشن روی گوشی</button>
+  </div>
+
+  <div id="list"></div>
+  <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">در حال اتصال…</span></div>
+</div>
+
+<div class="modal-bg" id="addModalBg">
+  <div class="modal">
+    <h3>قرارداد جدید</h3>
+    <input id="newName" placeholder="نام مشتری / کد قرارداد" />
+    <div class="row">
+      <button class="save-btn" onclick="addContract()">ثبت</button>
+      <button class="cancel-btn" onclick="closeModal('addModalBg')">انصراف</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="stageModalBg">
+  <div class="modal">
+    <h3>لیست مراحل کاری</h3>
+    <div class="stagelist-edit">هر مرحله را در یک خط بنویسید (به ترتیب انجام کار)</div>
+    <textarea id="stagesText" rows="6"></textarea>
+    <div class="row">
+      <button class="save-btn" onclick="saveStages()">ذخیره</button>
+      <button class="cancel-btn" onclick="closeModal('stageModalBg')">انصراف</button>
+    </div>
+  </div>
+</div>
+
+<!-- Firebase (free tier) — realtime shared database -->
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="./firebase-config.js"></script>
+
+<script>
+const DEFAULT_STAGES = ['آنالیز', 'برش و ساخت', 'آماده‌سازی و ارسال بار', 'در حال نصب', 'تکمیل شده'];
+let stages = DEFAULT_STAGES.slice();
+let contracts = [];
+let openCardId = null;
+let db = null;
+
+function setStatus(text, ok){
+  document.getElementById('syncNote').textContent = text;
+  document.getElementById('statusDot').className = 'dot' + (ok ? '' : ' off');
+}
+
+try{
+  if(!firebaseConfig || firebaseConfig.apiKey === 'PASTE_API_KEY_HERE'){
+    document.getElementById('configWarning').style.display = 'block';
+    setStatus('راه‌اندازی نشده — README.md را ببینید', false);
+  } else {
+    firebase.initializeApp(firebaseConfig);
+    db = firebase.firestore();
+
+    db.collection('meta').doc('stages').onSnapshot((doc) => {
+      if(doc.exists && doc.data().list && doc.data().list.length){
+        stages = doc.data().list;
+      } else {
+        db.collection('meta').doc('stages').set({ list: DEFAULT_STAGES });
+      }
+      render();
+    }, (err) => setStatus('خطا در اتصال: ' + err.message, false));
+
+    db.collection('contracts').orderBy('createdAt', 'desc').onSnapshot((snap) => {
+      contracts = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setStatus('همگام — لحظه‌ای', true);
+      render();
+    }, (err) => setStatus('خطا در اتصال: ' + err.message, false));
+  }
+}catch(e){
+  setStatus('خطا در راه‌اندازی: ' + e.message, false);
+}
+
+function fmtTime(iso){
+  const d = new Date(iso);
+  return d.toLocaleString('fa-IR', {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
+}
+function fmtDuration(iso){
+  const ms = Date.now() - new Date(iso).getTime();
+  const h = Math.floor(ms/3600000);
+  const m = Math.floor((ms%3600000)/60000);
+  if(h < 1) return m + ' دقیقه پیش';
+  if(h < 24) return h + ' ساعت و ' + m + ' دقیقه پیش';
+  return Math.floor(h/24) + ' روز پیش';
+}
+function stageColor(idx, total){ return idx === total-1 ? 'var(--green)' : 'var(--amber)'; }
+function escapeHtml(s){ const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
+
+function render(){
+  const list = document.getElementById('list');
+  if(contracts.length === 0){
+    list.innerHTML = '<div class="empty">هنوز قراردادی ثبت نشده. با دکمه «قرارداد جدید» شروع کنید.</div>';
+    return;
+  }
+  list.innerHTML = contracts.map(c => {
+    const history = c.history || [];
+    const stageIdx = Math.min(c.stageIndex || 0, stages.length-1);
+    const stageName = stages[stageIdx] || '—';
+    const lastHist = history[history.length-1];
+    const isOpen = openCardId === c.id;
+    const stampsHtml = stages.map((s,i) => {
+      let cls = i < stageIdx ? 'done' : (i === stageIdx ? 'current' : '');
+      return `<div class="stamp ${cls}"></div>`;
+    }).join('');
+    const stageBtns = stages.map((s,i) => {
+      const active = i === stageIdx ? 'active' : '';
+      return `<button class="${active}" onclick="event.stopPropagation(); setStage('${c.id}', ${i})">${s}</button>`;
+    }).join('');
+    const histHtml = history.slice().reverse().map(h =>
+      `<div class="hist-item"><span>${h.stage}</span><span class="hist-time">${fmtTime(h.time)}</span></div>`
+    ).join('');
+    return `
+      <div class="card">
+        <div class="card-head" onclick="toggleCard('${c.id}')">
+          <div class="card-title">
+            <span class="card-name">${escapeHtml(c.name)}</span>
+            <span class="card-sub">${lastHist ? fmtDuration(lastHist.time) + ' در این مرحله' : ''}</span>
+          </div>
+          <span class="stage-pill" style="background:${stageColor(stageIdx, stages.length)}22; color:${stageColor(stageIdx, stages.length)};">${stageName}</span>
+        </div>
+        <div class="stamp-row">${stampsHtml}</div>
+        <div class="body-panel ${isOpen ? 'open' : ''}">
+          <div class="stage-buttons">${stageBtns}</div>
+          <div class="hist-title">تاریخچه مراحل</div>
+          ${histHtml || '<div class="hist-item"><span>—</span></div>'}
+          <div class="del-row"><button onclick="event.stopPropagation(); deleteContract('${c.id}')">حذف قرارداد</button></div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function toggleCard(id){ openCardId = openCardId === id ? null : id; render(); }
+
+async function setStage(id, idx){
+  if(!db) return;
+  const c = contracts.find(x => x.id === id);
+  if(!c) return;
+  const history = (c.history || []).concat([{ stage: stages[idx], time: new Date().toISOString() }]);
+  await db.collection('contracts').doc(id).update({ stageIndex: idx, history });
+}
+
+async function deleteContract(id){
+  if(!db) return;
+  if(!confirm('این قرارداد حذف شود؟')) return;
+  await db.collection('contracts').doc(id).delete();
+}
+
+function openAddModal(){ document.getElementById('newName').value = ''; document.getElementById('addModalBg').classList.add('open'); }
+function openStageModal(){ document.getElementById('stagesText').value = stages.join('\n'); document.getElementById('stageModalBg').classList.add('open'); }
+function closeModal(id){ document.getElementById(id).classList.remove('open'); }
+
+async function addContract(){
+  if(!db) return;
+  const name = document.getElementById('newName').value.trim();
+  if(!name) return;
+  await db.collection('contracts').add({
+    name: name,
+    stageIndex: 0,
+    history: [{ stage: stages[0], time: new Date().toISOString() }],
+    createdAt: Date.now()
+  });
+  closeModal('addModalBg');
+}
+
+async function saveStages(){
+  if(!db) return;
+  const lines = document.getElementById('stagesText').value.split('\n').map(s => s.trim()).filter(Boolean);
+  if(lines.length === 0) return;
+  await db.collection('meta').doc('stages').set({ list: lines });
+  closeModal('stageModalBg');
+}
+
+// PWA install prompt (Android/Chrome)
+let deferredPrompt = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredPrompt = e;
+  document.getElementById('installBtn').style.display = 'block';
+});
+function installApp(){
+  if(!deferredPrompt) return;
+  deferredPrompt.prompt();
+  deferredPrompt = null;
+  document.getElementById('installBtn').style.display = 'none';
+}
+
+if('serviceWorker' in navigator){
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('./service-worker.js').catch(() => {});
+  });
+}
+</script>
+
+</body>
+</html>
