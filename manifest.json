@@ -1,13 +1,13 @@
 {
-  "name": "تابلوی کنترل کارگاه",
-  "short_name": "تابلوی کارگاه",
+  "name": "افراچوب | تابلوی کنترل کارگاه",
+  "short_name": "افراچوب",
   "description": "پیگیری آنلاین مراحل ساخت و نصب قراردادهای کابینت و کمد",
   "start_url": "./index.html",
   "scope": "./",
   "display": "standalone",
   "orientation": "portrait",
-  "background_color": "#EFE9DD",
-  "theme_color": "#213B48",
+  "background_color": "#15171A",
+  "theme_color": "#15171A",
   "dir": "rtl",
   "lang": "fa",
   "icons": [
