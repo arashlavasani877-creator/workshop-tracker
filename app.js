@@ -1,4 +1,4 @@
-/* ===== افراچوب — منطق اصلی اپ (نسخه ۳) ===== */
+/* ===== افراچوب — منطق اصلی اپ (نسخه ۹) ===== */
 
 const STAGES = [
   { name: 'اندازه‌گیری', type: 'check' },
@@ -11,6 +11,12 @@ const STAGES = [
   { name: 'خاتمه قرارداد', type: 'check' }
 ];
 const WARN_DAYS = 7;
+
+// V9 — Smart Alerts / Dashboard thresholds (متمرکز، قابل تغییر در آینده توسط مدیر)
+const ALERT_THRESHOLDS = {
+  NEAR_DUE_DAYS: 3,
+  STALE_UPDATE_DAYS: 3
+};
 
 let auth = null, db = null;
 let currentUser = null;
@@ -25,6 +31,15 @@ let dataSubscribed = false;
 let historyOpen = {};         // id -> bool
 let approveTargetUid = null;
 let authErrorMsg = '';
+
+// V9 — state جدید
+let searchQuery = '';
+let filters = { status: 'all', stage: 'all', due: 'all', owner: 'all' };
+let currentListCtx = { isAdmin: false, predicate: null };
+let detailContractId = null;
+let alertsPanelOpen = false;
+let quickUpdateOpen = false;
+let quickData = { contractId: null, stageIdx: null, checkDone: false };
 
 function setStatus(text, ok){
   const n = document.getElementById('syncNote'), d = document.getElementById('statusDot');
@@ -116,6 +131,155 @@ function scheduleText(c){
   if(Math.abs(diff) < 5) return 'مطابق برنامه';
   return diff > 0 ? ('جلوتر از برنامه (+' + diff + '٪)') : ('عقب‌تر از برنامه (' + diff + '٪)');
 }
+
+/* ---------- V9: last update / KPIs / alerts (همه از داده واقعی contracts) ---------- */
+function lastUpdateTime(c){
+  const h = c.history || [];
+  let latest = '';
+  h.forEach(e => { if(e.time && e.time > latest) latest = e.time; });
+  if(latest) return latest;
+  return c.createdAt ? new Date(c.createdAt).toISOString() : null;
+}
+function daysSinceUpdate(c){
+  const t = lastUpdateTime(c);
+  if(!t) return null;
+  return daysBetween(new Date(t), new Date());
+}
+function relativeDayLabel(iso){
+  const d = new Date(iso);
+  const now = new Date();
+  const dOnly = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+  const nOnly = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const diff = Math.round((nOnly - dOnly) / 86400000);
+  if(diff === 0) return 'امروز';
+  if(diff === 1) return 'دیروز';
+  return d.toLocaleDateString('fa-IR');
+}
+function isNearDue(c){
+  const st = dueStatus(c);
+  return st.daysLeft != null && st.daysLeft >= 0 && st.daysLeft <= ALERT_THRESHOLDS.NEAR_DUE_DAYS;
+}
+function isStale(c){
+  const d = daysSinceUpdate(c);
+  return d != null && d >= ALERT_THRESHOLDS.STALE_UPDATE_DAYS;
+}
+function computeKPIs(list){
+  const total = list.length;
+  const completed = list.filter(isCompleted).length;
+  const active = total - completed;
+  const activeList = list.filter(c => !isCompleted(c));
+  const late = activeList.filter(c => dueStatus(c).cls === 'late').length;
+  const nearDue = activeList.filter(isNearDue).length;
+  const stale = activeList.filter(isStale).length;
+  const avgProgress = activeList.length ? Math.round(activeList.reduce((s,c)=>s+overallPercent(c),0) / activeList.length) : 0;
+  return { total, active, completed, late, nearDue, stale, avgProgress };
+}
+function needsActionList(list){
+  return list.filter(c => !isCompleted(c)).map(c => {
+    const due = dueStatus(c);
+    const stale = isStale(c);
+    const late = due.cls === 'late';
+    const near = isNearDue(c);
+    if(!late && !near && !stale) return null;
+    const severity = late ? 3 : (near ? 2 : 1);
+    return { c, due, staleDays: daysSinceUpdate(c), stale, late, near, severity };
+  }).filter(Boolean).sort((a,b) => b.severity - a.severity || (a.due.daysLeft ?? 999) - (b.due.daysLeft ?? 999));
+}
+function generateAlerts(list){
+  const alerts = [];
+  list.forEach(c => {
+    if(isCompleted(c)) return;
+    const due = dueStatus(c);
+    if(due.cls === 'late'){
+      alerts.push({ type:'A', id:c.id, text: c.name + ' — ' + due.label, time: lastUpdateTime(c) });
+    } else if(isNearDue(c)){
+      alerts.push({ type:'B', id:c.id, text: c.name + ' — ' + due.label, time: lastUpdateTime(c) });
+    }
+    if(isStale(c)){
+      alerts.push({ type:'C', id:c.id, text: c.name + ' — ' + daysSinceUpdate(c) + ' روز بدون بروزرسانی', time: lastUpdateTime(c) });
+    }
+    const h = c.history || [];
+    if(h.length){
+      const last = h[h.length-1];
+      if(last.time && (Date.now() - new Date(last.time).getTime()) <= 86400000){
+        alerts.push({ type:'D', id:c.id, text: c.name + ' — ' + last.label, time: last.time });
+      }
+    }
+  });
+  return alerts.sort((a,b) => new Date(b.time||0) - new Date(a.time||0));
+}
+function alertTypeFa(t){
+  return { A:'عقب‌افتاده', B:'نزدیک سررسید', C:'بدون بروزرسانی', D:'تغییر اخیر' }[t] || t;
+}
+function lastEditor(c){
+  const h = c.history || [];
+  for(let i = h.length - 1; i >= 0; i--){ if(h[i].by) return h[i].by; }
+  return '';
+}
+function allEditors(list){
+  const set = new Set();
+  list.forEach(c => (c.history||[]).forEach(h => { if(h.by) set.add(h.by); }));
+  return Array.from(set).sort();
+}
+
+/* ---------- V9: Search & Filter (فقط بر اساس فیلدهای واقعی Schema) ---------- */
+function matchesFilters(c){
+  if(searchQuery){
+    const q = searchQuery.trim().toLowerCase();
+    const hay = [c.name, c.itemCode, c.description].map(x => (x||'').toLowerCase()).join(' ');
+    if(!hay.includes(q)) return false;
+  }
+  if(filters.status === 'active' && isCompleted(c)) return false;
+  if(filters.status === 'closed' && !isCompleted(c)) return false;
+  if(filters.status === 'late' && dueStatus(c).cls !== 'late') return false;
+  if(filters.stage !== 'all'){
+    if(getCurrentIndex(c) !== parseInt(filters.stage,10)) return false;
+  }
+  if(filters.due !== 'all'){
+    const cls = dueStatus(c).cls;
+    if(filters.due === 'late' && cls !== 'late') return false;
+    if(filters.due === 'near' && !isNearDue(c)) return false;
+    if(filters.due === 'normal' && (cls === 'late' || isNearDue(c))) return false;
+  }
+  if(filters.owner !== 'all' && lastEditor(c) !== filters.owner) return false;
+  return true;
+}
+function renderFilterBarHtml(){
+  const editors = allEditors(contracts);
+  const stageOptions = STAGES.map((s,i) => `<option value="${i}" ${filters.stage==String(i)?'selected':''}>${s.name}</option>`).join('');
+  const editorOptions = editors.map(e => `<option value="${escapeHtml(e)}" ${filters.owner===e?'selected':''}>${escapeHtml(e.split('@')[0])}</option>`).join('');
+  return `
+    <div class="filter-bar">
+      <input class="filter-search" placeholder="جستجو — شماره قرارداد، کد قلم، توضیحات…" value="${escapeHtml(searchQuery)}" oninput="onSearchInput(this.value)">
+      <div class="filter-row">
+        <select onchange="onFilterChange('status', this.value)">
+          <option value="all" ${filters.status==='all'?'selected':''}>همه وضعیت‌ها</option>
+          <option value="active" ${filters.status==='active'?'selected':''}>فعال</option>
+          <option value="closed" ${filters.status==='closed'?'selected':''}>خاتمه یافته</option>
+          <option value="late" ${filters.status==='late'?'selected':''}>عقب‌افتاده</option>
+        </select>
+        <select onchange="onFilterChange('stage', this.value)">
+          <option value="all" ${filters.stage==='all'?'selected':''}>همه مراحل</option>
+          ${stageOptions}
+        </select>
+      </div>
+      <div class="filter-row" style="margin-top:6px;">
+        <select onchange="onFilterChange('due', this.value)">
+          <option value="all" ${filters.due==='all'?'selected':''}>همه وضعیت‌های زمانی</option>
+          <option value="late" ${filters.due==='late'?'selected':''}>عقب‌افتاده</option>
+          <option value="near" ${filters.due==='near'?'selected':''}>نزدیک سررسید</option>
+          <option value="normal" ${filters.due==='normal'?'selected':''}>عادی</option>
+        </select>
+        <select onchange="onFilterChange('owner', this.value)" ${editors.length?'':'disabled'}>
+          <option value="all">همه مسئولان (آخرین ویرایشگر)</option>
+          ${editorOptions}
+        </select>
+      </div>
+    </div>`;
+}
+function onSearchInput(v){ searchQuery = v; refreshList(); }
+function onFilterChange(key, v){ filters[key] = v; refreshList(); }
+function refreshList(){ renderList(currentListCtx.isAdmin, currentListCtx.predicate); }
 
 /* ---------- Auth ---------- */
 function initAuthAndData(){
@@ -244,7 +408,12 @@ function renderApp(){
   }
 
   const badgeText = myPosition ? escapeHtml(myPosition) : roleFa(myRole);
+  const canSeeAlerts = myRole === 'admin' || myRole === 'supervisor';
+  const alertCount = canSeeAlerts ? generateAlerts(contracts).length : 0;
+  const bellHtml = canSeeAlerts ? `
+    <button class="bell-btn" onclick="toggleAlertsPanel()">🔔${alertCount ? `<span class="bell-dot">${alertCount>99?'99+':alertCount}</span>` : ''}</button>` : '';
   headerRight.innerHTML = `<div style="display:flex;align-items:center;">
+      ${bellHtml}
       <span class="role-badge">${badgeText}</span>
       <button class="signout-btn" onclick="signOutUser()">خروج</button>
     </div>`;
@@ -269,8 +438,8 @@ function renderApp(){
       </div>`;
     return;
   }
-  if(myRole === 'admin'){ renderAdmin(el); return; }
-  if(myRole === 'supervisor'){ renderSupervisor(el); return; }
+  if(myRole === 'admin'){ renderAdmin(el); refreshOpenOverlays(); return; }
+  if(myRole === 'supervisor'){ renderSupervisor(el); refreshOpenOverlays(); return; }
 
   el.innerHTML = `<div class="center-screen">
     <span class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">در حال بارگذاری…</span></span>
@@ -281,6 +450,40 @@ function renderApp(){
 
 function roleFa(r){
   return { admin:'مدیر', supervisor:'سرپرست نصب', pending:'در انتظار تایید', blocked:'مسدود' }[r] || r;
+}
+
+/* ---------- V9: overlay refresh (نگه‌داشتن Modal های باز به‌روز، هنگام تغییر Real-time داده) ---------- */
+function refreshOpenOverlays(){
+  if(detailContractId && document.getElementById('detailModalBg').classList.contains('open')){
+    renderDetailModalContent();
+  }
+  if(alertsPanelOpen){
+    renderAlertsModalContent();
+  }
+}
+
+/* ---------- V9: Smart Alerts panel ---------- */
+function toggleAlertsPanel(){
+  alertsPanelOpen = !alertsPanelOpen;
+  const bg = document.getElementById('alertsModalBg');
+  if(alertsPanelOpen){ renderAlertsModalContent(); bg.classList.add('open'); }
+  else { bg.classList.remove('open'); }
+}
+function closeAlertsModal(){ alertsPanelOpen = false; document.getElementById('alertsModalBg').classList.remove('open'); }
+function renderAlertsModalContent(){
+  const box = document.getElementById('alertsModalInner');
+  if(!box) return;
+  const alerts = generateAlerts(contracts);
+  box.innerHTML = `
+    <h3>هشدارهای هوشمند <span style="color:var(--ink-faint); font-family:'JetBrains Mono',monospace; font-size:11px;">(${alerts.length} مورد)</span></h3>
+    ${alerts.length ? alerts.map(a => `
+      <div class="alert-item" onclick="closeAlertsModal(); openContractDetail('${a.id}')">
+        <span class="alert-type ${a.type}">${alertTypeFa(a.type)}</span>
+        <span class="alert-text">${escapeHtml(a.text)}</span>
+        <span class="alert-time">${a.time ? relativeDayLabel(a.time) : ''}</span>
+      </div>`).join('') : '<div class="empty">فعلاً هشداری وجود ندارد.</div>'}
+    <div class="row" style="margin-top:10px;"><button class="cancel-btn" style="flex:1;" onclick="closeAlertsModal()">بستن</button></div>
+  `;
 }
 
 /* ---------- Shared: warnings list ---------- */
@@ -315,12 +518,16 @@ function renderSupervisor(el){
   const body = document.getElementById('supBody');
   if(supervisorTab === 'contracts'){
     const openCount = contracts.filter(c=>!isCompleted(c)).length;
-    body.innerHTML = `<div class="section-title" style="margin-top:14px;">قراردادها <span class="cnt">${openCount} مورد</span></div><div id="list"></div>`;
+    body.innerHTML = `
+      <div class="quick-fab-row"><button class="quick-fab" onclick="openQuickUpdate()">⚡ بروزرسانی سریع</button></div>
+      <div class="section-title" style="margin-top:14px;">قراردادها <span class="cnt">${openCount} مورد</span></div>
+      ${renderFilterBarHtml()}
+      <div id="list"></div>`;
     renderList(false, c => !isCompleted(c));
   } else if(supervisorTab === 'warnings'){
     body.innerHTML = renderWarningsHtml();
   } else {
-    body.innerHTML = `<div class="section-title" style="margin-top:14px;">خاتمه‌ها <span class="cnt">${closedCount} مورد</span></div><div id="list"></div>`;
+    body.innerHTML = `<div class="section-title" style="margin-top:14px;">خاتمه‌ها <span class="cnt">${closedCount} مورد</span></div>${renderFilterBarHtml()}<div id="list"></div>`;
     renderList(false, isCompleted);
   }
 }
@@ -355,15 +562,40 @@ function switchAdminTab(t){ adminTab = t; renderApp(); }
 
 function renderAdminDashboard(){
   const body = document.getElementById('adminBody');
-  const openContracts = contracts.filter(c => !isCompleted(c));
-  const late = openContracts.filter(c => dueStatus(c).cls === 'late').length;
-  const soon = openContracts.filter(c => dueStatus(c).cls === 'warn').length;
+  const k = computeKPIs(contracts);
+  const actions = needsActionList(contracts);
   body.innerHTML = `
-    <div class="section-title" style="margin-top:14px;">خلاصه وضعیت <span class="cnt">${openContracts.length} قرارداد فعال</span></div>
-    <div class="card-badges" style="margin-bottom:14px;">
-      <span class="mini-badge" style="border-color:var(--red);color:var(--red);">عقب‌افتاده: ${late}</span>
-      <span class="mini-badge" style="border-color:var(--amber);color:var(--amber);">نزدیک به سررسید: ${soon}</span>
+    <div class="quick-fab-row"><button class="quick-fab" onclick="openQuickUpdate()">⚡ بروزرسانی سریع</button></div>
+
+    <div class="section-title" style="margin-top:14px;">داشبورد مدیریتی</div>
+    <div class="kpi-grid">
+      <div class="kpi-card c-blue"><div class="kpi-val">${k.total}</div><div class="kpi-label">کل قراردادها</div></div>
+      <div class="kpi-card c-blue"><div class="kpi-val">${k.active}</div><div class="kpi-label">قراردادهای فعال</div></div>
+      <div class="kpi-card c-green"><div class="kpi-val">${k.completed}</div><div class="kpi-label">خاتمه یافته</div></div>
+      <div class="kpi-card c-red"><div class="kpi-val">${k.late}</div><div class="kpi-label">عقب‌افتاده</div></div>
+      <div class="kpi-card c-amber"><div class="kpi-val">${k.nearDue}</div><div class="kpi-label">نزدیک سررسید (≤${ALERT_THRESHOLDS.NEAR_DUE_DAYS} روز)</div></div>
+      <div class="kpi-card c-amber"><div class="kpi-val">${k.stale}</div><div class="kpi-label">بدون بروزرسانی (≥${ALERT_THRESHOLDS.STALE_UPDATE_DAYS} روز)</div></div>
+      <div class="kpi-card c-blue"><div class="kpi-val">${k.avgProgress}٪</div><div class="kpi-label">میانگین پیشرفت (فعال)</div></div>
     </div>
+
+    <div class="section-title">نیازمند اقدام فوری <span class="cnt">${actions.length} مورد</span></div>
+    ${actions.length ? actions.map(a => `
+      <div class="action-item ${a.late ? '' : (a.near ? 'amber' : 'stale')}">
+        <div class="action-top">
+          <div>
+            <div class="action-name">${escapeHtml(a.c.name)}</div>
+            <div class="action-meta">مرحله: ${STAGES[getCurrentIndex(a.c)].name} — پیشرفت: ${overallPercent(a.c)}٪</div>
+          </div>
+          <span class="due-tag ${a.due.cls}" style="white-space:nowrap;">${a.due.label}</span>
+        </div>
+        <div class="action-tags">
+          <span class="mini-badge">آخرین بروزرسانی: ${a.staleDays!=null ? (a.staleDays<=0?'امروز':a.staleDays+' روز پیش') : 'نامشخص'}</span>
+        </div>
+        <button class="action-view-btn" onclick="openContractDetail('${a.c.id}')">مشاهده قرارداد</button>
+      </div>`).join('') : '<div class="empty" style="margin-bottom:14px;">فعلاً هیچ قراردادی نیازمند اقدام فوری نیست.</div>'}
+
+    <div class="section-title">قراردادهای فعال <span class="cnt">${k.active} مورد</span></div>
+    ${renderFilterBarHtml()}
     <div id="list"></div>
   `;
   renderList(true, c => !isCompleted(c));
@@ -374,6 +606,7 @@ function renderAdminClosed(){
   const closed = contracts.filter(isCompleted);
   body.innerHTML = `
     <div class="section-title" style="margin-top:14px;">خاتمه‌ها <span class="cnt">${closed.length} قرارداد</span></div>
+    ${renderFilterBarHtml()}
     <div id="list"></div>
   `;
   renderList(true, isCompleted);
@@ -443,9 +676,11 @@ async function confirmApprove(){
 
 /* ---------- Contract list & card ---------- */
 function renderList(isAdmin, predicate){
+  currentListCtx = { isAdmin, predicate };
   const list = document.getElementById('list');
   if(!list) return;
-  const items = predicate ? contracts.filter(predicate) : contracts;
+  let items = predicate ? contracts.filter(predicate) : contracts;
+  items = items.filter(matchesFilters);
   if(items.length === 0){
     list.innerHTML = '<div class="empty">موردی برای نمایش نیست.</div>';
     return;
@@ -453,22 +688,45 @@ function renderList(isAdmin, predicate){
   list.innerHTML = items.map(c => renderCard(c, isAdmin)).join('');
 }
 
+/* V9: کارت خلاصه — فشرده، بدون شلوغی. با تپ، «صفحه جزئیات قرارداد» (Modal) باز می‌شود. */
 function renderCard(c, isAdmin){
-  const status = c.status || {};
   const curIdx = getCurrentIndex(c);
   const pct = overallPercent(c);
-  const isOpen = openCardId === c.id;
   const due = dueStatus(c);
   const sched = scheduleText(c);
 
   const badges = [];
   if(c.itemCode) badges.push('<span class="mini-badge">کد قلم: ' + escapeHtml(c.itemCode) + '</span>');
 
+  return `
+    <div class="card">
+      <div class="card-head" onclick="openContractDetail('${c.id}')">
+        <div class="card-title">
+          <span class="card-name">${escapeHtml(c.name)}</span>
+          <span class="card-sub">مرحله فعلی: ${STAGES[curIdx].name}</span>
+          <div class="card-badges">${badges.join('')}</div>
+        </div>
+        <span class="stage-pill">${pct}٪</span>
+      </div>
+      <div class="progress-strip"><div style="width:${pct}%"></div></div>
+      <div class="due-row">
+        <span class="due-tag ${due.cls}">${due.label}</span>
+        ${sched ? `<span class="schedule-tag">${sched}</span>` : ''}
+      </div>
+    </div>`;
+}
+
+/* V9: بدنه‌ی مشترکِ جزئیات قرارداد (Timeline هشت مرحله‌ای + فیلدها + تاریخچه) — فقط در Detail Modal رندر می‌شود. */
+function renderContractBody(c, isAdmin){
+  const status = c.status || {};
+  const curIdx = getCurrentIndex(c);
+
   const timelineHtml = STAGES.map((st,i) => {
     const s = status[i] || {};
     const done = isStageDone(status, i);
     const dotCls = done ? 'done' : (i === curIdx ? 'active' : '');
     const nameCls = done ? 'done' : '';
+    const stateFa = done ? 'انجام شد' : (i === curIdx ? 'در حال انجام' : 'در انتظار');
     let control = '';
     if(st.type === 'check'){
       control = `<button class="chk-btn ${done?'done':''}" onclick="event.stopPropagation(); toggleCheck('${c.id}', ${i})">${done ? '✓ انجام شد' : 'ثبت انجام'}</button>`;
@@ -504,16 +762,14 @@ function renderCard(c, isAdmin){
       <div class="tl-item">
         <div class="tl-dot ${dotCls}"></div>
         <div class="tl-row"><span class="tl-name ${nameCls}">${st.name}</span>${control}</div>
-        ${s.doneAt ? `<div class="tl-time">${fmtTime(s.doneAt)}</div>` : ''}
+        <div class="tl-time">${stateFa}${s.doneAt ? ' — ' + fmtTime(s.doneAt) : ''}</div>
         ${progBox}
       </div>`;
   }).join('');
 
   const history = c.history || [];
   const hOpen = isHistoryOpen(c.id, isAdmin);
-  const histHtml = history.slice().reverse().slice(0,30).map(h =>
-    `<div class="hist-item"><span>${escapeHtml(h.label)}</span><span class="hist-time">${fmtTime(h.time)}${h.by ? ' — '+escapeHtml(h.by.split('@')[0]) : ''}</span></div>`
-  ).join('') || '<div class="hist-item"><span>—</span></div>';
+  const histHtml = renderHistoryTimeline(history);
 
   const dueFieldHtml = isAdmin ? `
     <div class="field-row">
@@ -548,47 +804,86 @@ function renderCard(c, isAdmin){
     </div>`;
 
   return `
-    <div class="card">
-      <div class="card-head" onclick="toggleCard('${c.id}')">
-        <div class="card-title">
-          <span class="card-name">${escapeHtml(c.name)}</span>
-          <span class="card-sub">مرحله فعلی: ${STAGES[curIdx].name}</span>
-          <div class="card-badges">${badges.join('')}</div>
-        </div>
-        <span class="stage-pill">${pct}٪</span>
-      </div>
-      <div class="progress-strip"><div style="width:${pct}%"></div></div>
-      <div class="due-row">
-        <span class="due-tag ${due.cls}">${due.label}</span>
-        ${sched ? `<span class="schedule-tag">${sched}</span>` : ''}
-      </div>
-      <div class="body-panel ${isOpen ? 'open' : ''}">
-        ${dueFieldHtml}
-        ${revDueFieldHtml}
-        ${itemCodeFieldHtml}
-        ${descFieldHtml}
-        <div class="timeline">${timelineHtml}</div>
-        <div class="hist-title" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
-          <span onclick="event.stopPropagation(); toggleHistory('${c.id}')">تاریخچه ${hOpen ? '▲' : '▼'}</span>
-          ${isAdmin ? `<button onclick="event.stopPropagation(); clearHistory('${c.id}')" style="border:none;background:none;color:var(--red);font-size:10.5px;cursor:pointer;font-family:'Vazirmatn';text-decoration:underline;">پاک‌کردن تاریخچه</button>` : ''}
-        </div>
-        ${hOpen ? histHtml : ''}
-        ${isAdmin ? `<div class="del-row"><button onclick="event.stopPropagation(); deleteContract('${c.id}')">حذف قرارداد</button></div>` : ''}
-      </div>
-    </div>`;
+    ${dueFieldHtml}
+    ${revDueFieldHtml}
+    ${itemCodeFieldHtml}
+    ${descFieldHtml}
+    <div class="timeline">${timelineHtml}</div>
+    <div class="hist-title" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
+      <span onclick="event.stopPropagation(); toggleHistory('${c.id}')">تاریخچه ${hOpen ? '▲' : '▼'}</span>
+      ${isAdmin ? `<button onclick="event.stopPropagation(); clearHistory('${c.id}')" style="border:none;background:none;color:var(--red);font-size:10.5px;cursor:pointer;font-family:'Vazirmatn';text-decoration:underline;">پاک‌کردن تاریخچه</button>` : ''}
+    </div>
+    ${hOpen ? histHtml : ''}
+    ${isAdmin ? `<div class="del-row"><button onclick="event.stopPropagation(); deleteContract('${c.id}')">حذف قرارداد</button></div>` : ''}
+  `;
+}
+
+/* V9: تاریخچه به‌صورت Timeline، گروه‌بندی‌شده بر اساس روز (امروز/دیروز/تاریخ) — ساختار داده‌ی history عوض نشده. */
+function renderHistoryTimeline(history){
+  const items = history.slice().reverse().slice(0,50);
+  if(!items.length) return '<div class="hist-item"><span>—</span></div>';
+  let lastGroup = null, html = '';
+  items.forEach(h => {
+    const grp = h.time ? relativeDayLabel(h.time) : '';
+    if(grp !== lastGroup){ html += `<div class="hist-day-sep">${grp}</div>`; lastGroup = grp; }
+    const timeOnly = h.time ? new Date(h.time).toLocaleTimeString('fa-IR', {hour:'2-digit', minute:'2-digit'}) : '';
+    html += `
+      <div class="hist-tl-item">
+        <div class="hist-tl-dot"></div>
+        <div class="hist-tl-label">${escapeHtml(h.label)}</div>
+        <div class="hist-tl-meta">${timeOnly}${h.by ? ' — ' + escapeHtml(h.by.split('@')[0]) : ''}</div>
+      </div>`;
+  });
+  return html;
 }
 
 function isHistoryOpen(id, isAdmin){
   if(!(id in historyOpen)) historyOpen[id] = !!isAdmin;
   return historyOpen[id];
 }
-function toggleHistory(id){ historyOpen[id] = !historyOpen[id]; renderApp(); }
+function toggleHistory(id){ historyOpen[id] = !historyOpen[id]; if(detailContractId===id) renderDetailModalContent(); }
 
 function fmtTime(iso){
   const d = new Date(iso);
   return d.toLocaleString('fa-IR', {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
 }
-function toggleCard(id){ openCardId = openCardId === id ? null : id; renderApp(); }
+
+/* V9: «صفحه جزئیات قرارداد» — Modal حرفه‌ای، به‌جای آکاردئون قبلی */
+function openContractDetail(id){
+  detailContractId = id;
+  document.getElementById('detailModalBg').classList.add('open');
+  renderDetailModalContent();
+}
+function closeDetailModal(){
+  detailContractId = null;
+  document.getElementById('detailModalBg').classList.remove('open');
+}
+function renderDetailModalContent(){
+  const box = document.getElementById('detailModalInner');
+  if(!box) return;
+  const c = contracts.find(x => x.id === detailContractId);
+  if(!c){ closeDetailModal(); return; }
+  const isAdmin = myRole === 'admin';
+  const curIdx = getCurrentIndex(c);
+  const pct = overallPercent(c);
+  const due = dueStatus(c);
+  const sched = scheduleText(c);
+  box.innerHTML = `
+    <div class="detail-header">
+      <div>
+        <div class="detail-title">${escapeHtml(c.name)}</div>
+        <div class="detail-sub">مرحله فعلی: ${STAGES[curIdx].name} — پیشرفت: ${pct}٪</div>
+      </div>
+      <button class="detail-close" onclick="closeDetailModal()">بستن ✕</button>
+    </div>
+    <div class="progress-strip"><div style="width:${pct}%"></div></div>
+    <div class="due-row" style="padding:10px 0 4px;">
+      <span class="due-tag ${due.cls}">${due.label}</span>
+      ${sched ? `<span class="schedule-tag">${sched}</span>` : ''}
+    </div>
+    ${renderContractBody(c, isAdmin)}
+  `;
+}
 
 async function toggleCheck(id, idx){
   if(!db) return;
@@ -693,6 +988,133 @@ async function addContract(){
     createdAt: Date.now()
   });
   closeModal('addModalBg');
+}
+
+/* ---------- V9: Quick Update — بروزرسانی سریع در یک صفحه فشرده ---------- */
+function openQuickUpdate(){
+  const openList = contracts.filter(c => !isCompleted(c));
+  if(!openList.length){ alert('هیچ قرارداد فعالی برای بروزرسانی وجود ندارد.'); return; }
+  const first = openList[0];
+  const firstIdx = getCurrentIndex(first);
+  quickData = { contractId: first.id, stageIdx: firstIdx, checkDone: !!((first.status||{})[firstIdx]||{}).done };
+  quickUpdateOpen = true;
+  document.getElementById('quickModalBg').classList.add('open');
+  renderQuickModal();
+}
+function closeQuickUpdate(){
+  quickUpdateOpen = false;
+  document.getElementById('quickModalBg').classList.remove('open');
+}
+function renderQuickModal(){
+  const box = document.getElementById('quickModalInner');
+  if(!box) return;
+  const openList = contracts.filter(c => !isCompleted(c));
+  const contractOptions = openList.map(c => `<option value="${c.id}" ${quickData.contractId===c.id?'selected':''}>${escapeHtml(c.name)}</option>`).join('');
+  box.innerHTML = `
+    <h3>⚡ بروزرسانی سریع</h3>
+    <div class="field-row text" style="margin-bottom:8px;">
+      <label style="min-width:70px;">قرارداد:</label>
+      <select id="quickContractSel" style="flex:1; font-family:'Vazirmatn'; font-size:13px; padding:9px; border:1px solid var(--line); border-radius:8px; background:var(--panel-2); color:var(--ink);" onchange="quickSelectContract(this.value)">
+        ${contractOptions}
+      </select>
+    </div>
+    <div class="field-row text" style="margin-bottom:8px;">
+      <label style="min-width:70px;">مرحله:</label>
+      <select id="quickStageSel" style="flex:1; font-family:'Vazirmatn'; font-size:13px; padding:9px; border:1px solid var(--line); border-radius:8px; background:var(--panel-2); color:var(--ink);" onchange="quickSelectStage(this.value)">
+        ${STAGES.map((s,i) => `<option value="${i}" ${quickData.stageIdx===i?'selected':''}>${s.name}</option>`).join('')}
+      </select>
+    </div>
+    <div id="quickDynamic"></div>
+    <div class="row" style="margin-top:12px;">
+      <button class="save-btn" onclick="submitQuickUpdate()">ثبت</button>
+      <button class="cancel-btn" onclick="closeQuickUpdate()">انصراف</button>
+    </div>
+  `;
+  renderQuickDynamic();
+}
+function quickSelectContract(id){
+  const c = contracts.find(x => x.id === id);
+  quickData.contractId = id;
+  quickData.stageIdx = c ? getCurrentIndex(c) : 0;
+  quickData.checkDone = !!((c && (c.status||{})[quickData.stageIdx]) || {}).done;
+  document.getElementById('quickStageSel').value = String(quickData.stageIdx);
+  renderQuickDynamic();
+}
+function quickSelectStage(v){
+  quickData.stageIdx = parseInt(v,10);
+  const c = contracts.find(x => x.id === quickData.contractId);
+  quickData.checkDone = !!((c && (c.status||{})[quickData.stageIdx]) || {}).done;
+  renderQuickDynamic();
+}
+function quickToggleCheck(){
+  quickData.checkDone = !quickData.checkDone;
+  renderQuickDynamic();
+}
+function renderQuickDynamic(){
+  const box = document.getElementById('quickDynamic');
+  if(!box) return;
+  const c = contracts.find(x => x.id === quickData.contractId);
+  if(!c){ box.innerHTML = ''; return; }
+  const st = STAGES[quickData.stageIdx];
+  const cur = (c.status||{})[quickData.stageIdx] || {};
+  if(st.type === 'check'){
+    const willBeDone = !!quickData.checkDone;
+    box.innerHTML = `
+      <div class="field-row">
+        <label style="min-width:70px;">وضعیت:</label>
+        <button class="chk-btn ${willBeDone?'done':''}" onclick="quickToggleCheck()">${willBeDone ? '✓ انجام شد' : 'ثبت به‌عنوان انجام‌شده'}</button>
+      </div>
+      <div class="field-row text">
+        <label style="min-width:70px;">توضیح:</label>
+        <input type="text" id="quickNote" placeholder="یادداشت کوتاه (اختیاری)">
+      </div>`;
+  } else {
+    const panelInstalled = !!cur.panelInstalled;
+    const maxAllowed = st.requiresPanel ? (panelInstalled ? 100 : 80) : 100;
+    const val = Math.min(cur.percent || 0, maxAllowed);
+    box.innerHTML = `
+      <div class="prog-box">
+        <div class="prog-row">
+          <input type="range" min="0" max="${maxAllowed}" value="${val}" id="quickPercent" oninput="document.getElementById('quickPercentVal').textContent=this.value+'%'">
+          <span class="prog-val" id="quickPercentVal">${val}%</span>
+        </div>
+        ${st.requiresPanel && !panelInstalled ? '<div class="admin-only-note">تا نصب نشدن صفحه کابینت، پیشرفت حداکثر ۸۰٪ ثبت می‌شود.</div>' : ''}
+      </div>
+      <div class="field-row text">
+        <label style="min-width:70px;">توضیح:</label>
+        <input type="text" id="quickNote" placeholder="یادداشت کوتاه (اختیاری)">
+      </div>`;
+  }
+}
+async function submitQuickUpdate(){
+  if(!db) return;
+  const c = contracts.find(x => x.id === quickData.contractId);
+  if(!c) return;
+  const idx = quickData.stageIdx;
+  const st = STAGES[idx];
+  const noteEl = document.getElementById('quickNote');
+  const note = noteEl ? noteEl.value.trim() : '';
+  const status = c.status || {};
+  const cur = status[idx] || {};
+  let label;
+  if(st.type === 'check'){
+    const nowDone = quickData.checkDone;
+    status[idx] = { done: nowDone, doneAt: nowDone ? new Date().toISOString() : null };
+    label = 'بروزرسانی سریع — ' + st.name + ' — ' + (nowDone ? 'انجام شد' : 'لغو شد');
+  } else {
+    const panelInstalled = !!cur.panelInstalled;
+    const maxAllowed = st.requiresPanel ? (panelInstalled ? 100 : 80) : 100;
+    let percent = parseInt((document.getElementById('quickPercent')||{}).value, 10);
+    if(isNaN(percent)) percent = cur.percent || 0;
+    if(percent > maxAllowed) percent = maxAllowed;
+    status[idx] = { ...cur, percent, updatedAt: new Date().toISOString(),
+                     doneAt: (percent>=100 && (!st.requiresPanel || panelInstalled)) ? new Date().toISOString() : null };
+    label = 'بروزرسانی سریع — ' + st.name + ' — پیشرفت ' + percent + '٪';
+  }
+  if(note) label += ' — ' + note;
+  const history = (c.history || []).concat([historyEntry(label)]);
+  await db.collection('contracts').doc(c.id).update({ status, history });
+  closeQuickUpdate();
 }
 
 /* ---------- PWA install ---------- */
