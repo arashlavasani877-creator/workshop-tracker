@@ -90,6 +90,7 @@ function overallPercent(c){
   });
   return Math.round(sum/STAGES.length);
 }
+function isCompleted(c){ return overallPercent(c) === 100; }
 function dueStatus(c){
   const activeDateStr = c.revisedDueDate || c.dueDate;
   if(!activeDateStr) return { label: 'سررسید ثبت نشده', cls:'none', daysLeft:null };
@@ -301,20 +302,26 @@ function renderWarningsHtml(){
 
 /* ---------- Supervisor view ---------- */
 function renderSupervisor(el){
+  const closedCount = contracts.filter(isCompleted).length;
   el.innerHTML = `
     <div class="tabs">
       <button class="${supervisorTab==='contracts'?'active':''}" onclick="switchSupervisorTab('contracts')">قراردادها</button>
       <button class="${supervisorTab==='warnings'?'active':''}" onclick="switchSupervisorTab('warnings')">هشدار سررسید</button>
+      <button class="${supervisorTab==='closed'?'active':''}" onclick="switchSupervisorTab('closed')">خاتمه‌ها ${closedCount?('('+closedCount+')'):''}</button>
     </div>
     <div id="supBody"></div>
     <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
   `;
   const body = document.getElementById('supBody');
   if(supervisorTab === 'contracts'){
-    body.innerHTML = `<div class="section-title" style="margin-top:14px;">قراردادها <span class="cnt">${contracts.length} مورد</span></div><div id="list"></div>`;
-    renderList(false);
-  } else {
+    const openCount = contracts.filter(c=>!isCompleted(c)).length;
+    body.innerHTML = `<div class="section-title" style="margin-top:14px;">قراردادها <span class="cnt">${openCount} مورد</span></div><div id="list"></div>`;
+    renderList(false, c => !isCompleted(c));
+  } else if(supervisorTab === 'warnings'){
     body.innerHTML = renderWarningsHtml();
+  } else {
+    body.innerHTML = `<div class="section-title" style="margin-top:14px;">خاتمه‌ها <span class="cnt">${closedCount} مورد</span></div><div id="list"></div>`;
+    renderList(false, isCompleted);
   }
 }
 function switchSupervisorTab(t){ supervisorTab = t; renderApp(); }
@@ -323,13 +330,17 @@ function switchSupervisorTab(t){ supervisorTab = t; renderApp(); }
 function renderAdmin(el){
   const pendingCount = usersList.filter(u => u.role === 'pending').length;
   const nearingCount = contracts.filter(c => ['warn','late'].includes(dueStatus(c).cls)).length;
+  const closedCount = contracts.filter(isCompleted).length;
   el.innerHTML = `
     <div class="toolbar"><button class="btn-primary" onclick="openAddModal()">+ قرارداد جدید</button></div>
     <div class="toolbar"><button id="installBtn" class="btn-secondary" onclick="installApp()">نصب اپلیکیشن روی گوشی</button></div>
     <div class="tabs">
       <button class="${adminTab==='dashboard'?'active':''}" onclick="switchAdminTab('dashboard')">داشبورد گزارش</button>
       <button class="${adminTab==='users'?'active':''}" onclick="switchAdminTab('users')">کاربران ${pendingCount?('('+pendingCount+')'):''}</button>
+    </div>
+    <div class="tabs">
       <button class="${adminTab==='warnings'?'active':''}" onclick="switchAdminTab('warnings')">هشدار سررسید ${nearingCount?('('+nearingCount+')'):''}</button>
+      <button class="${adminTab==='closed'?'active':''}" onclick="switchAdminTab('closed')">خاتمه‌ها ${closedCount?('('+closedCount+')'):''}</button>
     </div>
     <div id="adminBody"></div>
     <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
@@ -337,23 +348,35 @@ function renderAdmin(el){
   document.getElementById('installBtn').style.display = window.__deferredPrompt ? 'block' : 'none';
   if(adminTab === 'dashboard') renderAdminDashboard();
   else if(adminTab === 'users') renderAdminUsers();
+  else if(adminTab === 'closed') renderAdminClosed();
   else document.getElementById('adminBody').innerHTML = renderWarningsHtml();
 }
 function switchAdminTab(t){ adminTab = t; renderApp(); }
 
 function renderAdminDashboard(){
   const body = document.getElementById('adminBody');
-  const late = contracts.filter(c => dueStatus(c).cls === 'late').length;
-  const soon = contracts.filter(c => dueStatus(c).cls === 'warn').length;
+  const openContracts = contracts.filter(c => !isCompleted(c));
+  const late = openContracts.filter(c => dueStatus(c).cls === 'late').length;
+  const soon = openContracts.filter(c => dueStatus(c).cls === 'warn').length;
   body.innerHTML = `
-    <div class="section-title" style="margin-top:14px;">خلاصه وضعیت <span class="cnt">${contracts.length} قرارداد فعال</span></div>
+    <div class="section-title" style="margin-top:14px;">خلاصه وضعیت <span class="cnt">${openContracts.length} قرارداد فعال</span></div>
     <div class="card-badges" style="margin-bottom:14px;">
       <span class="mini-badge" style="border-color:var(--red);color:var(--red);">عقب‌افتاده: ${late}</span>
       <span class="mini-badge" style="border-color:var(--amber);color:var(--amber);">نزدیک به سررسید: ${soon}</span>
     </div>
     <div id="list"></div>
   `;
-  renderList(true);
+  renderList(true, c => !isCompleted(c));
+}
+
+function renderAdminClosed(){
+  const body = document.getElementById('adminBody');
+  const closed = contracts.filter(isCompleted);
+  body.innerHTML = `
+    <div class="section-title" style="margin-top:14px;">خاتمه‌ها <span class="cnt">${closed.length} قرارداد</span></div>
+    <div id="list"></div>
+  `;
+  renderList(true, isCompleted);
 }
 
 function renderAdminUsers(){
@@ -419,14 +442,15 @@ async function confirmApprove(){
 }
 
 /* ---------- Contract list & card ---------- */
-function renderList(isAdmin){
+function renderList(isAdmin, predicate){
   const list = document.getElementById('list');
   if(!list) return;
-  if(contracts.length === 0){
-    list.innerHTML = '<div class="empty">هنوز قراردادی ثبت نشده.' + (isAdmin ? ' با دکمه «قرارداد جدید» شروع کنید.' : '') + '</div>';
+  const items = predicate ? contracts.filter(predicate) : contracts;
+  if(items.length === 0){
+    list.innerHTML = '<div class="empty">موردی برای نمایش نیست.</div>';
     return;
   }
-  list.innerHTML = contracts.map(c => renderCard(c, isAdmin)).join('');
+  list.innerHTML = items.map(c => renderCard(c, isAdmin)).join('');
 }
 
 function renderCard(c, isAdmin){
