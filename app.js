@@ -24,6 +24,7 @@ let supervisorTab = 'contracts'; // 'contracts' | 'warnings'
 let dataSubscribed = false;
 let historyOpen = {};         // id -> bool
 let approveTargetUid = null;
+let authErrorMsg = '';
 
 function setStatus(text, ok){
   const n = document.getElementById('syncNote'), d = document.getElementById('statusDot');
@@ -128,7 +129,9 @@ function initAuthAndData(){
     db = firebase.firestore();
 
     auth.getRedirectResult().catch((e) => {
-      setStatus('خطا در ورود: ' + e.message, false);
+      authErrorMsg = (e && e.code) ? (e.code + ' — ' + e.message) : String(e);
+      alert('خطا در ورود با گوگل:\n' + authErrorMsg);
+      renderApp();
     });
 
     auth.onAuthStateChanged(async (user) => {
@@ -172,6 +175,7 @@ function ensureDataSubscriptions(){
 }
 
 function signIn(){
+  authErrorMsg = '';
   const provider = new firebase.auth.GoogleAuthProvider();
   auth.signInWithRedirect(provider);
 }
@@ -193,6 +197,7 @@ function renderApp(){
           <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.7 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3 0 5.8 1.1 7.9 3l5.7-5.7C34.5 5.6 29.5 3.5 24 3.5 12.7 3.5 3.5 12.7 3.5 24S12.7 44.5 24 44.5 44.5 35.3 44.5 24c0-1.2-.1-2.4-.9-3.5z"/><path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.6 15.9 18.9 13 24 13c3 0 5.8 1.1 7.9 3l5.7-5.7C34.5 6.6 29.5 4.5 24 4.5c-7.7 0-14.4 4.4-17.7 10.2z"/><path fill="#4CAF50" d="M24 44.5c5.4 0 10.3-2.1 14-5.5l-6.5-5.4c-2 1.4-4.6 2.4-7.5 2.4-5.3 0-9.7-3.3-11.3-8l-6.6 5.1C9.5 39.9 16.2 44.5 24 44.5z"/><path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-.8 2.3-2.3 4.3-4.3 5.7l6.5 5.4C41.4 36 44.5 30.6 44.5 24c0-1.2-.1-2.4-.9-3.5z"/></svg>
           ورود با حساب گوگل
         </button>
+        ${authErrorMsg ? `<p style="color:var(--red); font-family:'JetBrains Mono',monospace; font-size:11px; direction:ltr; margin-top:10px;">${escapeHtml(authErrorMsg)}</p>` : ''}
       </div>`;
     return;
   }
