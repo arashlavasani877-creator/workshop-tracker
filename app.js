@@ -568,8 +568,9 @@ function renderCard(c, isAdmin){
         ${itemCodeFieldHtml}
         ${descFieldHtml}
         <div class="timeline">${timelineHtml}</div>
-        <div class="hist-title" style="cursor:pointer;" onclick="event.stopPropagation(); toggleHistory('${c.id}')">
-          تاریخچه ${hOpen ? '▲' : '▼'}
+        <div class="hist-title" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
+          <span onclick="event.stopPropagation(); toggleHistory('${c.id}')">تاریخچه ${hOpen ? '▲' : '▼'}</span>
+          ${isAdmin ? `<button onclick="event.stopPropagation(); clearHistory('${c.id}')" style="border:none;background:none;color:var(--red);font-size:10.5px;cursor:pointer;font-family:'Vazirmatn';text-decoration:underline;">پاک‌کردن تاریخچه</button>` : ''}
         </div>
         ${hOpen ? histHtml : ''}
         ${isAdmin ? `<div class="del-row"><button onclick="event.stopPropagation(); deleteContract('${c.id}')">حذف قرارداد</button></div>` : ''}
@@ -667,6 +668,11 @@ async function deleteContract(id){
   if(!db) return;
   if(!confirm('این قرارداد حذف شود؟')) return;
   await db.collection('contracts').doc(id).delete();
+}
+async function clearHistory(id){
+  if(!db) return;
+  if(!confirm('کل تاریخچه‌ی این قرارداد پاک شود؟ این کار قابل بازگشت نیست.')) return;
+  await db.collection('contracts').doc(id).update({ history: [historyEntry('تاریخچه توسط مدیر پاک شد')] });
 }
 
 function openAddModal(){
