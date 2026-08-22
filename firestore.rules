@@ -1,0 +1,32 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    function myRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+    function isAdmin() {
+      return isSignedIn() && myRole() == 'admin';
+    }
+    function isApproved() {
+      return isSignedIn() && (myRole() == 'admin' || myRole() == 'supervisor');
+    }
+
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isAdmin());
+      allow create: if isSignedIn() && request.auth.uid == userId
+                    && request.resource.data.role in ['pending', 'admin']
+                    && (request.resource.data.role != 'admin'
+                        || request.resource.data.email == 'arashlavasani891@gmail.com');
+      allow update: if isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /contracts/{contractId} {
+      allow read, write: if isApproved();
+    }
+  }
+}

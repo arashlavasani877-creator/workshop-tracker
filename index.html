@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>افراچوب | تابلوی کنترل کارگاه</title>
+<title>افراچوب | PMO</title>
 
 <link rel="manifest" href="./manifest.json">
 <meta name="theme-color" content="#15171A">
@@ -21,58 +21,91 @@
     --ink:#EDEDEC; --ink-soft:#9198A0; --ink-faint:#5C636B;
     --amber:#E3A857; --amber-dim:#E3A85722;
     --teal:#4FD1C5; --teal-dim:#4FD1C522;
-    --green:#5FAE7B; --red:#E2685C;
+    --green:#5FAE7B; --green-dim:#5FAE7B22;
+    --red:#E2685C; --red-dim:#E2685C22;
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   html,body{margin:0;padding:0;}
-  body{
-    background:var(--bg); color:var(--ink); font-family:'Vazirmatn',sans-serif;
-    min-height:100vh; padding-bottom:40px;
-  }
-  header{ background:linear-gradient(180deg,#1A1D21,#15171A); padding:22px 18px 26px; border-bottom:1px solid var(--line); position:relative; }
-  header h1{ margin:0; font-size:20px; font-weight:900; letter-spacing:.2px; }
-  header p{ margin:6px 0 0; font-size:12.5px; color:var(--ink-soft); }
-  .eyebrow{ display:inline-block; font-family:'JetBrains Mono',monospace; font-size:10.5px; letter-spacing:1.5px; color:var(--amber); background:var(--amber-dim); padding:3px 8px; border-radius:3px; margin-bottom:8px; }
+  body{ background:var(--bg); color:var(--ink); font-family:'Vazirmatn',sans-serif; min-height:100vh; padding-bottom:40px; }
+  header{ background:linear-gradient(180deg,#1A1D21,#15171A); padding:18px 18px 22px; border-bottom:1px solid var(--line); position:relative; }
+  .head-row{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
+  .head-left{ display:flex; align-items:center; gap:10px; }
+  header img.logo{ width:34px; height:34px; border-radius:8px; background:#fff; object-fit:contain; padding:3px; }
+  header h1{ margin:0; font-size:18px; font-weight:900; letter-spacing:.2px; }
+  header p{ margin:4px 0 0; font-size:11.5px; color:var(--ink-soft); }
+  .role-badge{ font-family:'JetBrains Mono',monospace; font-size:10px; padding:4px 9px; border-radius:20px; background:var(--amber-dim); color:var(--amber); white-space:nowrap; }
+  .signout-btn{ background:none; border:1px solid var(--line); color:var(--ink-soft); font-size:11px; padding:5px 10px; border-radius:7px; font-family:'Vazirmatn'; cursor:pointer; margin-inline-start:6px; }
   .wrap{ max-width:640px; margin:0 auto; padding:0 14px; }
-  .toolbar{ display:flex; gap:8px; margin:-14px 0 16px; position:relative; z-index:2; }
+
+  .center-screen{ min-height:70vh; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:30px 20px; gap:14px; }
+  .center-screen img{ width:70px; height:70px; border-radius:16px; background:#fff; padding:8px; }
+  .center-screen h2{ margin:0; font-size:17px; }
+  .center-screen p{ margin:0; font-size:13px; color:var(--ink-soft); max-width:320px; line-height:1.9; }
+  .google-btn{ display:flex; align-items:center; gap:10px; background:#fff; color:#1f1f1f; border:none; padding:12px 20px; border-radius:10px; font-family:'Vazirmatn'; font-weight:700; font-size:14px; cursor:pointer; margin-top:6px; }
+  .status-chip{ font-family:'JetBrains Mono',monospace; font-size:11px; padding:5px 12px; border-radius:20px; }
+  .status-chip.pending{ background:var(--amber-dim); color:var(--amber); }
+  .status-chip.blocked{ background:var(--red-dim); color:var(--red); }
+
+  .toolbar{ display:flex; gap:8px; margin:14px 0 16px; }
   .toolbar button{ flex:1; border:none; cursor:pointer; font-family:'Vazirmatn',sans-serif; font-weight:700; font-size:13.5px; padding:12px 10px; border-radius:10px; }
   .btn-primary{ background:var(--amber); color:#191300; }
   .btn-secondary{ background:var(--panel); color:var(--ink); border:1px solid var(--line) !important; }
   #installBtn{ display:none; }
-  .empty{ background:var(--panel); border:1.5px dashed var(--line); border-radius:14px; padding:32px 16px; text-align:center; color:var(--ink-soft); font-size:13.5px; }
+  .section-title{ font-size:13px; font-weight:900; margin:22px 0 10px; display:flex; align-items:center; gap:8px; }
+  .section-title .cnt{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--ink-faint); font-weight:500; }
+  .empty{ background:var(--panel); border:1.5px dashed var(--line); border-radius:14px; padding:26px 16px; text-align:center; color:var(--ink-soft); font-size:13px; }
+
+  .warn-item{ background:var(--panel); border-inline-start:3px solid var(--red); border-radius:10px; padding:10px 12px; margin-bottom:8px; display:flex; justify-content:space-between; align-items:center; gap:8px; }
+  .warn-item.soon{ border-inline-start-color:var(--amber); }
+  .warn-name{ font-size:13px; font-weight:700; }
+  .warn-sub{ font-size:10.5px; color:var(--ink-soft); font-family:'JetBrains Mono',monospace; }
+  .warn-tag{ font-size:10.5px; font-weight:700; padding:4px 9px; border-radius:20px; white-space:nowrap; }
+  .warn-tag.red{ background:var(--red-dim); color:var(--red); }
+  .warn-tag.amber{ background:var(--amber-dim); color:var(--amber); }
+
   .card{ background:var(--panel); border:1px solid var(--line); border-radius:14px; margin-bottom:14px; overflow:hidden; }
-  .card-head{ display:flex; align-items:center; justify-content:space-between; padding:14px 16px 10px; cursor:pointer; }
-  .card-title{ display:flex; flex-direction:column; gap:3px; }
-  .card-name{ font-weight:900; font-size:16px; }
-  .card-sub{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--ink-soft); }
+  .card-head{ display:flex; align-items:center; justify-content:space-between; padding:14px 16px 10px; cursor:pointer; gap:8px; }
+  .card-title{ display:flex; flex-direction:column; gap:3px; min-width:0; }
+  .card-name{ font-weight:900; font-size:16px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .card-sub{ font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--ink-soft); }
+  .card-badges{ display:flex; gap:6px; flex-wrap:wrap; margin-top:4px; }
+  .mini-badge{ font-size:9.5px; font-family:'JetBrains Mono',monospace; padding:2px 7px; border-radius:9px; background:var(--panel-2); color:var(--ink-soft); border:1px solid var(--line); }
   .stage-pill{ font-size:11.5px; font-weight:700; padding:5px 11px; border-radius:20px; white-space:nowrap; background:var(--amber-dim); color:var(--amber); }
   .progress-strip{ height:5px; background:var(--line); margin:0 16px 14px; border-radius:3px; overflow:hidden; }
-  .progress-strip > div{ height:100%; background:var(--amber); border-radius:3px; transition:width .3s; }
+  .progress-strip > div{ height:100%; background:var(--amber); border-radius:3px; }
+  .due-row{ display:flex; justify-content:space-between; align-items:center; padding:0 16px 12px; gap:8px; flex-wrap:wrap; }
+  .due-tag{ font-size:11px; font-family:'JetBrains Mono',monospace; padding:5px 10px; border-radius:8px; }
+  .due-tag.ok{ background:var(--green-dim); color:var(--green); }
+  .due-tag.warn{ background:var(--amber-dim); color:var(--amber); }
+  .due-tag.late{ background:var(--red-dim); color:var(--red); }
+  .due-tag.none{ background:var(--panel-2); color:var(--ink-faint); }
+  .schedule-tag{ font-size:10.5px; color:var(--ink-soft); }
+
   .body-panel{ border-top:1px dashed var(--line); padding:14px 16px 16px; display:none; }
   .body-panel.open{ display:block; }
+
+  .field-row{ display:flex; align-items:center; gap:8px; margin-bottom:10px; }
+  .field-row label{ font-size:11px; color:var(--ink-soft); white-space:nowrap; min-width:100px; }
+  .field-row input{ flex:1; font-family:'JetBrains Mono',monospace; direction:ltr; text-align:center; background:var(--panel-2); border:1px solid var(--line); color:var(--ink); border-radius:7px; padding:8px; font-size:12.5px; }
+  .field-row.text input{ font-family:'Vazirmatn'; direction:rtl; text-align:right; }
+  .field-save{ border:none; background:var(--teal); color:#0A2320; font-weight:700; font-size:11px; padding:8px 12px; border-radius:7px; cursor:pointer; white-space:nowrap; }
+  .admin-only-note{ font-size:10px; color:var(--ink-faint); margin:-4px 0 10px; }
 
   .timeline{ position:relative; padding-inline-start:22px; margin-bottom:16px; }
   .tl-item{ position:relative; padding-bottom:16px; }
   .tl-item:last-child{ padding-bottom:0; }
-  .tl-item::before{ /* connecting line */
-    content:""; position:absolute; top:20px; bottom:-4px; right:-16.5px; width:1.5px; background:var(--line);
-  }
+  .tl-item::before{ content:""; position:absolute; top:20px; bottom:-4px; right:-16.5px; width:1.5px; background:var(--line); }
   .tl-item:last-child::before{ display:none; }
-  .tl-dot{
-    position:absolute; top:1px; right:-22px; width:13px; height:13px; border-radius:50%;
-    background:var(--panel-2); border:2px solid var(--line);
-  }
+  .tl-dot{ position:absolute; top:1px; right:-22px; width:13px; height:13px; border-radius:50%; background:var(--panel-2); border:2px solid var(--line); }
   .tl-dot.done{ background:var(--green); border-color:var(--green); }
   .tl-dot.active{ border-color:var(--amber); }
   .tl-row{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
   .tl-name{ font-size:13.5px; font-weight:700; }
   .tl-name.done{ color:var(--ink-soft); text-decoration:line-through; text-decoration-color:var(--ink-faint); }
   .tl-time{ font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--ink-faint); margin-top:2px; }
-  .chk-btn{
-    border:1.5px solid var(--line); background:var(--panel-2); color:var(--ink-soft);
-    font-family:'Vazirmatn',sans-serif; font-size:11.5px; font-weight:700; padding:6px 12px; border-radius:8px; cursor:pointer; white-space:nowrap;
-  }
+  .chk-btn{ border:1.5px solid var(--line); background:var(--panel-2); color:var(--ink-soft); font-family:'Vazirmatn',sans-serif; font-size:11.5px; font-weight:700; padding:6px 12px; border-radius:8px; cursor:pointer; white-space:nowrap; }
   .chk-btn.done{ background:var(--green)22; border-color:var(--green); color:var(--green); }
+  .chk-btn:disabled{ opacity:.5; cursor:default; }
 
   .prog-box{ background:var(--panel-2); border:1px solid var(--line); border-radius:10px; padding:10px 12px; margin-top:8px; }
   .prog-row{ display:flex; align-items:center; gap:10px; }
@@ -80,10 +113,7 @@
   .prog-val{ font-family:'JetBrains Mono',monospace; font-size:12.5px; color:var(--teal); min-width:34px; text-align:left; }
   .prog-date{ display:flex; align-items:center; gap:8px; margin-top:10px; }
   .prog-date label{ font-size:11px; color:var(--ink-soft); white-space:nowrap; }
-  .prog-date input{
-    flex:1; font-family:'JetBrains Mono',monospace; direction:ltr; text-align:center;
-    background:var(--panel); border:1px solid var(--line); color:var(--ink); border-radius:7px; padding:7px 8px; font-size:12.5px;
-  }
+  .prog-date input{ flex:1; font-family:'JetBrains Mono',monospace; direction:ltr; text-align:center; background:var(--panel); border:1px solid var(--line); color:var(--ink); border-radius:7px; padding:7px 8px; font-size:12.5px; }
   .prog-save{ margin-top:10px; width:100%; border:none; background:var(--teal); color:#0A2320; font-weight:700; font-size:12.5px; padding:9px; border-radius:8px; cursor:pointer; }
   .prog-strip-mini{ height:4px; background:var(--line); border-radius:3px; overflow:hidden; margin-top:8px; }
   .prog-strip-mini > div{ height:100%; background:var(--teal); }
@@ -94,6 +124,21 @@
   .hist-time{ font-family:'JetBrains Mono',monospace; color:var(--ink-faint); font-size:10.5px; white-space:nowrap; }
   .del-row{ margin-top:14px; text-align:left; }
   .del-row button{ background:none; border:none; color:var(--red); font-size:11.5px; cursor:pointer; font-family:'Vazirmatn',sans-serif; text-decoration:underline; }
+
+  .user-row{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:10px; display:flex; justify-content:space-between; align-items:center; gap:10px; }
+  .user-info{ min-width:0; }
+  .user-email{ font-size:12.5px; font-weight:700; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .user-role{ font-family:'JetBrains Mono',monospace; font-size:10px; margin-top:2px; }
+  .user-role.pending{ color:var(--amber); }
+  .user-role.supervisor{ color:var(--green); }
+  .user-role.admin{ color:var(--teal); }
+  .user-role.blocked{ color:var(--red); }
+  .user-actions{ display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end; }
+  .user-actions button{ border:none; font-family:'Vazirmatn'; font-size:10.5px; font-weight:700; padding:6px 10px; border-radius:7px; cursor:pointer; white-space:nowrap; }
+  .btn-approve{ background:var(--green-dim); color:var(--green); }
+  .btn-revoke{ background:var(--amber-dim); color:var(--amber); }
+  .btn-block{ background:var(--red-dim); color:var(--red); }
+  .btn-delete{ background:var(--panel-2); color:var(--ink-faint); border:1px solid var(--line) !important; }
 
   .modal-bg{ position:fixed; inset:0; background:rgba(0,0,0,0.6); display:none; align-items:flex-end; justify-content:center; z-index:50; }
   .modal-bg.open{ display:flex; }
@@ -107,40 +152,39 @@
   .sync-note{ text-align:center; font-size:10.5px; color:var(--ink-soft); font-family:'JetBrains Mono',monospace; margin:14px 0 4px; display:flex; align-items:center; justify-content:center; gap:6px; }
   .dot{ width:7px; height:7px; border-radius:50%; background:var(--green); }
   .dot.off{ background:var(--red); }
-  .setup-warning{ background:#2A2115; border:1.5px solid var(--amber); border-radius:12px; padding:14px; font-size:12.5px; line-height:1.9; margin-bottom:16px; color:var(--ink); }
+  .setup-warning{ background:#2A2115; border:1.5px solid var(--amber); border-radius:12px; padding:14px; font-size:12.5px; line-height:1.9; margin:16px 0; color:var(--ink); }
   .setup-warning b{ color:var(--amber); }
+  .tabs{ display:flex; gap:6px; margin-top:14px; }
+  .tabs button{ flex:1; background:var(--panel); color:var(--ink-soft); font-family:'Vazirmatn'; font-weight:700; font-size:12.5px; padding:10px; border-radius:9px; cursor:pointer; border:1px solid var(--line) !important; }
+  .tabs button.active{ background:var(--amber-dim); color:var(--amber); border-color:var(--amber) !important; }
 </style>
 </head>
 <body>
 
 <header>
   <div class="wrap">
-    <div class="eyebrow">افراچوب — تولید</div>
-    <h1>تابلوی کنترل قراردادها</h1>
-    <p>مراحل ساخت و نصب هر سفارش، همراه با درصد پیشرفت و تاریخ پیش‌بینی</p>
+    <div class="head-row">
+      <div class="head-left">
+        <img class="logo" src="./icon-192.png" alt="افراچوب">
+        <div>
+          <h1 id="headerTitle">PMO – Arash Lavasani</h1>
+          <p id="headerSub">افراچوب — تابلوی کنترل تولید و نصب</p>
+        </div>
+      </div>
+      <div id="headerRight"></div>
+    </div>
   </div>
 </header>
 
-<div class="wrap">
-  <div id="configWarning" class="setup-warning" style="display:none;">
-    <b>راه‌اندازی کامل نشده:</b> کلیدهای Firebase در فایل <code>firebase-config.js</code> هنوز جایگزین نشده‌اند.
-  </div>
-
-  <div class="toolbar">
-    <button class="btn-primary" onclick="openAddModal()">+ قرارداد جدید</button>
-  </div>
-  <div class="toolbar">
-    <button id="installBtn" class="btn-secondary" onclick="installApp()">نصب اپلیکیشن روی گوشی</button>
-  </div>
-
-  <div id="list"></div>
-  <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">در حال اتصال…</span></div>
+<div class="wrap" id="app">
+  <div class="center-screen"><span class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">در حال اتصال…</span></span></div>
 </div>
 
 <div class="modal-bg" id="addModalBg">
   <div class="modal">
     <h3>قرارداد جدید</h3>
     <input id="newName" placeholder="نام مشتری / کد قرارداد" />
+    <input id="newItemCode" placeholder="کد قلم (اختیاری)" />
     <div class="row">
       <button class="save-btn" onclick="addContract()">ثبت</button>
       <button class="cancel-btn" onclick="closeModal('addModalBg')">انصراف</button>
@@ -149,231 +193,10 @@
 </div>
 
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
 <script src="./firebase-config.js"></script>
-
-<script>
-const STAGES = [
-  { name: 'اندازه‌گیری', type: 'check' },
-  { name: 'تایید طراحی', type: 'check' },
-  { name: 'آنالیز', type: 'check' },
-  { name: 'ساخت و برش', type: 'progress' },
-  { name: 'ارسال بار به محل ساختمان', type: 'check' },
-  { name: 'در حال نصب', type: 'progress' },
-  { name: 'در انتظار تحویل‌دهی به مالک', type: 'check' },
-  { name: 'خاتمه قرارداد', type: 'check' }
-];
-
-let contracts = [];
-let openCardId = null;
-let db = null;
-
-function setStatus(text, ok){
-  document.getElementById('syncNote').textContent = text;
-  document.getElementById('statusDot').className = 'dot' + (ok ? '' : ' off');
-}
-
-try{
-  if(!firebaseConfig || firebaseConfig.apiKey === 'PASTE_API_KEY_HERE'){
-    document.getElementById('configWarning').style.display = 'block';
-    setStatus('راه‌اندازی نشده', false);
-  } else {
-    firebase.initializeApp(firebaseConfig);
-    db = firebase.firestore();
-    db.collection('contracts').orderBy('createdAt', 'desc').onSnapshot((snap) => {
-      contracts = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      setStatus('همگام — لحظه‌ای', true);
-      render();
-    }, (err) => setStatus('خطا: ' + err.message, false));
-  }
-}catch(e){
-  setStatus('خطا در راه‌اندازی: ' + e.message, false);
-}
-
-function fmtTime(iso){
-  const d = new Date(iso);
-  return d.toLocaleString('fa-IR', {month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
-}
-function escapeHtml(s){ const d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
-
-// current stage = first not-completed stage (check:not done, progress:percent<100)
-function getCurrentIndex(c){
-  const status = c.status || {};
-  for(let i=0;i<STAGES.length;i++){
-    const s = status[i] || {};
-    if(STAGES[i].type === 'check' && !s.done) return i;
-    if(STAGES[i].type === 'progress' && (s.percent||0) < 100) return i;
-  }
-  return STAGES.length - 1;
-}
-function isStageDone(status, i){
-  const s = status[i] || {};
-  if(STAGES[i].type === 'check') return !!s.done;
-  return (s.percent||0) >= 100;
-}
-function overallPercent(c){
-  const status = c.status || {};
-  let sum = 0;
-  STAGES.forEach((st,i) => {
-    const s = status[i] || {};
-    sum += st.type === 'check' ? (s.done ? 100 : 0) : (s.percent || 0);
-  });
-  return Math.round(sum / STAGES.length);
-}
-
-function render(){
-  const list = document.getElementById('list');
-  if(contracts.length === 0){
-    list.innerHTML = '<div class="empty">هنوز قراردادی ثبت نشده. با دکمه «قرارداد جدید» شروع کنید.</div>';
-    return;
-  }
-  list.innerHTML = contracts.map(c => {
-    const status = c.status || {};
-    const history = c.history || [];
-    const curIdx = getCurrentIndex(c);
-    const pct = overallPercent(c);
-    const isOpen = openCardId === c.id;
-
-    const timelineHtml = STAGES.map((st,i) => {
-      const s = status[i] || {};
-      const done = isStageDone(status, i);
-      const dotCls = done ? 'done' : (i === curIdx ? 'active' : '');
-      const nameCls = done ? 'done' : '';
-      let control = '';
-      if(st.type === 'check'){
-        control = `<button class="chk-btn ${done?'done':''}" onclick="event.stopPropagation(); toggleCheck('${c.id}', ${i})">${done ? '✓ انجام شد' : 'ثبت انجام'}</button>`;
-      }
-      let progBox = '';
-      if(st.type === 'progress'){
-        const pv = s.percent || 0;
-        const pd = s.predictedDate || '';
-        progBox = `
-          <div class="prog-box">
-            <div class="prog-row">
-              <input type="range" min="0" max="100" value="${pv}" id="range_${c.id}_${i}" oninput="document.getElementById('val_${c.id}_${i}').textContent = this.value + '%'">
-              <span class="prog-val" id="val_${c.id}_${i}">${pv}%</span>
-            </div>
-            <div class="prog-strip-mini"><div style="width:${pv}%"></div></div>
-            <div class="prog-date">
-              <label>تاریخ پیش‌بینی پایان:</label>
-              <input type="text" id="date_${c.id}_${i}" placeholder="1405/06/04" value="${escapeHtml(pd)}">
-            </div>
-            <button class="prog-save" onclick="event.stopPropagation(); saveProgress('${c.id}', ${i})">ثبت پیشرفت</button>
-          </div>`;
-      }
-      const doneAt = s.doneAt || (st.type==='progress' && pv>=100 ? s.updatedAt : null);
-      return `
-        <div class="tl-item">
-          <div class="tl-dot ${dotCls}"></div>
-          <div class="tl-row">
-            <span class="tl-name ${nameCls}">${st.name}</span>
-            ${control}
-          </div>
-          ${s.doneAt ? `<div class="tl-time">${fmtTime(s.doneAt)}</div>` : ''}
-          ${progBox}
-        </div>`;
-    }).join('');
-
-    const histHtml = history.slice().reverse().slice(0,20).map(h =>
-      `<div class="hist-item"><span>${escapeHtml(h.label)}</span><span class="hist-time">${fmtTime(h.time)}</span></div>`
-    ).join('');
-
-    return `
-      <div class="card">
-        <div class="card-head" onclick="toggleCard('${c.id}')">
-          <div class="card-title">
-            <span class="card-name">${escapeHtml(c.name)}</span>
-            <span class="card-sub">مرحله فعلی: ${STAGES[curIdx].name}</span>
-          </div>
-          <span class="stage-pill">${pct}٪</span>
-        </div>
-        <div class="progress-strip"><div style="width:${pct}%"></div></div>
-        <div class="body-panel ${isOpen ? 'open' : ''}">
-          <div class="timeline">${timelineHtml}</div>
-          <div class="hist-title">تاریخچه</div>
-          ${histHtml || '<div class="hist-item"><span>—</span></div>'}
-          <div class="del-row"><button onclick="event.stopPropagation(); deleteContract('${c.id}')">حذف قرارداد</button></div>
-        </div>
-      </div>`;
-  }).join('');
-}
-
-function toggleCard(id){ openCardId = openCardId === id ? null : id; render(); }
-
-async function toggleCheck(id, idx){
-  if(!db) return;
-  const c = contracts.find(x => x.id === id);
-  if(!c) return;
-  const status = c.status || {};
-  const cur = status[idx] || {};
-  const nowDone = !cur.done;
-  status[idx] = { done: nowDone, doneAt: nowDone ? new Date().toISOString() : null };
-  const history = (c.history || []).concat([{
-    label: STAGES[idx].name + ' — ' + (nowDone ? 'انجام شد' : 'لغو شد'),
-    time: new Date().toISOString()
-  }]);
-  await db.collection('contracts').doc(id).update({ status, history });
-}
-
-async function saveProgress(id, idx){
-  if(!db) return;
-  const c = contracts.find(x => x.id === id);
-  if(!c) return;
-  const range = document.getElementById(`range_${id}_${idx}`);
-  const dateInput = document.getElementById(`date_${id}_${idx}`);
-  const percent = parseInt(range.value, 10);
-  const predictedDate = dateInput.value.trim();
-  const status = c.status || {};
-  status[idx] = { percent, predictedDate, updatedAt: new Date().toISOString(),
-                   doneAt: percent >= 100 ? new Date().toISOString() : null };
-  const history = (c.history || []).concat([{
-    label: STAGES[idx].name + ' — پیشرفت ' + percent + '٪' + (predictedDate ? ' — پیش‌بینی: ' + predictedDate : ''),
-    time: new Date().toISOString()
-  }]);
-  await db.collection('contracts').doc(id).update({ status, history });
-}
-
-async function deleteContract(id){
-  if(!db) return;
-  if(!confirm('این قرارداد حذف شود؟')) return;
-  await db.collection('contracts').doc(id).delete();
-}
-
-function openAddModal(){ document.getElementById('newName').value = ''; document.getElementById('addModalBg').classList.add('open'); }
-function closeModal(id){ document.getElementById(id).classList.remove('open'); }
-
-async function addContract(){
-  if(!db) return;
-  const name = document.getElementById('newName').value.trim();
-  if(!name) return;
-  await db.collection('contracts').add({
-    name: name,
-    status: {},
-    history: [{ label: 'قرارداد ثبت شد', time: new Date().toISOString() }],
-    createdAt: Date.now()
-  });
-  closeModal('addModalBg');
-}
-
-let deferredPrompt = null;
-window.addEventListener('beforeinstallprompt', (e) => {
-  e.preventDefault();
-  deferredPrompt = e;
-  document.getElementById('installBtn').style.display = 'block';
-});
-function installApp(){
-  if(!deferredPrompt) return;
-  deferredPrompt.prompt();
-  deferredPrompt = null;
-  document.getElementById('installBtn').style.display = 'none';
-}
-
-if('serviceWorker' in navigator){
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./service-worker.js').catch(() => {});
-  });
-}
-</script>
+<script src="./app.js"></script>
 
 </body>
 </html>
