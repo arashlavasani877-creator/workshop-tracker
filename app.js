@@ -10,9 +10,7 @@ const STAGES = [
   { name: 'در انتظار تحویل‌دهی به مالک', type: 'check' },
   { name: 'خاتمه قرارداد', type: 'check' }
 ];
-const WARN_DAYS = 7; // آستانه‌ی هشدار سررسید در پنل سرپرست — دست‌نخورده (V8)
-const ADMIN_NEAR_DUE_DAYS = 3;  // آستانه‌ی جدید فقط برای داشبورد/هشدارهای مدیر (V9)
-const ADMIN_STALE_DAYS = 3;     // چند روز بدون به‌روزرسانی = "راکد" برای مدیر (V9)
+const WARN_DAYS = 7;
 
 let auth = null, db = null;
 let currentUser = null;
@@ -21,15 +19,12 @@ let myPosition = '';
 let contracts = [];
 let usersList = [];
 let openCardId = null;
-let adminTab = 'dashboard';   // 'dashboard' | 'contracts' | 'users'
-let supervisorTab = 'contracts'; // 'contracts' | 'warnings' | 'closed' — V8، دست‌نخورده
+let adminTab = 'dashboard';   // 'dashboard' | 'users' | 'warnings'
+let supervisorTab = 'contracts'; // 'contracts' | 'warnings'
 let dataSubscribed = false;
 let historyOpen = {};         // id -> bool
 let approveTargetUid = null;
 let authErrorMsg = '';
-let adminSearchQuery = '';
-let adminFilterStage = 'all';
-let adminFilterStatus = 'all';
 
 function setStatus(text, ok){
   const n = document.getElementById('syncNote'), d = document.getElementById('statusDot');
@@ -96,36 +91,6 @@ function overallPercent(c){
   return Math.round(sum/STAGES.length);
 }
 function isCompleted(c){ return overallPercent(c) === 100; }
-
-/* ---------- Admin-only (V9): جدا از منطق سرپرست، به هیچ تابع V8 دست نمی‌زند ---------- */
-function daysSinceUpdate(c){
-  const hist = c.history || [];
-  const t = hist.length ? new Date(hist[hist.length-1].time) : new Date(c.createdAt || Date.now());
-  return daysBetween(t, new Date());
-}
-function adminTimeStatus(c){
-  const activeDateStr = c.revisedDueDate || c.dueDate;
-  if(!activeDateStr) return { cls:'none', label:'بدون سررسید', daysLeft:null };
-  const d = jalaliStrToDate(activeDateStr);
-  if(!d) return { cls:'none', label:'تاریخ نامعتبر', daysLeft:null };
-  const dl = daysBetween(todayMid(), d);
-  if(dl < 0) return { cls:'late', label: Math.abs(dl) + ' روز تأخیر', daysLeft: dl };
-  if(dl <= ADMIN_NEAR_DUE_DAYS) return { cls:'near', label: dl + ' روز تا سررسید', daysLeft: dl };
-  return { cls:'ontime', label: dl + ' روز تا سررسید', daysLeft: dl };
-}
-function adminAlerts(){
-  const list = [];
-  contracts.filter(c => !isCompleted(c)).forEach(c => {
-    const ts = adminTimeStatus(c);
-    if(ts.cls === 'late') list.push({ type:'late', c, label:'عقب‌افتاده — ' + ts.label });
-    else if(ts.cls === 'near') list.push({ type:'near', c, label:'نزدیک سررسید — ' + ts.label });
-    const stale = daysSinceUpdate(c);
-    if(stale >= ADMIN_STALE_DAYS) list.push({ type:'stale', c, label: stale + ' روز بدون به‌روزرسانی' });
-  });
-  const order = { late:0, stale:1, near:2 };
-  list.sort((a,b) => order[a.type]-order[b.type]);
-  return list;
-}
 function dueStatus(c){
   const activeDateStr = c.revisedDueDate || c.dueDate;
   if(!activeDateStr) return { label: 'سررسید ثبت نشده', cls:'none', daysLeft:null };
@@ -361,147 +326,57 @@ function renderSupervisor(el){
 }
 function switchSupervisorTab(t){ supervisorTab = t; renderApp(); }
 
-/* ---------- Admin view (V9 — Professional Dashboard) ---------- */
+/* ---------- Admin view ---------- */
 function renderAdmin(el){
   const pendingCount = usersList.filter(u => u.role === 'pending').length;
-  const alertCount = adminAlerts().length;
+  const nearingCount = contracts.filter(c => ['warn','late'].includes(dueStatus(c).cls)).length;
+  const closedCount = contracts.filter(isCompleted).length;
   el.innerHTML = `
-    <div class="toolbar">
-      <button class="btn-primary" onclick="openAddModal()">+ قرارداد جدید</button>
-      <button class="btn-secondary" onclick="openNotifications()">🔔 هشدارها ${alertCount ? '('+alertCount+')' : ''}</button>
-    </div>
+    <div class="toolbar"><button class="btn-primary" onclick="openAddModal()">+ قرارداد جدید</button></div>
     <div class="toolbar"><button id="installBtn" class="btn-secondary" onclick="installApp()">نصب اپلیکیشن روی گوشی</button></div>
     <div class="tabs">
-      <button class="${adminTab==='dashboard'?'active':''}" onclick="switchAdminTab('dashboard')">داشبورد</button>
-      <button class="${adminTab==='contracts'?'active':''}" onclick="switchAdminTab('contracts')">مدیریت قراردادها</button>
+      <button class="${adminTab==='dashboard'?'active':''}" onclick="switchAdminTab('dashboard')">داشبورد گزارش</button>
       <button class="${adminTab==='users'?'active':''}" onclick="switchAdminTab('users')">کاربران ${pendingCount?('('+pendingCount+')'):''}</button>
+    </div>
+    <div class="tabs">
+      <button class="${adminTab==='warnings'?'active':''}" onclick="switchAdminTab('warnings')">هشدار سررسید ${nearingCount?('('+nearingCount+')'):''}</button>
+      <button class="${adminTab==='closed'?'active':''}" onclick="switchAdminTab('closed')">خاتمه‌ها ${closedCount?('('+closedCount+')'):''}</button>
     </div>
     <div id="adminBody"></div>
     <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
   `;
   document.getElementById('installBtn').style.display = window.__deferredPrompt ? 'block' : 'none';
   if(adminTab === 'dashboard') renderAdminDashboard();
-  else if(adminTab === 'contracts') renderAdminContracts();
-  else renderAdminUsers();
+  else if(adminTab === 'users') renderAdminUsers();
+  else if(adminTab === 'closed') renderAdminClosed();
+  else document.getElementById('adminBody').innerHTML = renderWarningsHtml();
 }
 function switchAdminTab(t){ adminTab = t; renderApp(); }
 
 function renderAdminDashboard(){
   const body = document.getElementById('adminBody');
-  const active = contracts.filter(c => !isCompleted(c));
-  const totalAll = contracts.length;
-  const delayed = active.filter(c => adminTimeStatus(c).cls === 'late').length;
-  const nearDue = active.filter(c => adminTimeStatus(c).cls === 'near').length;
-  const stale = active.filter(c => daysSinceUpdate(c) >= ADMIN_STALE_DAYS).length;
-  const avgProgress = active.length ? Math.round(active.reduce((s,c) => s+overallPercent(c), 0) / active.length) : 0;
-  const alerts = adminAlerts();
-  const needAction = new Set(alerts.map(a => a.c.id)).size;
-
+  const openContracts = contracts.filter(c => !isCompleted(c));
+  const late = openContracts.filter(c => dueStatus(c).cls === 'late').length;
+  const soon = openContracts.filter(c => dueStatus(c).cls === 'warn').length;
   body.innerHTML = `
-    <div class="kpi-grid">
-      <div class="kpi-card"><div class="kpi-num">${totalAll}</div><div class="kpi-label">کل قراردادها</div></div>
-      <div class="kpi-card"><div class="kpi-num">${active.length}</div><div class="kpi-label">فعال</div></div>
-      <div class="kpi-card kpi-red"><div class="kpi-num">${delayed}</div><div class="kpi-label">عقب‌افتاده</div></div>
-      <div class="kpi-card kpi-amber"><div class="kpi-num">${nearDue}</div><div class="kpi-label">نزدیک سررسید</div></div>
-      <div class="kpi-card kpi-blue"><div class="kpi-num">${stale}</div><div class="kpi-label">بدون به‌روزرسانی</div></div>
-      <div class="kpi-card"><div class="kpi-num">${avgProgress}٪</div><div class="kpi-label">میانگین پیشرفت فعال</div></div>
+    <div class="section-title" style="margin-top:14px;">خلاصه وضعیت <span class="cnt">${openContracts.length} قرارداد فعال</span></div>
+    <div class="card-badges" style="margin-bottom:14px;">
+      <span class="mini-badge" style="border-color:var(--red);color:var(--red);">عقب‌افتاده: ${late}</span>
+      <span class="mini-badge" style="border-color:var(--amber);color:var(--amber);">نزدیک به سررسید: ${soon}</span>
     </div>
-    <div class="section-title" style="margin-top:20px;">نیازمند اقدام <span class="cnt">${needAction} مورد</span></div>
-    <div id="actionList"></div>
+    <div id="list"></div>
   `;
-  const actionList = document.getElementById('actionList');
-  if(!alerts.length){
-    actionList.innerHTML = '<div class="empty">موردی نیازمند اقدام فوری نیست.</div>';
-    return;
-  }
-  actionList.innerHTML = alerts.map(a => {
-    const idx = getCurrentIndex(a.c);
-    const pct = overallPercent(a.c);
-    const tagColor = a.type === 'late' ? 'red' : (a.type === 'near' ? 'amber' : '');
-    return `
-      <div class="warn-item ${a.type==='near'?'soon':''}" style="cursor:pointer;" onclick="openContractDetail('${a.c.id}')">
-        <div>
-          <div class="warn-name">${escapeHtml(a.c.name)}</div>
-          <div class="warn-sub">مرحله: ${STAGES[idx].name} — پیشرفت ${pct}٪</div>
-        </div>
-        <span class="warn-tag ${tagColor}" style="${a.type==='stale' ? 'background:var(--teal-dim);color:var(--teal);' : ''}">${a.label}</span>
-      </div>`;
-  }).join('');
+  renderList(true, c => !isCompleted(c));
 }
 
-function renderAdminContracts(){
+function renderAdminClosed(){
   const body = document.getElementById('adminBody');
+  const closed = contracts.filter(isCompleted);
   body.innerHTML = `
-    <div class="section-title" style="margin-top:14px;">مدیریت قراردادها</div>
-    <input type="text" id="adminSearch" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(adminSearchQuery)}" class="auth-input" style="max-width:none; width:100%; margin-bottom:10px;" oninput="onAdminSearch(this.value)">
-    <div style="display:flex; gap:8px; margin-bottom:14px;">
-      <select id="stageFilter" class="admin-select" onchange="onStageFilter(this.value)">
-        <option value="all">همه مراحل</option>
-        ${STAGES.map((s,i) => `<option value="${i}" ${adminFilterStage===String(i)?'selected':''}>${s.name}</option>`).join('')}
-      </select>
-      <select id="statusFilter" class="admin-select" onchange="onStatusFilter(this.value)">
-        <option value="all">همه وضعیت‌ها</option>
-        <option value="late" ${adminFilterStatus==='late'?'selected':''}>عقب‌افتاده</option>
-        <option value="near" ${adminFilterStatus==='near'?'selected':''}>نزدیک سررسید</option>
-        <option value="stale" ${adminFilterStatus==='stale'?'selected':''}>بدون به‌روزرسانی</option>
-      </select>
-    </div>
-    <div id="mgmtList"></div>
+    <div class="section-title" style="margin-top:14px;">خاتمه‌ها <span class="cnt">${closed.length} قرارداد</span></div>
+    <div id="list"></div>
   `;
-  renderMgmtList();
-}
-function onAdminSearch(v){ adminSearchQuery = v; renderMgmtList(); }
-function onStageFilter(v){ adminFilterStage = v; renderMgmtList(); }
-function onStatusFilter(v){ adminFilterStatus = v; renderMgmtList(); }
-
-function renderMgmtList(){
-  const el = document.getElementById('mgmtList');
-  if(!el) return;
-  let items = contracts.filter(c => !isCompleted(c));
-  const q = adminSearchQuery.trim().toLowerCase();
-  if(q) items = items.filter(c => (c.name||'').toLowerCase().includes(q) || (c.itemCode||'').toLowerCase().includes(q));
-  if(adminFilterStage !== 'all') items = items.filter(c => getCurrentIndex(c) === parseInt(adminFilterStage,10));
-  if(adminFilterStatus !== 'all'){
-    items = items.filter(c => adminFilterStatus === 'stale' ? daysSinceUpdate(c) >= ADMIN_STALE_DAYS : adminTimeStatus(c).cls === adminFilterStatus);
-  }
-  if(!items.length){ el.innerHTML = '<div class="empty">موردی یافت نشد.</div>'; return; }
-  el.innerHTML = items.map(c => {
-    const idx = getCurrentIndex(c);
-    const pct = overallPercent(c);
-    const ts = adminTimeStatus(c);
-    const dueTagCls = ts.cls==='ontime' ? 'ok' : (ts.cls==='near' ? 'warn' : (ts.cls==='late' ? 'late' : 'none'));
-    return `
-      <div class="card" style="cursor:pointer;" onclick="openContractDetail('${c.id}')">
-        <div class="card-head">
-          <div class="card-title">
-            <span class="card-name">${escapeHtml(c.name)}</span>
-            <span class="card-sub">مرحله: ${STAGES[idx].name}${c.itemCode ? ' — کد قلم: '+escapeHtml(c.itemCode) : ''}</span>
-          </div>
-          <span class="stage-pill">${pct}٪</span>
-        </div>
-        <div class="progress-strip"><div style="width:${pct}%"></div></div>
-        <div class="due-row"><span class="due-tag ${dueTagCls}">${ts.label}</span></div>
-      </div>`;
-  }).join('');
-}
-
-function openContractDetail(id){
-  const c = contracts.find(x => x.id === id);
-  if(!c) return;
-  document.getElementById('contractModalBody').innerHTML = renderCard(c, true, true);
-  document.getElementById('contractModalBg').classList.add('open');
-}
-
-function openNotifications(){
-  const alerts = adminAlerts();
-  document.getElementById('notifModalBody').innerHTML = !alerts.length
-    ? '<div class="empty">هشداری وجود ندارد.</div>'
-    : alerts.map(a => `
-        <div class="warn-item ${a.type==='near'?'soon':''}">
-          <div><div class="warn-name">${escapeHtml(a.c.name)}</div><div class="warn-sub">${a.label}</div></div>
-          <button class="field-save" onclick="closeModal('notifModalBg'); openContractDetail('${a.c.id}')">مشاهده</button>
-        </div>`).join('');
-  document.getElementById('notifModalBg').classList.add('open');
+  renderList(true, isCompleted);
 }
 
 function renderAdminUsers(){
@@ -578,11 +453,11 @@ function renderList(isAdmin, predicate){
   list.innerHTML = items.map(c => renderCard(c, isAdmin)).join('');
 }
 
-function renderCard(c, isAdmin, forceOpen){
+function renderCard(c, isAdmin){
   const status = c.status || {};
   const curIdx = getCurrentIndex(c);
   const pct = overallPercent(c);
-  const isOpen = forceOpen || (openCardId === c.id);
+  const isOpen = openCardId === c.id;
   const due = dueStatus(c);
   const sched = scheduleText(c);
 
