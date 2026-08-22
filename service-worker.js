@@ -1,4 +1,4 @@
-const CACHE_NAME = 'afrachoob-tracker-v8';
+const CACHE_NAME = 'afrachoob-tracker-v11';
 const APP_SHELL = [
   './',
   './index.html',
@@ -24,20 +24,18 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// App shell: cache-first. Firestore data itself is fetched live by the Firebase SDK
-// and is not touched here, so contract data is always fresh when online.
+// Network-first: هر بار تلاش می‌کند نسخه‌ی تازه را از سرور بگیرد؛ کش فقط
+// برای حالت آفلاین (نبود اینترنت) استفاده می‌شود، نه به‌جای نسخه‌ی جدید.
+// این تغییر مشکل «نسخه‌ی قدیمی برای همیشه کش می‌ماند» را برطرف می‌کند.
 self.addEventListener('fetch', (event) => {
   if (event.request.method !== 'GET') return;
   event.respondWith(
-    caches.match(event.request).then((cached) => {
-      return cached || fetch(event.request).then((res) => {
-        // فقط پاسخ‌های سالم (200) کش می‌شوند، تا یک خطای موقت (مثلاً 404) برای همیشه گیر نکند.
-        if(res && res.ok){
-          const resClone = res.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, resClone));
-        }
-        return res;
-      }).catch(() => cached);
-    })
+    fetch(event.request).then((res) => {
+      if(res && res.ok){
+        const resClone = res.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, resClone));
+      }
+      return res;
+    }).catch(() => caches.match(event.request))
   );
 });
