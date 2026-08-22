@@ -128,33 +128,38 @@ function initAuthAndData(){
     auth = firebase.auth();
     db = firebase.firestore();
 
-    const wasPendingRedirect = sessionStorage.getItem('afrachub_pending_redirect') === '1';
-    if(wasPendingRedirect) sessionStorage.removeItem('afrachub_pending_redirect');
-
     auth.onAuthStateChanged(async (user) => {
       currentUser = user;
       dataSubscribed = false;
       if(!user){ myRole = null; myPosition = ''; renderApp(); return; }
+      const ref = db.collection('users').doc(user.uid);
+      let snap;
       try{
-        const ref = db.collection('users').doc(user.uid);
-        const snap = await ref.get();
-        if(!snap.exists){
+        snap = await ref.get();
+      }catch(e){
+        authErrorMsg = 'خطا در خواندن اطلاعات کاربر: ' + ((e&&e.code)?e.code+' — ':'') + (e&&e.message?e.message:String(e));
+        renderApp();
+        return;
+      }
+      if(!snap.exists){
+        try{
           const role = (user.email === ADMIN_EMAIL) ? 'admin' : 'pending';
           await ref.set({ email:user.email, name:user.displayName||'', role, requestedAt: Date.now() });
+        }catch(e){
+          authErrorMsg = 'خطا در ساخت حساب کاربری: ' + ((e&&e.code)?e.code+' — ':'') + (e&&e.message?e.message:String(e));
+          renderApp();
+          return;
         }
-        ref.onSnapshot((doc) => {
-          myRole = doc.exists ? doc.data().role : 'pending';
-          myPosition = doc.exists ? (doc.data().position || '') : '';
-          ensureDataSubscriptions();
-          renderApp();
-        }, (err) => {
-          authErrorMsg = 'خطا در خواندن اطلاعات کاربر (Firestore): ' + err.message;
-          renderApp();
-        });
-      }catch(e){
-        authErrorMsg = (e && e.code) ? (e.code + ' — ' + e.message) : String(e);
-        renderApp();
       }
+      ref.onSnapshot((doc) => {
+        myRole = doc.exists ? doc.data().role : 'pending';
+        myPosition = doc.exists ? (doc.data().position || '') : '';
+        ensureDataSubscriptions();
+        renderApp();
+      }, (e) => {
+        authErrorMsg = 'خطا در همگام‌سازی حساب: ' + ((e&&e.code)?e.code+' — ':'') + (e&&e.message?e.message:String(e));
+        renderApp();
+      });
     });
   }catch(e){
     setStatus('خطا در راه‌اندازی: ' + e.message, false);
@@ -179,17 +184,27 @@ function ensureDataSubscriptions(){
   }
 }
 
+function mapAuthError(e){
+  const code = e && e.code;
+  const map = {
+    'auth/email-already-in-use': 'این ایمیل قبلاً ثبت شده — به‌جای «ساخت حساب جدید» از «ورود» استفاده کنید.',
+    'auth/invalid-email': 'فرمت ایمیل درست نیست.',
+    'auth/weak-password': 'رمز عبور خیلی ساده است، حداقل ۶ کاراکتر بنویسید.',
+    'auth/wrong-password': 'رمز عبور اشتباه است.',
+    'auth/user-not-found': 'حسابی با این ایمیل پیدا نشد — از «ساخت حساب جدید» استفاده کنید.',
+    'auth/invalid-credential': 'ایمیل یا رمز عبور اشتباه است.',
+    'auth/too-many-requests': 'تعداد تلاش‌ها زیاد بوده، کمی صبر کنید و دوباره امتحان کنید.',
+    'auth/operation-not-allowed': 'ورود با ایمیل/رمز در Firebase فعال نشده — باید در Authentication → Sign-in method فعالش کنید.'
+  };
+  return map[code] || ((code?code+' — ':'') + (e && e.message ? e.message : String(e)));
+}
 function signIn(){
   authErrorMsg = '';
   const email = document.getElementById('authEmail').value.trim();
   const pass = document.getElementById('authPass').value;
   if(!email || !pass){ authErrorMsg = 'ایمیل و رمز عبور را وارد کنید.'; renderApp(); return; }
   auth.signInWithEmailAndPassword(email, pass).catch((e) => {
-    if(e.code === 'auth/user-not-found' || e.code === 'auth/invalid-credential' || e.code === 'auth/wrong-password'){
-      authErrorMsg = 'ایمیل یا رمز عبور اشتباه است، یا هنوز حساب نساخته‌اید — از دکمه‌ی «ساخت حساب جدید» استفاده کنید.';
-    } else {
-      authErrorMsg = (e && e.code) ? (e.code + ' — ' + e.message) : String(e);
-    }
+    authErrorMsg = mapAuthError(e);
     renderApp();
   });
 }
@@ -200,7 +215,7 @@ function signUp(){
   if(!email || !pass){ authErrorMsg = 'ایمیل و رمز عبور را وارد کنید.'; renderApp(); return; }
   if(pass.length < 6){ authErrorMsg = 'رمز عبور باید حداقل ۶ کاراکتر باشد.'; renderApp(); return; }
   auth.createUserWithEmailAndPassword(email, pass).catch((e) => {
-    authErrorMsg = (e && e.code) ? (e.code + ' — ' + e.message) : String(e);
+    authErrorMsg = mapAuthError(e);
     renderApp();
   });
 }
@@ -217,26 +232,12 @@ function renderApp(){
       <div class="center-screen">
         <img src="./icon-192.png" alt="افراچوب">
         <h2>ورود به افراچوب</h2>
-        <p>برای مشاهده و مدیریت وضعیت قراردادها، ایمیل و رمز عبور خود را وارد کنید.</p>
-        <div style="width:100%; max-width:320px; margin-top:12px; text-align:right;">
-          <input id="authEmail" type="email" placeholder="ایمیل" style="width:100%; box-sizing:border-box; padding:12px; margin-bottom:8px; border-radius:10px; border:1px solid #ccc; direction:ltr; text-align:left;">
-          <input id="authPass" type="password" placeholder="رمز عبور" style="width:100%; box-sizing:border-box; padding:12px; margin-bottom:12px; border-radius:10px; border:1px solid #ccc; direction:ltr; text-align:left;">
-        </div>
-        <button class="google-btn" onclick="signIn()">ورود</button>
-        <button class="google-btn" style="margin-top:8px; opacity:0.85;" onclick="signUp()">ساخت حساب جدید</button>
-        ${authErrorMsg ? `<p style="color:var(--red); font-size:12px; margin-top:10px;">${escapeHtml(authErrorMsg)}</p>` : ''}
-      </div>`;
-    return;
-  }
-
-  if(!myRole && authErrorMsg){
-    headerRight.innerHTML = `<button class="signout-btn" onclick="signOutUser()">خروج</button>`;
-    el.innerHTML = `
-      <div class="center-screen">
-        <img src="./icon-192.png" alt="افراچوب">
-        <h2>مشکل در اتصال به دیتابیس</h2>
-        <p>وارد حساب شدید، اما دسترسی به Firestore با خطا مواجه شد. معمولاً یعنی قوانین (Rules) دیتابیس هنوز منتشر نشده یا خود Firestore Database ساخته نشده.</p>
-        <p style="color:var(--red); font-family:'JetBrains Mono',monospace; font-size:11px; direction:ltr; margin-top:10px;">${escapeHtml(authErrorMsg)}</p>
+        <p>برای مشاهده و مدیریت وضعیت قراردادها، با ایمیل و رمز عبور خود وارد شوید.</p>
+        <input class="auth-input" type="email" id="authEmail" placeholder="ایمیل" autocomplete="username">
+        <input class="auth-input" type="password" id="authPass" placeholder="رمز عبور" autocomplete="current-password">
+        <button class="google-btn" style="justify-content:center; width:100%; max-width:320px;" onclick="signIn()">ورود</button>
+        <button class="signout-btn" onclick="signUp()">ساخت حساب جدید</button>
+        ${authErrorMsg ? `<p style="color:var(--red); font-size:12px; max-width:320px;">${escapeHtml(authErrorMsg)}</p>` : ''}
       </div>`;
     return;
   }
@@ -270,7 +271,11 @@ function renderApp(){
   if(myRole === 'admin'){ renderAdmin(el); return; }
   if(myRole === 'supervisor'){ renderSupervisor(el); return; }
 
-  el.innerHTML = '<div class="center-screen"><span class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">در حال بارگذاری…</span></span></div>';
+  el.innerHTML = `<div class="center-screen">
+    <span class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">در حال بارگذاری…</span></span>
+    ${authErrorMsg ? `<p style="color:var(--red); font-family:'JetBrains Mono',monospace; font-size:11px; direction:ltr; max-width:320px;">${escapeHtml(authErrorMsg)}</p>` : ''}
+    <button class="signout-btn" onclick="signOutUser()">خروج و تلاش دوباره</button>
+  </div>`;
 }
 
 function roleFa(r){
