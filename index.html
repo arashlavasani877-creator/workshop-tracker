@@ -192,6 +192,18 @@
   </div>
 </div>
 
+<div class="modal-bg" id="approveModalBg">
+  <div class="modal">
+    <h3>تایید دسترسی کاربر</h3>
+    <input id="approveName" placeholder="نام و نام خانوادگی" />
+    <input id="approvePosition" placeholder="سمت (مثلاً سرپرست نصب و ساخت)" />
+    <div class="row">
+      <button class="save-btn" onclick="confirmApprove()">تایید و فعال‌سازی</button>
+      <button class="cancel-btn" onclick="closeModal('approveModalBg')">انصراف</button>
+    </div>
+  </div>
+</div>
+
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>

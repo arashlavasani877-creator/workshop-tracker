@@ -1,4 +1,4 @@
-/* ===== افراچوب — منطق اصلی اپ ===== */
+/* ===== افراچوب — منطق اصلی اپ (نسخه ۳) ===== */
 
 const STAGES = [
   { name: 'اندازه‌گیری', type: 'check' },
@@ -6,20 +6,24 @@ const STAGES = [
   { name: 'آنالیز', type: 'check' },
   { name: 'ساخت و برش', type: 'progress' },
   { name: 'ارسال بار به محل ساختمان', type: 'check' },
-  { name: 'در حال نصب', type: 'progress' },
+  { name: 'در حال نصب', type: 'progress', requiresPanel: true },
   { name: 'در انتظار تحویل‌دهی به مالک', type: 'check' },
   { name: 'خاتمه قرارداد', type: 'check' }
 ];
-const WARN_DAYS = 7; // آستانه هشدار نزدیک‌شدن سررسید
+const WARN_DAYS = 7;
 
 let auth = null, db = null;
 let currentUser = null;
 let myRole = null;
+let myPosition = '';
 let contracts = [];
 let usersList = [];
 let openCardId = null;
-let adminTab = 'dashboard'; // 'dashboard' | 'users'
+let adminTab = 'dashboard';   // 'dashboard' | 'users' | 'warnings'
+let supervisorTab = 'contracts'; // 'contracts' | 'warnings'
 let dataSubscribed = false;
+let historyOpen = {};         // id -> bool
+let approveTargetUid = null;
 
 function setStatus(text, ok){
   const n = document.getElementById('syncNote'), d = document.getElementById('statusDot');
@@ -27,6 +31,7 @@ function setStatus(text, ok){
   if(d) d.className = 'dot' + (ok ? '' : ' off');
 }
 function escapeHtml(s){ const d = document.createElement('div'); d.textContent = s||''; return d.innerHTML; }
+function historyEntry(label){ return { label, time: new Date().toISOString(), by: (currentUser && currentUser.email) || '' }; }
 
 /* ---------- Jalali <-> Gregorian ---------- */
 function div_(a,b){ return Math.floor(a/b); }
@@ -64,15 +69,16 @@ function daysBetween(a,b){ return Math.round((b-a)/86400000); }
 function getCurrentIndex(c){
   const status = c.status || {};
   for(let i=0;i<STAGES.length;i++){
-    const s = status[i] || {};
-    if(STAGES[i].type === 'check' && !s.done) return i;
-    if(STAGES[i].type === 'progress' && (s.percent||0) < 100) return i;
+    if(!isStageDone(status, i)) return i;
   }
   return STAGES.length - 1;
 }
 function isStageDone(status, i){
   const s = status[i] || {};
-  return STAGES[i].type === 'check' ? !!s.done : (s.percent||0) >= 100;
+  const st = STAGES[i];
+  if(st.type === 'check') return !!s.done;
+  if(st.requiresPanel) return (s.percent||0) >= 100 && !!s.panelInstalled;
+  return (s.percent||0) >= 100;
 }
 function overallPercent(c){
   const status = c.status || {};
@@ -83,8 +89,6 @@ function overallPercent(c){
   });
   return Math.round(sum/STAGES.length);
 }
-
-/* due-date status: {label, cls('ok'|'warn'|'late'|'none'), daysLeft} */
 function dueStatus(c){
   const activeDateStr = c.revisedDueDate || c.dueDate;
   if(!activeDateStr) return { label: 'سررسید ثبت نشده', cls:'none', daysLeft:null };
@@ -123,10 +127,14 @@ function initAuthAndData(){
     auth = firebase.auth();
     db = firebase.firestore();
 
+    auth.getRedirectResult().catch((e) => {
+      setStatus('خطا در ورود: ' + e.message, false);
+    });
+
     auth.onAuthStateChanged(async (user) => {
       currentUser = user;
       dataSubscribed = false;
-      if(!user){ myRole = null; renderApp(); return; }
+      if(!user){ myRole = null; myPosition = ''; renderApp(); return; }
       const ref = db.collection('users').doc(user.uid);
       const snap = await ref.get();
       if(!snap.exists){
@@ -135,6 +143,7 @@ function initAuthAndData(){
       }
       ref.onSnapshot((doc) => {
         myRole = doc.exists ? doc.data().role : 'pending';
+        myPosition = doc.exists ? (doc.data().position || '') : '';
         ensureDataSubscriptions();
         renderApp();
       });
@@ -164,7 +173,7 @@ function ensureDataSubscriptions(){
 
 function signIn(){
   const provider = new firebase.auth.GoogleAuthProvider();
-  auth.signInWithPopup(provider).catch((e) => alert('خطا در ورود: ' + e.message));
+  auth.signInWithRedirect(provider);
 }
 function signOutUser(){ auth.signOut(); }
 
@@ -188,8 +197,9 @@ function renderApp(){
     return;
   }
 
+  const badgeText = myPosition ? escapeHtml(myPosition) : roleFa(myRole);
   headerRight.innerHTML = `<div style="display:flex;align-items:center;">
-      <span class="role-badge">${roleFa(myRole)}</span>
+      <span class="role-badge">${badgeText}</span>
       <button class="signout-btn" onclick="signOutUser()">خروج</button>
     </div>`;
 
@@ -223,47 +233,62 @@ function roleFa(r){
   return { admin:'مدیر', supervisor:'سرپرست نصب', pending:'در انتظار تایید', blocked:'مسدود' }[r] || r;
 }
 
-/* ---------- Supervisor view ---------- */
-function renderSupervisor(el){
+/* ---------- Shared: warnings list ---------- */
+function renderWarningsHtml(){
   const nearing = contracts
     .map(c => ({ c, st: dueStatus(c) }))
     .filter(x => x.st.cls === 'warn' || x.st.cls === 'late')
     .sort((a,b) => (a.st.daysLeft ?? 999) - (b.st.daysLeft ?? 999));
-
-  let warnHtml = '';
-  if(nearing.length){
-    warnHtml = '<div class="section-title">⚠️ هشدار سررسید <span class="cnt">' + nearing.length + ' مورد</span></div>' +
-      nearing.map(x => `
-        <div class="warn-item ${x.st.cls==='warn'?'soon':''}">
-          <div><div class="warn-name">${escapeHtml(x.c.name)}</div><div class="warn-sub">مرحله فعلی: ${STAGES[getCurrentIndex(x.c)].name}</div></div>
-          <span class="warn-tag ${x.st.cls==='late'?'red':'amber'}">${x.st.label}</span>
-        </div>`).join('');
+  if(!nearing.length){
+    return '<div class="empty" style="margin-top:14px;">فعلاً هیچ قراردادی به سررسید نزدیک یا عقب‌افتاده نیست.</div>';
   }
+  return '<div class="section-title" style="margin-top:14px;">هشدار سررسید <span class="cnt">' + nearing.length + ' مورد</span></div>' +
+    nearing.map(x => `
+      <div class="warn-item ${x.st.cls==='warn'?'soon':''}">
+        <div><div class="warn-name">${escapeHtml(x.c.name)}</div><div class="warn-sub">مرحله فعلی: ${STAGES[getCurrentIndex(x.c)].name}</div></div>
+        <span class="warn-tag ${x.st.cls==='late'?'red':'amber'}">${x.st.label}</span>
+      </div>`).join('');
+}
 
+/* ---------- Supervisor view ---------- */
+function renderSupervisor(el){
   el.innerHTML = `
-    ${warnHtml}
-    <div class="section-title">قراردادها <span class="cnt">${contracts.length} مورد</span></div>
-    <div id="list"></div>
+    <div class="tabs">
+      <button class="${supervisorTab==='contracts'?'active':''}" onclick="switchSupervisorTab('contracts')">قراردادها</button>
+      <button class="${supervisorTab==='warnings'?'active':''}" onclick="switchSupervisorTab('warnings')">هشدار سررسید</button>
+    </div>
+    <div id="supBody"></div>
     <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
   `;
-  renderList(false);
+  const body = document.getElementById('supBody');
+  if(supervisorTab === 'contracts'){
+    body.innerHTML = `<div class="section-title" style="margin-top:14px;">قراردادها <span class="cnt">${contracts.length} مورد</span></div><div id="list"></div>`;
+    renderList(false);
+  } else {
+    body.innerHTML = renderWarningsHtml();
+  }
 }
+function switchSupervisorTab(t){ supervisorTab = t; renderApp(); }
 
 /* ---------- Admin view ---------- */
 function renderAdmin(el){
   const pendingCount = usersList.filter(u => u.role === 'pending').length;
+  const nearingCount = contracts.filter(c => ['warn','late'].includes(dueStatus(c).cls)).length;
   el.innerHTML = `
     <div class="toolbar"><button class="btn-primary" onclick="openAddModal()">+ قرارداد جدید</button></div>
     <div class="toolbar"><button id="installBtn" class="btn-secondary" onclick="installApp()">نصب اپلیکیشن روی گوشی</button></div>
     <div class="tabs">
       <button class="${adminTab==='dashboard'?'active':''}" onclick="switchAdminTab('dashboard')">داشبورد گزارش</button>
       <button class="${adminTab==='users'?'active':''}" onclick="switchAdminTab('users')">کاربران ${pendingCount?('('+pendingCount+')'):''}</button>
+      <button class="${adminTab==='warnings'?'active':''}" onclick="switchAdminTab('warnings')">هشدار سررسید ${nearingCount?('('+nearingCount+')'):''}</button>
     </div>
     <div id="adminBody"></div>
     <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
   `;
   document.getElementById('installBtn').style.display = window.__deferredPrompt ? 'block' : 'none';
-  if(adminTab === 'dashboard') renderAdminDashboard(); else renderAdminUsers();
+  if(adminTab === 'dashboard') renderAdminDashboard();
+  else if(adminTab === 'users') renderAdminUsers();
+  else document.getElementById('adminBody').innerHTML = renderWarningsHtml();
 }
 function switchAdminTab(t){ adminTab = t; renderApp(); }
 
@@ -292,21 +317,23 @@ function renderAdminUsers(){
     const isSelf = currentUser && u.id === currentUser.uid;
     let actions = '';
     if(u.role === 'pending'){
-      actions = `<button class="btn-approve" onclick="setUserRole('${u.id}','supervisor')">تایید (سرپرست)</button>
+      actions = `<button class="btn-approve" onclick="openApproveModal('${u.id}','${escapeHtml(u.name||'')}')">تایید و تعیین سمت</button>
                  <button class="btn-block" onclick="setUserRole('${u.id}','blocked')">رد</button>`;
     } else if(u.role === 'supervisor'){
       actions = `<button class="btn-revoke" onclick="setUserRole('${u.id}','pending')">لغو دسترسی</button>
                  <button class="btn-block" onclick="setUserRole('${u.id}','blocked')">مسدود کن</button>`;
     } else if(u.role === 'blocked'){
-      actions = `<button class="btn-approve" onclick="setUserRole('${u.id}','supervisor')">فعال‌سازی مجدد</button>
+      actions = `<button class="btn-approve" onclick="openApproveModal('${u.id}','${escapeHtml(u.name||'')}')">فعال‌سازی مجدد</button>
                  <button class="btn-delete" onclick="deleteUser('${u.id}')">حذف کامل</button>`;
     } else if(u.role === 'admin' && !isSelf){
       actions = `<button class="btn-revoke" onclick="setUserRole('${u.id}','pending')">حذف دسترسی مدیر</button>`;
     }
+    const nameLine = u.name ? escapeHtml(u.name) + (u.position ? ' — ' + escapeHtml(u.position) : '') : '';
     return `
       <div class="user-row">
         <div class="user-info">
           <div class="user-email">${escapeHtml(u.email)}${isSelf?' (شما)':''}</div>
+          ${nameLine ? `<div class="user-role" style="color:var(--ink-soft);">${nameLine}</div>` : ''}
           <div class="user-role ${u.role}">${roleFa(u.role)}</div>
         </div>
         <div class="user-actions">${actions}</div>
@@ -324,7 +351,25 @@ async function deleteUser(uid){
   await db.collection('users').doc(uid).delete();
 }
 
-/* ---------- Contract list & card (shared, editable flag differs) ---------- */
+/* ---------- Approve modal ---------- */
+function openApproveModal(uid, currentName){
+  approveTargetUid = uid;
+  document.getElementById('approveName').value = currentName || '';
+  document.getElementById('approvePosition').value = '';
+  document.getElementById('approveModalBg').classList.add('open');
+}
+async function confirmApprove(){
+  if(!approveTargetUid || !db) return;
+  const name = document.getElementById('approveName').value.trim();
+  const position = document.getElementById('approvePosition').value.trim();
+  await db.collection('users').doc(approveTargetUid).update({
+    role: 'supervisor', name, position, approvedAt: Date.now()
+  });
+  closeModal('approveModalBg');
+  approveTargetUid = null;
+}
+
+/* ---------- Contract list & card ---------- */
 function renderList(isAdmin){
   const list = document.getElementById('list');
   if(!list) return;
@@ -359,13 +404,22 @@ function renderCard(c, isAdmin){
     if(st.type === 'progress'){
       const pv = s.percent || 0;
       const pd = s.predictedDate || '';
+      const panelInstalled = !!s.panelInstalled;
+      const maxAllowed = st.requiresPanel ? (panelInstalled ? 100 : 80) : 100;
+      const panelBtnHtml = st.requiresPanel ? `
+          <button class="chk-btn ${panelInstalled?'done':''}" style="width:100%;margin-bottom:10px;" onclick="event.stopPropagation(); togglePanelInstalled('${c.id}', ${i})">
+            ${panelInstalled ? '✓ نصب صفحه کابینت انجام شد' : 'نصب صفحه کابینت'}
+          </button>
+          ${!panelInstalled ? '<div class="admin-only-note">تا نصب نشدن این مرحله، پیشرفت حداکثر ۸۰٪ ثبت می‌شود.</div>' : ''}
+        ` : '';
       progBox = `
         <div class="prog-box">
+          ${panelBtnHtml}
           <div class="prog-row">
-            <input type="range" min="0" max="100" value="${pv}" id="range_${c.id}_${i}" oninput="document.getElementById('val_${c.id}_${i}').textContent = this.value + '%'">
-            <span class="prog-val" id="val_${c.id}_${i}">${pv}%</span>
+            <input type="range" min="0" max="${maxAllowed}" value="${Math.min(pv,maxAllowed)}" id="range_${c.id}_${i}" oninput="document.getElementById('val_${c.id}_${i}').textContent = this.value + '%'">
+            <span class="prog-val" id="val_${c.id}_${i}">${Math.min(pv,maxAllowed)}%</span>
           </div>
-          <div class="prog-strip-mini"><div style="width:${pv}%"></div></div>
+          <div class="prog-strip-mini"><div style="width:${Math.min(pv,maxAllowed)}%"></div></div>
           <div class="prog-date">
             <label>پیش‌بینی پایان (شمسی):</label>
             <input type="text" id="date_${c.id}_${i}" placeholder="1405/06/04" value="${escapeHtml(pd)}">
@@ -383,29 +437,42 @@ function renderCard(c, isAdmin){
   }).join('');
 
   const history = c.history || [];
-  const histHtml = history.slice().reverse().slice(0,20).map(h =>
-    `<div class="hist-item"><span>${escapeHtml(h.label)}</span><span class="hist-time">${fmtTime(h.time)}</span></div>`
-  ).join('');
+  const hOpen = isHistoryOpen(c.id, isAdmin);
+  const histHtml = history.slice().reverse().slice(0,30).map(h =>
+    `<div class="hist-item"><span>${escapeHtml(h.label)}</span><span class="hist-time">${fmtTime(h.time)}${h.by ? ' — '+escapeHtml(h.by.split('@')[0]) : ''}</span></div>`
+  ).join('') || '<div class="hist-item"><span>—</span></div>';
 
-  const dueFieldsHtml = `
+  const dueFieldHtml = isAdmin ? `
     <div class="field-row">
       <label>سررسید قرارداد:</label>
       <input type="text" id="due_${c.id}" placeholder="1405/06/04" value="${escapeHtml(c.dueDate||'')}">
       <button class="field-save" onclick="saveDueDate('${c.id}')">ثبت</button>
-    </div>
-    ${isAdmin && due.cls === 'late' ? `
+    </div>` : `
+    <div class="field-row">
+      <label>سررسید قرارداد:</label>
+      <span style="font-family:'JetBrains Mono',monospace; color:var(--ink-soft);">${escapeHtml(c.dueDate || 'ثبت نشده')}</span>
+    </div>`;
+
+  const revDueFieldHtml = `
     <div class="field-row">
       <label>سررسید جبرانی:</label>
       <input type="text" id="revdue_${c.id}" placeholder="1405/06/20" value="${escapeHtml(c.revisedDueDate||'')}">
       <button class="field-save" onclick="saveRevisedDueDate('${c.id}')">ثبت</button>
-    </div>` : ''}
-    ${isAdmin ? `
+    </div>`;
+
+  const itemCodeFieldHtml = isAdmin ? `
     <div class="field-row text">
       <label>کد قلم:</label>
       <input type="text" id="item_${c.id}" placeholder="مثلاً K-104" value="${escapeHtml(c.itemCode||'')}">
       <button class="field-save" onclick="saveItemCode('${c.id}')">ثبت</button>
-    </div>` : ''}
-  `;
+    </div>` : '';
+
+  const descFieldHtml = `
+    <div class="field-row text">
+      <label>توضیحات:</label>
+      <input type="text" id="desc_${c.id}" placeholder="یادداشت..." value="${escapeHtml(c.description||'')}">
+      <button class="field-save" onclick="saveDescription('${c.id}')">ثبت</button>
+    </div>`;
 
   return `
     <div class="card">
@@ -423,14 +490,25 @@ function renderCard(c, isAdmin){
         ${sched ? `<span class="schedule-tag">${sched}</span>` : ''}
       </div>
       <div class="body-panel ${isOpen ? 'open' : ''}">
-        ${dueFieldsHtml}
+        ${dueFieldHtml}
+        ${revDueFieldHtml}
+        ${itemCodeFieldHtml}
+        ${descFieldHtml}
         <div class="timeline">${timelineHtml}</div>
-        <div class="hist-title">تاریخچه</div>
-        ${histHtml || '<div class="hist-item"><span>—</span></div>'}
+        <div class="hist-title" style="cursor:pointer;" onclick="event.stopPropagation(); toggleHistory('${c.id}')">
+          تاریخچه ${hOpen ? '▲' : '▼'}
+        </div>
+        ${hOpen ? histHtml : ''}
         ${isAdmin ? `<div class="del-row"><button onclick="event.stopPropagation(); deleteContract('${c.id}')">حذف قرارداد</button></div>` : ''}
       </div>
     </div>`;
 }
+
+function isHistoryOpen(id, isAdmin){
+  if(!(id in historyOpen)) historyOpen[id] = !!isAdmin;
+  return historyOpen[id];
+}
+function toggleHistory(id){ historyOpen[id] = !historyOpen[id]; renderApp(); }
 
 function fmtTime(iso){
   const d = new Date(iso);
@@ -446,26 +524,48 @@ async function toggleCheck(id, idx){
   const cur = status[idx] || {};
   const nowDone = !cur.done;
   status[idx] = { done: nowDone, doneAt: nowDone ? new Date().toISOString() : null };
-  const history = (c.history || []).concat([{ label: STAGES[idx].name + ' — ' + (nowDone?'انجام شد':'لغو شد'), time: new Date().toISOString() }]);
+  const history = (c.history || []).concat([historyEntry(STAGES[idx].name + ' — ' + (nowDone?'انجام شد':'لغو شد'))]);
   await db.collection('contracts').doc(id).update({ status, history });
 }
+
+async function togglePanelInstalled(id, idx){
+  if(!db) return;
+  const c = contracts.find(x => x.id === id);
+  if(!c) return;
+  const status = c.status || {};
+  const cur = status[idx] || {};
+  const now = !cur.panelInstalled;
+  let percent = cur.percent || 0;
+  if(!now && percent > 80) percent = 80;
+  status[idx] = { ...cur, panelInstalled: now, percent, doneAt: (percent>=100 && now) ? new Date().toISOString() : null };
+  const history = (c.history || []).concat([historyEntry(STAGES[idx].name + ' — نصب صفحه کابینت ' + (now?'انجام شد':'لغو شد'))]);
+  await db.collection('contracts').doc(id).update({ status, history });
+}
+
 async function saveProgress(id, idx){
   if(!db) return;
   const c = contracts.find(x => x.id === id);
   if(!c) return;
-  const percent = parseInt(document.getElementById(`range_${id}_${idx}`).value, 10);
+  const st = STAGES[idx];
+  const cur = (c.status||{})[idx] || {};
+  const panelInstalled = !!cur.panelInstalled;
+  const maxAllowed = st.requiresPanel ? (panelInstalled ? 100 : 80) : 100;
+  let percent = parseInt(document.getElementById(`range_${id}_${idx}`).value, 10);
+  if(percent > maxAllowed) percent = maxAllowed;
   const predictedDate = document.getElementById(`date_${id}_${idx}`).value.trim();
   const status = c.status || {};
-  status[idx] = { percent, predictedDate, updatedAt: new Date().toISOString(), doneAt: percent>=100 ? new Date().toISOString() : null };
-  const history = (c.history || []).concat([{ label: STAGES[idx].name + ' — پیشرفت ' + percent + '٪' + (predictedDate?' — پیش‌بینی: '+predictedDate:''), time: new Date().toISOString() }]);
+  status[idx] = { ...cur, percent, predictedDate, updatedAt: new Date().toISOString(),
+                   doneAt: (percent>=100 && (!st.requiresPanel || panelInstalled)) ? new Date().toISOString() : null };
+  const history = (c.history || []).concat([historyEntry(STAGES[idx].name + ' — پیشرفت ' + percent + '٪' + (predictedDate?' — پیش‌بینی: '+predictedDate:''))]);
   await db.collection('contracts').doc(id).update({ status, history });
 }
+
 async function saveDueDate(id){
   if(!db) return;
   const val = document.getElementById(`due_${id}`).value.trim();
   if(val && !parseJalaliStr(val)){ alert('فرمت تاریخ درست نیست. مثال: 1405/06/04'); return; }
   const c = contracts.find(x => x.id === id);
-  const history = (c.history||[]).concat([{ label:'سررسید ثبت شد: '+val, time:new Date().toISOString() }]);
+  const history = (c.history||[]).concat([historyEntry('سررسید ثبت شد: '+val)]);
   await db.collection('contracts').doc(id).update({ dueDate: val, history });
 }
 async function saveRevisedDueDate(id){
@@ -473,15 +573,22 @@ async function saveRevisedDueDate(id){
   const val = document.getElementById(`revdue_${id}`).value.trim();
   if(val && !parseJalaliStr(val)){ alert('فرمت تاریخ درست نیست. مثال: 1405/06/20'); return; }
   const c = contracts.find(x => x.id === id);
-  const history = (c.history||[]).concat([{ label:'سررسید جبرانی ثبت شد: '+val, time:new Date().toISOString() }]);
+  const history = (c.history||[]).concat([historyEntry('سررسید جبرانی ثبت شد: '+val)]);
   await db.collection('contracts').doc(id).update({ revisedDueDate: val, history });
 }
 async function saveItemCode(id){
   if(!db) return;
   const val = document.getElementById(`item_${id}`).value.trim();
   const c = contracts.find(x => x.id === id);
-  const history = (c.history||[]).concat([{ label:'کد قلم ثبت شد: '+val, time:new Date().toISOString() }]);
+  const history = (c.history||[]).concat([historyEntry('کد قلم ثبت شد: '+val)]);
   await db.collection('contracts').doc(id).update({ itemCode: val, history });
+}
+async function saveDescription(id){
+  if(!db) return;
+  const val = document.getElementById(`desc_${id}`).value.trim();
+  const c = contracts.find(x => x.id === id);
+  const history = (c.history||[]).concat([historyEntry('توضیحات ثبت شد')]);
+  await db.collection('contracts').doc(id).update({ description: val, history });
 }
 async function deleteContract(id){
   if(!db) return;
@@ -503,7 +610,7 @@ async function addContract(){
   await db.collection('contracts').add({
     name, itemCode: itemCode || '',
     status: {},
-    history: [{ label:'قرارداد ثبت شد', time:new Date().toISOString() }],
+    history: [historyEntry('قرارداد ثبت شد')],
     createdAt: Date.now()
   });
   closeModal('addModalBg');

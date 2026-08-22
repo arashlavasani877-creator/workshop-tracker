@@ -26,7 +26,16 @@ service cloud.firestore {
     }
 
     match /contracts/{contractId} {
-      allow read, write: if isApproved();
+      allow read: if isApproved();
+      allow create: if isAdmin();
+      allow delete: if isAdmin();
+      // سرپرست می‌تواند مراحل/توضیحات/سررسید جبرانی را عوض کند،
+      // ولی نمی‌تواند سررسید اصلی یا کد قلم را تغییر دهد — فقط مدیر می‌تواند.
+      allow update: if isApproved() && (
+                       isAdmin() ||
+                       (request.resource.data.dueDate == resource.data.dueDate &&
+                        request.resource.data.itemCode == resource.data.itemCode)
+                     );
     }
   }
 }

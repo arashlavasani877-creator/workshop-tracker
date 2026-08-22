@@ -1,4 +1,4 @@
-const CACHE_NAME = 'afrachoob-tracker-v2';
+const CACHE_NAME = 'afrachoob-tracker-v3';
 const APP_SHELL = [
   './',
   './index.html',
@@ -31,8 +31,11 @@ self.addEventListener('fetch', (event) => {
   event.respondWith(
     caches.match(event.request).then((cached) => {
       return cached || fetch(event.request).then((res) => {
-        const resClone = res.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, resClone));
+        // فقط پاسخ‌های سالم (200) کش می‌شوند، تا یک خطای موقت (مثلاً 404) برای همیشه گیر نکند.
+        if(res && res.ok){
+          const resClone = res.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(event.request, resClone));
+        }
         return res;
       }).catch(() => cached);
     })
