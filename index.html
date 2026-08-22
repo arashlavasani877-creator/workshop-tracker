@@ -158,6 +158,14 @@
   .tabs{ display:flex; gap:6px; margin-top:14px; }
   .tabs button{ flex:1; background:var(--panel); color:var(--ink-soft); font-family:'Vazirmatn'; font-weight:700; font-size:12.5px; padding:10px; border-radius:9px; cursor:pointer; border:1px solid var(--line) !important; }
   .tabs button.active{ background:var(--amber-dim); color:var(--amber); border-color:var(--amber) !important; }
+  .kpi-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin-top:14px; }
+  .kpi-card{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 8px; text-align:center; }
+  .kpi-num{ font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:700; color:var(--ink); }
+  .kpi-label{ font-size:10.5px; color:var(--ink-soft); margin-top:4px; }
+  .kpi-red .kpi-num{ color:var(--red); }
+  .kpi-amber .kpi-num{ color:var(--amber); }
+  .kpi-blue .kpi-num{ color:var(--teal); }
+  .admin-select{ flex:1; font-family:'Vazirmatn'; font-size:12.5px; padding:9px 8px; border-radius:8px; border:1px solid var(--line); background:var(--panel-2); color:var(--ink); }
 </style>
 </head>
 <body>
@@ -202,6 +210,26 @@
       <button class="save-btn" onclick="confirmApprove()">تایید و فعال‌سازی</button>
       <button class="cancel-btn" onclick="closeModal('approveModalBg')">انصراف</button>
     </div>
+  </div>
+</div>
+
+<div class="modal-bg" id="contractModalBg">
+  <div class="modal" style="max-height:85vh; overflow-y:auto;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+      <h3 style="margin:0;">جزئیات قرارداد</h3>
+      <button class="cancel-btn" style="padding:6px 12px; flex:none;" onclick="closeModal('contractModalBg')">بستن</button>
+    </div>
+    <div id="contractModalBody"></div>
+  </div>
+</div>
+
+<div class="modal-bg" id="notifModalBg">
+  <div class="modal" style="max-height:80vh; overflow-y:auto;">
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+      <h3 style="margin:0;">هشدارها</h3>
+      <button class="cancel-btn" style="padding:6px 12px; flex:none;" onclick="closeModal('notifModalBg')">بستن</button>
+    </div>
+    <div id="notifModalBody"></div>
   </div>
 </div>
 
