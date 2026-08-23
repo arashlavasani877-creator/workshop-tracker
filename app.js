@@ -14,6 +14,7 @@ const WARN_DAYS = 7; // آستانه‌ی هشدار سررسید در پنل س
 const ADMIN_NEAR_DUE_DAYS = 3;  // آستانه‌ی جدید فقط برای داشبورد/هشدارهای مدیر (V9)
 
 let auth = null, db = null;
+let presenceInterval = null;
 let currentUser = null;
 let myRole = null;
 let myPosition = '';
@@ -235,8 +236,10 @@ function initAuthAndData(){
     auth.onAuthStateChanged(async (user) => {
       currentUser = user;
       dataSubscribed = false;
+      stopPresenceHeartbeat();
       if(!user){ myRole = null; myPosition = ''; renderApp(); return; }
       const ref = db.collection('users').doc(user.uid);
+      startPresenceHeartbeat(ref);
       let snap;
       try{
         snap = await ref.get();
@@ -268,6 +271,40 @@ function initAuthAndData(){
   }catch(e){
     setStatus('خطا در راه‌اندازی: ' + e.message, false);
   }
+}
+
+/* ---------- Presence (آخرین حضور) ----------
+   Firestore خودش مثل Realtime Database قابلیت onDisconnect نداره، بنابراین وضعیت
+   حضور با یک "ضربان" (heartbeat) دوره‌ای پیاده شده: هر کاربر هر ۲۰ ثانیه که اپ
+   براش باز و فعاله، فیلد lastSeen رو روی خودش (فقط خودش) آپدیت می‌کنه.
+   در پنل مدیر، اگه lastSeen یک کاربر کمتر از ۴۵ ثانیه پیش باشه «آنلاین» نشون داده
+   می‌شه، وگرنه «آخرین بازدید ... پیش». این باعث اختلال یا خروج کسی از پنلش نمی‌شه. */
+const PRESENCE_INTERVAL_MS = 20000;
+const PRESENCE_ONLINE_THRESHOLD_MS = 45000;
+function startPresenceHeartbeat(userRef){
+  const beat = () => { userRef.update({ lastSeen: Date.now() }).catch(() => {}); };
+  beat();
+  presenceInterval = setInterval(() => {
+    if(document.visibilityState === 'visible') beat();
+  }, PRESENCE_INTERVAL_MS);
+  document.addEventListener('visibilitychange', () => {
+    if(document.visibilityState === 'visible' && currentUser) beat();
+  });
+}
+function stopPresenceHeartbeat(){
+  if(presenceInterval){ clearInterval(presenceInterval); presenceInterval = null; }
+}
+function isUserOnline(u){
+  return !!(u && u.lastSeen && (Date.now() - u.lastSeen) < PRESENCE_ONLINE_THRESHOLD_MS);
+}
+function fmtLastSeen(ts){
+  if(!ts) return 'هنوز آنلاین نشده';
+  const diffMin = Math.round((Date.now() - ts) / 60000);
+  if(diffMin < 1) return 'همین الان';
+  if(diffMin < 60) return 'آخرین بازدید: ' + diffMin + ' دقیقه پیش';
+  const diffH = Math.round(diffMin / 60);
+  if(diffH < 24) return 'آخرین بازدید: ' + diffH + ' ساعت پیش';
+  return 'آخرین بازدید: ' + Math.round(diffH / 24) + ' روز پیش';
 }
 
 function ensureDataSubscriptions(){
@@ -346,8 +383,12 @@ function renderApp(){
         <p>برای مشاهده و مدیریت وضعیت قراردادها، با ایمیل و رمز عبور خود وارد شوید.</p>
         <input class="auth-input" type="email" id="authEmail" placeholder="ایمیل" autocomplete="username">
         <input class="auth-input" type="password" id="authPass" placeholder="رمز عبور" autocomplete="current-password">
-        <button class="google-btn" style="justify-content:center; width:100%; max-width:320px;" onclick="signIn()">ورود</button>
-        <button class="signout-btn" onclick="signUp()">ساخت حساب جدید</button>
+        <div class="auth-btn-row">
+          <button class="google-btn" onclick="signIn()">ورود</button>
+          <button class="google-btn auth-btn-secondary" onclick="signUp()">ساخت حساب جدید</button>
+        </div>
+        <p class="vpn-note">لطفا جهت ورود VPN خود را روشن کنید</p>
+        <p class="auth-help-note">اگر تا الان وارد برنامه نشدین لطفا ایمیل رو وارد کنید و رمز دلخواه ۶ رقمی بگذارید و روی دکمه ایجاد حساب جدید بزنید، در غیر این صورت ایمیل و رمز رو بزنید و دکمه ورود رو بفشارید.</p>
         ${authErrorMsg ? `<p style="color:var(--red); font-size:12px; max-width:320px;">${escapeHtml(authErrorMsg)}</p>` : ''}
       </div>`;
     return;
@@ -991,12 +1032,15 @@ function renderAdminUsers(){
     const nameLine = u.name ? escapeHtml(u.name) : '';
     const roleColorLine = u.position ? escapeHtml(u.position) : roleFa(u.role);
     const resetBtn = `<button class="btn-secondary" style="font-size:10.5px; padding:6px 10px;" onclick="sendPasswordReset('${escapeHtml(u.email)}')">🔑 ایمیل بازیابی رمز</button>`;
+    const online = isUserOnline(u);
+    const statusLine = `<div class="user-status ${online?'online':''}"><span class="stat-dot"></span>${online ? 'آنلاین' : escapeHtml(fmtLastSeen(u.lastSeen))}</div>`;
     return `
       <div class="user-row">
         <div class="user-info">
           <div class="user-email">${escapeHtml(u.email)}${isSelf?' (شما)':''}</div>
           ${nameLine ? `<div class="user-role" style="color:var(--ink-soft);">${nameLine}</div>` : ''}
           <div class="user-role ${u.role}">${roleColorLine}</div>
+          ${statusLine}
         </div>
         <div class="user-actions">${actions}${resetBtn}</div>
       </div>`;
