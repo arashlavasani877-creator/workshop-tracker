@@ -229,6 +229,10 @@
     <h3>تایید دسترسی کاربر</h3>
     <input id="approveName" placeholder="نام و نام خانوادگی" />
     <input id="approvePosition" placeholder="سمت (مثلاً سرپرست نصب و ساخت)" />
+    <select id="approveRole" class="admin-select" style="width:100%; margin-bottom:10px;">
+      <option value="supervisor">سرپرست نصب (دسترسی ویرایش کامل)</option>
+      <option value="viewer">مدیر پروژه (فقط گزارش، بدون ویرایش)</option>
+    </select>
     <div class="row">
       <button class="save-btn" onclick="confirmApprove()">تایید و فعال‌سازی</button>
       <button class="cancel-btn" onclick="closeModal('approveModalBg')">انصراف</button>

@@ -30,6 +30,9 @@ let authErrorMsg = '';
 let adminSearchQuery = '';
 let adminFilterStage = 'all';
 let adminFilterStatus = 'all';
+let supervisorSearchQuery = '';
+let viewerOpenId = null;
+let viewerSearchQuery = '';
 
 function setStatus(text, ok){
   const n = document.getElementById('syncNote'), d = document.getElementById('statusDot');
@@ -86,16 +89,26 @@ function isStageDone(status, i){
   if(st.requiresPanel) return (s.percent||0) >= 100 && !!s.panelInstalled;
   return (s.percent||0) >= 100;
 }
+const STAGE_WEIGHTS = [4.75, 4.75, 4.75, 38, 4.75, 38, 0, 5];
+// وزن‌ها: اندازه‌گیری۵٪، تایید طراحی۵٪، آنالیز۵٪، ساخت‌وبرش۴۰٪، ارسال بار۵٪، نصب۴۰٪ (جمعاً ۱۰۰ در مقیاس ۹۵٪)
+// تحویل‌دهی به مالک وزنی ندارد (صرفاً تاییدیه)، ۵٪ باقی‌مانده فقط با «خاتمه قرارداد» تکمیل می‌شود.
 function overallPercent(c){
   const status = c.status || {};
   let sum = 0;
   STAGES.forEach((st,i) => {
     const s = status[i] || {};
-    sum += st.type === 'check' ? (s.done?100:0) : (s.percent||0);
+    const frac = st.type === 'check' ? (s.done ? 1 : 0) : ((s.percent||0)/100);
+    sum += STAGE_WEIGHTS[i] * frac;
   });
-  return Math.round(sum/STAGES.length);
+  return Math.round(sum);
 }
 function isCompleted(c){ return overallPercent(c) === 100; }
+// برای نمایش «مرحله فعلی»: اگر همه‌چیز جز «خاتمه قرارداد» تمام شده، همان «در انتظار تحویل‌دهی به مالک» نشان داده شود
+function getDisplayStageIndex(c){
+  const idx = getCurrentIndex(c);
+  if(idx === STAGES.length-1 && !isCompleted(c)) return STAGES.length-2;
+  return idx;
+}
 
 /* ---------- Admin-only (V9): جدا از منطق سرپرست، به هیچ تابع V8 دست نمی‌زند ---------- */
 function daysSinceUpdate(c){
@@ -204,7 +217,7 @@ function initAuthAndData(){
 
 function ensureDataSubscriptions(){
   if(dataSubscribed) return;
-  if(myRole !== 'admin' && myRole !== 'supervisor') return;
+  if(myRole !== 'admin' && myRole !== 'supervisor' && myRole !== 'viewer') return;
   dataSubscribed = true;
   db.collection('contracts').orderBy('createdAt','desc').onSnapshot((snap) => {
     contracts = snap.docs.map(d => ({ id:d.id, ...d.data() }));
@@ -307,6 +320,7 @@ function renderApp(){
   }
   if(myRole === 'admin'){ renderAdmin(el); return; }
   if(myRole === 'supervisor'){ renderSupervisor(el); return; }
+  if(myRole === 'viewer'){ renderViewer(el); return; }
 
   el.innerHTML = `<div class="center-screen">
     <span class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">در حال بارگذاری…</span></span>
@@ -316,7 +330,7 @@ function renderApp(){
 }
 
 function roleFa(r){
-  return { admin:'مدیر', supervisor:'سرپرست نصب', pending:'در انتظار تایید', blocked:'مسدود' }[r] || r;
+  return { admin:'مدیر', supervisor:'سرپرست نصب', viewer:'مدیر پروژه', pending:'در انتظار تایید', blocked:'مسدود' }[r] || r;
 }
 
 /* ---------- Shared: warnings list ---------- */
@@ -353,9 +367,11 @@ function renderSupervisor(el){
   if(installBtn) installBtn.style.display = window.__deferredPrompt ? 'block' : 'none';
   const body = document.getElementById('supBody');
   if(supervisorTab === 'contracts'){
-    const openCount = contracts.filter(c=>!isCompleted(c)).length;
-    body.innerHTML = `<div class="section-title" style="margin-top:14px;">قراردادها <span class="cnt">${openCount} مورد</span></div><div id="list"></div>`;
-    renderList(false, c => !isCompleted(c));
+    body.innerHTML = `
+      <div class="section-title" style="margin-top:14px;">قراردادها <span class="cnt" id="supCount"></span></div>
+      <input type="text" id="supSearch" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(supervisorSearchQuery)}" class="auth-input" style="max-width:none;width:100%;margin-bottom:10px;" oninput="onSupervisorSearch(this.value)">
+      <div id="list"></div>`;
+    renderSupervisorList();
   } else if(supervisorTab === 'warnings'){
     body.innerHTML = renderWarningsHtml();
   } else {
@@ -364,6 +380,95 @@ function renderSupervisor(el){
   }
 }
 function switchSupervisorTab(t){ supervisorTab = t; renderApp(); }
+function onSupervisorSearch(v){ supervisorSearchQuery = v; renderSupervisorList(); }
+function renderSupervisorList(){
+  const q = supervisorSearchQuery.trim().toLowerCase();
+  const predicate = c => !isCompleted(c) && (!q || (c.name||'').toLowerCase().includes(q) || (c.itemCode||'').toLowerCase().includes(q));
+  const cntEl = document.getElementById('supCount');
+  if(cntEl) cntEl.textContent = contracts.filter(predicate).length + ' مورد';
+  renderList(false, predicate);
+}
+
+/* ---------- Viewer role — "مدیر پروژه": read-only report panel, fully separate from admin/supervisor ---------- */
+function renderViewer(el){
+  const active = contracts.filter(c => !isCompleted(c));
+  const completed = contracts.filter(isCompleted);
+  const avgProgress = active.length ? Math.round(active.reduce((s,c) => s+overallPercent(c), 0) / active.length) : 0;
+  const late = active.filter(c => adminTimeStatus(c).cls === 'late').length;
+  const near = active.filter(c => adminTimeStatus(c).cls === 'near').length;
+  el.innerHTML = `
+    <div class="toolbar"><button id="installBtn" class="btn-secondary" onclick="installApp()">نصب اپلیکیشن روی گوشی</button></div>
+    <div class="kpi-grid" style="margin-top:14px;">
+      <div class="kpi-card"><div class="kpi-num">${contracts.length}</div><div class="kpi-label">کل قراردادها</div></div>
+      <div class="kpi-card"><div class="kpi-num">${active.length}</div><div class="kpi-label">فعال</div></div>
+      <div class="kpi-card"><div class="kpi-num">${completed.length}</div><div class="kpi-label">خاتمه‌یافته</div></div>
+      <div class="kpi-card kpi-red"><div class="kpi-num">${late}</div><div class="kpi-label">عقب‌افتاده</div></div>
+      <div class="kpi-card kpi-amber"><div class="kpi-num">${near}</div><div class="kpi-label">نزدیک سررسید</div></div>
+      <div class="kpi-card"><div class="kpi-num">${avgProgress}٪</div><div class="kpi-label">میانگین پیشرفت</div></div>
+    </div>
+    <div class="section-title" style="margin-top:20px;">وضعیت قراردادها <span class="cnt" id="viewerCount"></span></div>
+    <input type="text" id="viewerSearch" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(viewerSearchQuery)}" class="auth-input" style="max-width:none;width:100%;margin-bottom:10px;" oninput="onViewerSearch(this.value)">
+    <div id="viewerList"></div>
+    <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
+  `;
+  const installBtn = document.getElementById('installBtn');
+  if(installBtn) installBtn.style.display = window.__deferredPrompt ? 'block' : 'none';
+  renderViewerList();
+}
+function onViewerSearch(v){ viewerSearchQuery = v; renderViewerList(); }
+function renderViewerList(){
+  const el = document.getElementById('viewerList');
+  if(!el) return;
+  const q = viewerSearchQuery.trim().toLowerCase();
+  let items = contracts;
+  if(q) items = items.filter(c => (c.name||'').toLowerCase().includes(q) || (c.itemCode||'').toLowerCase().includes(q));
+  items = items.slice().sort((a,b) => { const ac = isCompleted(a), bc = isCompleted(b); return ac===bc ? 0 : (ac?1:-1); });
+  const cntEl = document.getElementById('viewerCount');
+  if(cntEl) cntEl.textContent = items.length + ' مورد';
+  if(!items.length){ el.innerHTML = '<div class="empty">موردی یافت نشد.</div>'; return; }
+  el.innerHTML = items.map(c => renderViewerCard(c)).join('');
+}
+function renderViewerCard(c){
+  const curIdx = getCurrentIndex(c);
+  const displayIdx = getDisplayStageIndex(c);
+  const pct = overallPercent(c);
+  const done = isCompleted(c);
+  const ts = adminTimeStatus(c);
+  const isOpen = viewerOpenId === c.id;
+  const dueTagCls = done ? 'ok' : (ts.cls==='ontime'?'ok':ts.cls==='near'?'warn':ts.cls==='late'?'late':'none');
+  const timelineHtml = STAGES.map((st,i) => {
+    const s = (c.status||{})[i] || {};
+    const stageDone = isStageDone(c.status||{}, i);
+    const dotCls = stageDone ? 'done' : (i===curIdx?'active':'');
+    const nameCls = stageDone ? 'done' : '';
+    const extra = st.type==='progress' ? `<div class="tl-time">${s.percent||0}٪${s.predictedDate?' — پیش‌بینی: '+escapeHtml(s.predictedDate):''}</div>` : '';
+    return `<div class="tl-item"><div class="tl-dot ${dotCls}"></div><div class="tl-row"><span class="tl-name ${nameCls}">${st.name}</span></div>${s.doneAt?`<div class="tl-time">${fmtTime(s.doneAt)}</div>`:''}${extra}</div>`;
+  }).join('');
+  const history = c.history || [];
+  const histHtml = history.slice().reverse().slice(0,20).map(h =>
+    `<div class="hist-item"><span>${escapeHtml(h.label)}</span><span class="hist-time">${fmtTime(h.time)}${h.by?' — '+escapeHtml(h.by.split('@')[0]):''}</span></div>`
+  ).join('') || '<div class="hist-item"><span>—</span></div>';
+
+  return `
+    <div class="card">
+      <div class="card-head" style="cursor:pointer;" onclick="toggleViewerCard('${c.id}')">
+        <div class="card-title">
+          <span class="card-name">${escapeHtml(c.name)}</span>
+          <span class="card-sub">مرحله: ${STAGES[displayIdx].name}${c.itemCode?' — کد قلم: '+escapeHtml(c.itemCode):''}</span>
+        </div>
+        <span class="stage-pill" style="${done?'background:var(--green-dim);color:var(--green);':''}">${done?'خاتمه‌یافته':pct+'٪'}</span>
+      </div>
+      <div class="progress-strip"><div style="width:${pct}%; ${done?'background:var(--green);':''}"></div></div>
+      ${done ? '' : `<div class="due-row"><span class="due-tag ${dueTagCls}">${ts.label}</span></div>`}
+      <div class="body-panel ${isOpen?'open':''}">
+        ${c.description ? `<div class="field-row text"><label>توضیحات:</label><span style="flex:1; font-size:12.5px;">${escapeHtml(c.description)}</span></div>` : ''}
+        <div class="timeline">${timelineHtml}</div>
+        <div class="hist-title">تاریخچه</div>
+        ${histHtml}
+      </div>
+    </div>`;
+}
+function toggleViewerCard(id){ viewerOpenId = viewerOpenId===id ? null : id; renderViewerList(); }
 
 /* ---------- Admin view (V9 — Professional Dashboard) ---------- */
 function renderAdmin(el){
@@ -393,22 +498,23 @@ function switchAdminTab(t){ adminTab = t; renderApp(); }
 function renderAdminDashboard(){
   const body = document.getElementById('adminBody');
   const active = contracts.filter(c => !isCompleted(c));
+  const closed = contracts.filter(isCompleted);
   const totalAll = contracts.length;
   const delayed = active.filter(c => adminTimeStatus(c).cls === 'late').length;
   const nearDue = active.filter(c => adminTimeStatus(c).cls === 'near').length;
   const stale = active.filter(c => daysSinceUpdate(c) >= ADMIN_STALE_DAYS).length;
-  const avgProgress = active.length ? Math.round(active.reduce((s,c) => s+overallPercent(c), 0) / active.length) : 0;
+  const waitingDelivery = active.filter(c => getCurrentIndex(c) === STAGES.length-2).length;
   const alerts = adminAlerts();
   const needAction = new Set(alerts.map(a => a.c.id)).size;
 
   body.innerHTML = `
     <div class="kpi-grid">
       <div class="kpi-card"><div class="kpi-num">${totalAll}</div><div class="kpi-label">کل قراردادها</div></div>
-      <div class="kpi-card"><div class="kpi-num">${active.length}</div><div class="kpi-label">فعال</div></div>
+      <div class="kpi-card" style="cursor:pointer;" onclick="openClosedList()"><div class="kpi-num">${closed.length}</div><div class="kpi-label">خاتمه‌ها</div></div>
       <div class="kpi-card kpi-red"><div class="kpi-num">${delayed}</div><div class="kpi-label">عقب‌افتاده</div></div>
       <div class="kpi-card kpi-amber"><div class="kpi-num">${nearDue}</div><div class="kpi-label">نزدیک سررسید</div></div>
       <div class="kpi-card kpi-blue"><div class="kpi-num">${stale}</div><div class="kpi-label">بدون به‌روزرسانی</div></div>
-      <div class="kpi-card"><div class="kpi-num">${avgProgress}٪</div><div class="kpi-label">میانگین پیشرفت فعال</div></div>
+      <div class="kpi-card"><div class="kpi-num">${waitingDelivery}</div><div class="kpi-label">در انتظار تحویل‌دهی به مالک</div></div>
     </div>
     <div class="section-title" style="margin-top:20px;">نیازمند اقدام <span class="cnt">${needAction} مورد</span></div>
     <div id="actionList"></div>
@@ -419,7 +525,7 @@ function renderAdminDashboard(){
     return;
   }
   actionList.innerHTML = alerts.map(a => {
-    const idx = getCurrentIndex(a.c);
+    const idx = getDisplayStageIndex(a.c);
     const pct = overallPercent(a.c);
     const tagColor = a.type === 'late' ? 'red' : (a.type === 'near' ? 'amber' : '');
     return `
@@ -431,6 +537,11 @@ function renderAdminDashboard(){
         <span class="warn-tag ${tagColor}" style="${a.type==='stale' ? 'background:var(--teal-dim);color:var(--teal);' : ''}">${a.label}</span>
       </div>`;
   }).join('');
+}
+function openClosedList(){
+  adminTab = 'contracts';
+  adminFilterStatus = 'closed';
+  renderApp();
 }
 
 function renderAdminContracts(){
@@ -448,6 +559,7 @@ function renderAdminContracts(){
         <option value="late" ${adminFilterStatus==='late'?'selected':''}>عقب‌افتاده</option>
         <option value="near" ${adminFilterStatus==='near'?'selected':''}>نزدیک سررسید</option>
         <option value="stale" ${adminFilterStatus==='stale'?'selected':''}>بدون به‌روزرسانی</option>
+        <option value="closed" ${adminFilterStatus==='closed'?'selected':''}>خاتمه‌یافته</option>
       </select>
     </div>
     <div id="mgmtList"></div>
@@ -461,17 +573,21 @@ function onStatusFilter(v){ adminFilterStatus = v; renderMgmtList(); }
 function renderMgmtList(){
   const el = document.getElementById('mgmtList');
   if(!el) return;
-  let items = contracts.filter(c => !isCompleted(c));
+  let items = contracts.slice();
   const q = adminSearchQuery.trim().toLowerCase();
   if(q) items = items.filter(c => (c.name||'').toLowerCase().includes(q) || (c.itemCode||'').toLowerCase().includes(q));
-  if(adminFilterStage !== 'all') items = items.filter(c => getCurrentIndex(c) === parseInt(adminFilterStage,10));
-  if(adminFilterStatus !== 'all'){
-    items = items.filter(c => adminFilterStatus === 'stale' ? daysSinceUpdate(c) >= ADMIN_STALE_DAYS : adminTimeStatus(c).cls === adminFilterStatus);
+  if(adminFilterStage !== 'all') items = items.filter(c => getDisplayStageIndex(c) === parseInt(adminFilterStage,10));
+  if(adminFilterStatus === 'closed'){
+    items = items.filter(isCompleted);
+  } else if(adminFilterStatus !== 'all'){
+    items = items.filter(c => !isCompleted(c) && (adminFilterStatus === 'stale' ? daysSinceUpdate(c) >= ADMIN_STALE_DAYS : adminTimeStatus(c).cls === adminFilterStatus));
   }
   if(!items.length){ el.innerHTML = '<div class="empty">موردی یافت نشد.</div>'; return; }
+  items.sort((a,b) => { const ac = isCompleted(a), bc = isCompleted(b); return ac===bc ? 0 : (ac?1:-1); });
   el.innerHTML = items.map(c => {
-    const idx = getCurrentIndex(c);
+    const idx = getDisplayStageIndex(c);
     const pct = overallPercent(c);
+    const done = isCompleted(c);
     const ts = adminTimeStatus(c);
     const dueTagCls = ts.cls==='ontime' ? 'ok' : (ts.cls==='near' ? 'warn' : (ts.cls==='late' ? 'late' : 'none'));
     return `
@@ -481,10 +597,10 @@ function renderMgmtList(){
             <span class="card-name">${escapeHtml(c.name)}</span>
             <span class="card-sub">مرحله: ${STAGES[idx].name}${c.itemCode ? ' — کد قلم: '+escapeHtml(c.itemCode) : ''}</span>
           </div>
-          <span class="stage-pill">${pct}٪</span>
+          <span class="stage-pill" style="${done?'background:var(--green-dim);color:var(--green);':''}">${done?'خاتمه‌یافته':pct+'٪'}</span>
         </div>
-        <div class="progress-strip"><div style="width:${pct}%"></div></div>
-        <div class="due-row"><span class="due-tag ${dueTagCls}">${ts.label}</span></div>
+        <div class="progress-strip"><div style="width:${pct}%; ${done?'background:var(--green);':''}"></div></div>
+        ${done ? '' : `<div class="due-row"><span class="due-tag ${dueTagCls}">${ts.label}</span></div>`}
       </div>`;
   }).join('');
 }
@@ -568,14 +684,16 @@ function openApproveModal(uid, currentName){
   approveTargetUid = uid;
   document.getElementById('approveName').value = currentName || '';
   document.getElementById('approvePosition').value = '';
+  document.getElementById('approveRole').value = 'supervisor';
   document.getElementById('approveModalBg').classList.add('open');
 }
 async function confirmApprove(){
   if(!approveTargetUid || !db) return;
   const name = document.getElementById('approveName').value.trim();
   const position = document.getElementById('approvePosition').value.trim();
+  const role = document.getElementById('approveRole').value;
   await db.collection('users').doc(approveTargetUid).update({
-    role: 'supervisor', name, position, approvedAt: Date.now()
+    role, name, position, approvedAt: Date.now()
   });
   closeModal('approveModalBg');
   approveTargetUid = null;
@@ -603,7 +721,9 @@ function renderList(isAdmin, predicate){
 function renderCard(c, isAdmin, forceOpen){
   const status = c.status || {};
   const curIdx = getCurrentIndex(c);
+  const displayIdx = getDisplayStageIndex(c);
   const pct = overallPercent(c);
+  const done = isCompleted(c);
   const isOpen = forceOpen || (openCardId === c.id);
   const due = dueStatus(c);
   const sched = scheduleText(c);
@@ -701,16 +821,17 @@ function renderCard(c, isAdmin, forceOpen){
       <div class="card-head" onclick="toggleCard('${c.id}')">
         <div class="card-title">
           <span class="card-name">${escapeHtml(c.name)}</span>
-          <span class="card-sub">مرحله فعلی: ${STAGES[curIdx].name}</span>
+          <span class="card-sub">مرحله فعلی: ${STAGES[displayIdx].name}</span>
           <div class="card-badges">${badges.join('')}</div>
         </div>
-        <span class="stage-pill">${pct}٪</span>
+        <span class="stage-pill" style="${done?'background:var(--green-dim);color:var(--green);':''}">${done?'خاتمه‌یافته':pct+'٪'}</span>
       </div>
-      <div class="progress-strip"><div style="width:${pct}%"></div></div>
+      <div class="progress-strip"><div style="width:${pct}%; ${done?'background:var(--green);':''}"></div></div>
+      ${done ? '' : `
       <div class="due-row">
         <span class="due-tag ${due.cls}">${due.label}</span>
         ${sched ? `<span class="schedule-tag">${sched}</span>` : ''}
-      </div>
+      </div>`}
       <div class="body-panel ${isOpen ? 'open' : ''}">
         ${dueFieldHtml}
         ${revDueFieldHtml}
