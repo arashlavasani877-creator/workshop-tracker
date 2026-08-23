@@ -502,8 +502,8 @@ function renderAdminDashboard(){
   const totalAll = contracts.length;
   const delayed = active.filter(c => adminTimeStatus(c).cls === 'late').length;
   const nearDue = active.filter(c => adminTimeStatus(c).cls === 'near').length;
-  const stale = active.filter(c => daysSinceUpdate(c) >= ADMIN_STALE_DAYS).length;
-  const waitingDelivery = active.filter(c => getCurrentIndex(c) === STAGES.length-2).length;
+  const notUpdated = active.filter(c => overallPercent(c) === 0).length;
+  const waitingDelivery = active.filter(c => getDisplayStageIndex(c) === STAGES.length-2).length;
   const alerts = adminAlerts();
   const needAction = new Set(alerts.map(a => a.c.id)).size;
 
@@ -513,7 +513,7 @@ function renderAdminDashboard(){
       <div class="kpi-card" style="cursor:pointer;" onclick="openClosedList()"><div class="kpi-num">${closed.length}</div><div class="kpi-label">خاتمه‌ها</div></div>
       <div class="kpi-card kpi-red"><div class="kpi-num">${delayed}</div><div class="kpi-label">عقب‌افتاده</div></div>
       <div class="kpi-card kpi-amber"><div class="kpi-num">${nearDue}</div><div class="kpi-label">نزدیک سررسید</div></div>
-      <div class="kpi-card kpi-blue"><div class="kpi-num">${stale}</div><div class="kpi-label">بدون به‌روزرسانی</div></div>
+      <div class="kpi-card kpi-blue"><div class="kpi-num">${notUpdated}</div><div class="kpi-label">بروزرسانی نشده</div></div>
       <div class="kpi-card"><div class="kpi-num">${waitingDelivery}</div><div class="kpi-label">در انتظار تحویل‌دهی به مالک</div></div>
     </div>
     <div class="section-title" style="margin-top:20px;">نیازمند اقدام <span class="cnt">${needAction} مورد</span></div>
