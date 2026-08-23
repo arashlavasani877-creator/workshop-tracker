@@ -12,7 +12,6 @@ const STAGES = [
 ];
 const WARN_DAYS = 7; // آستانه‌ی هشدار سررسید در پنل سرپرست — دست‌نخورده (V8)
 const ADMIN_NEAR_DUE_DAYS = 3;  // آستانه‌ی جدید فقط برای داشبورد/هشدارهای مدیر (V9)
-const ADMIN_STALE_DAYS = 3;     // چند روز بدون به‌روزرسانی = "راکد" برای مدیر (V9)
 
 let auth = null, db = null;
 let currentUser = null;
@@ -111,10 +110,15 @@ function getDisplayStageIndex(c){
 }
 
 /* ---------- Admin-only (V9): جدا از منطق سرپرست، به هیچ تابع V8 دست نمی‌زند ---------- */
+const NOT_UPDATED_DAYS = 4; // بیش از این تعداد روز بدون آپدیت = «بروزرسانی نشده»
 function daysSinceUpdate(c){
   const hist = c.history || [];
   const t = hist.length ? new Date(hist[hist.length-1].time) : new Date(c.createdAt || Date.now());
   return daysBetween(t, new Date());
+}
+// «بروزرسانی نشده»: قراردادهایی که هنوز پیشرفتشان صفر است، یا بیش از NOT_UPDATED_DAYS روز از آخرین آپدیتشان گذشته
+function isNotUpdated(c){
+  return overallPercent(c) === 0 || daysSinceUpdate(c) > NOT_UPDATED_DAYS;
 }
 function adminTimeStatus(c){
   const activeDateStr = c.revisedDueDate || c.dueDate;
@@ -132,8 +136,10 @@ function adminAlerts(){
     const ts = adminTimeStatus(c);
     if(ts.cls === 'late') list.push({ type:'late', c, label:'عقب‌افتاده — ' + ts.label });
     else if(ts.cls === 'near') list.push({ type:'near', c, label:'نزدیک سررسید — ' + ts.label });
-    const stale = daysSinceUpdate(c);
-    if(stale >= ADMIN_STALE_DAYS) list.push({ type:'stale', c, label: stale + ' روز بدون به‌روزرسانی' });
+    if(isNotUpdated(c)){
+      const label = overallPercent(c) === 0 ? 'هنوز شروع نشده (۰٪)' : (daysSinceUpdate(c) + ' روز بروزرسانی نشده');
+      list.push({ type:'stale', c, label });
+    }
   });
   const order = { late:0, stale:1, near:2 };
   list.sort((a,b) => order[a.type]-order[b.type]);
@@ -502,7 +508,7 @@ function renderAdminDashboard(){
   const totalAll = contracts.length;
   const delayed = active.filter(c => adminTimeStatus(c).cls === 'late').length;
   const nearDue = active.filter(c => adminTimeStatus(c).cls === 'near').length;
-  const notUpdated = active.filter(c => overallPercent(c) === 0).length;
+  const notUpdated = active.filter(isNotUpdated).length;
   const waitingDelivery = active.filter(c => getDisplayStageIndex(c) === STAGES.length-2).length;
   const alerts = adminAlerts();
   const needAction = new Set(alerts.map(a => a.c.id)).size;
@@ -513,7 +519,7 @@ function renderAdminDashboard(){
       <div class="kpi-card" style="cursor:pointer;" onclick="openClosedList()"><div class="kpi-num">${closed.length}</div><div class="kpi-label">خاتمه‌ها</div></div>
       <div class="kpi-card kpi-red"><div class="kpi-num">${delayed}</div><div class="kpi-label">عقب‌افتاده</div></div>
       <div class="kpi-card kpi-amber"><div class="kpi-num">${nearDue}</div><div class="kpi-label">نزدیک سررسید</div></div>
-      <div class="kpi-card kpi-blue"><div class="kpi-num">${notUpdated}</div><div class="kpi-label">بروزرسانی نشده</div></div>
+      <div class="kpi-card kpi-blue" style="cursor:pointer;" onclick="openNotUpdatedList()"><div class="kpi-num">${notUpdated}</div><div class="kpi-label">بروزرسانی نشده</div></div>
       <div class="kpi-card"><div class="kpi-num">${waitingDelivery}</div><div class="kpi-label">در انتظار تحویل‌دهی به مالک</div></div>
     </div>
     <div class="section-title" style="margin-top:20px;">نیازمند اقدام <span class="cnt">${needAction} مورد</span></div>
@@ -543,6 +549,11 @@ function openClosedList(){
   adminFilterStatus = 'closed';
   renderApp();
 }
+function openNotUpdatedList(){
+  adminTab = 'contracts';
+  adminFilterStatus = 'stale';
+  renderApp();
+}
 
 function renderAdminContracts(){
   const body = document.getElementById('adminBody');
@@ -558,7 +569,7 @@ function renderAdminContracts(){
         <option value="all">همه وضعیت‌ها</option>
         <option value="late" ${adminFilterStatus==='late'?'selected':''}>عقب‌افتاده</option>
         <option value="near" ${adminFilterStatus==='near'?'selected':''}>نزدیک سررسید</option>
-        <option value="stale" ${adminFilterStatus==='stale'?'selected':''}>بدون به‌روزرسانی</option>
+        <option value="stale" ${adminFilterStatus==='stale'?'selected':''}>بروزرسانی نشده</option>
         <option value="closed" ${adminFilterStatus==='closed'?'selected':''}>خاتمه‌یافته</option>
       </select>
     </div>
@@ -580,7 +591,7 @@ function renderMgmtList(){
   if(adminFilterStatus === 'closed'){
     items = items.filter(isCompleted);
   } else if(adminFilterStatus !== 'all'){
-    items = items.filter(c => !isCompleted(c) && (adminFilterStatus === 'stale' ? daysSinceUpdate(c) >= ADMIN_STALE_DAYS : adminTimeStatus(c).cls === adminFilterStatus));
+    items = items.filter(c => !isCompleted(c) && (adminFilterStatus === 'stale' ? isNotUpdated(c) : adminTimeStatus(c).cls === adminFilterStatus));
   }
   if(!items.length){ el.innerHTML = '<div class="empty">موردی یافت نشد.</div>'; return; }
   items.sort((a,b) => { const ac = isCompleted(a), bc = isCompleted(b); return ac===bc ? 0 : (ac?1:-1); });
