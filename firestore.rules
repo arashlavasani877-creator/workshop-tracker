@@ -11,8 +11,13 @@ service cloud.firestore {
     function isAdmin() {
       return isSignedIn() && myRole() == 'admin';
     }
-    function isApproved() {
+    // isEditor: کسانی که اجازه‌ی نوشتن/تغییر روی قراردادها دارند (مدیر + سرپرست نصب)
+    function isEditor() {
       return isSignedIn() && (myRole() == 'admin' || myRole() == 'supervisor');
+    }
+    // isApproved: کسانی که فقط اجازه‌ی خواندن دارند هم شامل می‌شود (+ مدیر پروژه، نقش فقط‌گزارش)
+    function isApproved() {
+      return isSignedIn() && (myRole() == 'admin' || myRole() == 'supervisor' || myRole() == 'viewer');
     }
 
     match /users/{userId} {
@@ -26,16 +31,28 @@ service cloud.firestore {
     }
 
     match /contracts/{contractId} {
+      // خواندن: مدیر، سرپرست، و مدیر پروژه (نقش فقط‌گزارش)
       allow read: if isApproved();
+      // نوشتن/ساخت/حذف: فقط مدیر و سرپرست — مدیر پروژه هرگز نمی‌تواند چیزی تغییر دهد
       allow create: if isAdmin();
       allow delete: if isAdmin();
-      // سرپرست می‌تواند مراحل/توضیحات/سررسید جبرانی را عوض کند،
-      // ولی نمی‌تواند سررسید اصلی یا کد قلم را تغییر دهد — فقط مدیر می‌تواند.
-      allow update: if isApproved() && (
+      allow update: if isEditor() && (
                        isAdmin() ||
-                       (request.resource.data.dueDate == resource.data.dueDate &&
-                        request.resource.data.itemCode == resource.data.itemCode)
+                       (
+                         request.resource.data.get('dueDate', null) == resource.data.get('dueDate', null) &&
+                         request.resource.data.get('itemCode', null) == resource.data.get('itemCode', null) &&
+                         request.resource.data.get('contractDate', null) == resource.data.get('contractDate', null)
+                       )
                      );
+    }
+
+    // activityLog: لاگ فعالیت‌ها — فقط مدیر می‌تواند بخواند، هرکس فقط برای خودش می‌تواند ثبت کند،
+    // و هیچ‌کس (حتی مدیر) نمی‌تواند لاگ ثبت‌شده را تغییر یا حذف کند (برای اعتبار گزارش).
+    match /activityLog/{logId} {
+      allow read: if isAdmin();
+      allow create: if isEditor() && request.resource.data.byUid == request.auth.uid;
+      allow update: if false;
+      allow delete: if false;
     }
   }
 }

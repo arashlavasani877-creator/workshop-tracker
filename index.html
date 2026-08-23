@@ -12,6 +12,13 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="افراچوب">
+<script>
+  // تم پیش‌فرض تیره است؛ اگه کاربر قبلاً روشن رو انتخاب کرده باشه، همینجا (قبل از رنگ‌آمیزی صفحه) اعمال می‌شه تا چشمک نزنه.
+  try{
+    var __t = localStorage.getItem('afrachoob-theme');
+    if(__t === 'light') document.documentElement.setAttribute('data-theme', 'light');
+  }catch(e){}
+</script>
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@400;500;700;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
@@ -24,10 +31,20 @@
     --green:#5FAE7B; --green-dim:#5FAE7B22;
     --red:#E2685C; --red-dim:#E2685C22;
   }
+  html[data-theme="light"]{
+    --bg:#F4F4F2; --panel:#FFFFFF; --panel-2:#F0F0EE; --line:#DEDEDA;
+    --ink:#1C1E20; --ink-soft:#5B6066; --ink-faint:#8A8F94;
+    --amber:#B9791E; --amber-dim:#B9791E1A;
+    --teal:#1E9086; --teal-dim:#1E90861A;
+    --green:#2F7A4C; --green-dim:#2F7A4C1A;
+    --red:#C43F32; --red-dim:#C43F321A;
+  }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
   html,body{margin:0;padding:0;}
-  body{ background:var(--bg); color:var(--ink); font-family:'Vazirmatn',sans-serif; min-height:100vh; padding-bottom:40px; }
+  body{ background:var(--bg); color:var(--ink); font-family:'Vazirmatn',sans-serif; min-height:100vh; padding-bottom:40px; transition:background .25s ease, color .25s ease; }
   header{ background:linear-gradient(180deg,#1A1D21,#15171A); padding:18px 18px 22px; border-bottom:1px solid var(--line); position:relative; }
+  html[data-theme="light"] header{ background:linear-gradient(180deg,#FFFFFF,#F4F4F2); }
+  .theme-toggle{ background:none; border:1px solid var(--line); color:var(--ink-soft); font-size:16px; width:34px; height:34px; border-radius:50%; cursor:pointer; display:flex; align-items:center; justify-content:center; }
   .head-row{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
   .head-left{ display:flex; align-items:center; gap:10px; }
   header img.logo{ width:34px; height:34px; border-radius:8px; background:#fff; object-fit:contain; padding:3px; }
@@ -36,6 +53,13 @@
   .role-badge{ font-family:'JetBrains Mono',monospace; font-size:10px; padding:4px 9px; border-radius:20px; background:var(--amber-dim); color:var(--amber); white-space:nowrap; }
   .signout-btn{ background:none; border:1px solid var(--line); color:var(--ink-soft); font-size:11px; padding:5px 10px; border-radius:7px; font-family:'Vazirmatn'; cursor:pointer; margin-inline-start:6px; }
   .wrap{ max-width:640px; margin:0 auto; padding:0 14px; }
+
+  #splashScreen{ position:fixed; inset:0; z-index:999; background:var(--bg); display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; transition:opacity .35s ease; }
+  #splashScreen.hide{ opacity:0; pointer-events:none; }
+  #splashScreen img{ width:76px; height:76px; border-radius:18px; background:#fff; object-fit:contain; padding:8px; }
+  #splashScreen .splash-title{ font-size:16px; font-weight:900; }
+  #splashScreen .splash-spinner{ width:26px; height:26px; border-radius:50%; border:3px solid var(--line); border-top-color:var(--teal); animation:splash-spin .8s linear infinite; }
+  @keyframes splash-spin{ to{ transform:rotate(360deg); } }
 
   .center-screen{ min-height:70vh; display:flex; flex-direction:column; align-items:center; justify-content:center; text-align:center; padding:30px 20px; gap:14px; }
   .center-screen img{ width:70px; height:70px; border-radius:16px; background:#fff; padding:8px; }
@@ -194,9 +218,29 @@
   .export-btn{ flex:1; border:1px solid var(--line); background:var(--panel-2); color:var(--ink); font-family:'Vazirmatn',sans-serif; font-weight:700; font-size:12.5px; padding:10px; border-radius:9px; cursor:pointer; }
   .export-btn:active{ opacity:.7; }
   .export-btn:disabled{ opacity:.5; cursor:default; }
+  .export-filters{ background:var(--panel-2); border:1px solid var(--line); border-radius:10px; padding:10px; margin-bottom:10px; }
+  .export-filters .row1{ display:flex; gap:8px; margin-bottom:8px; }
+  .export-filters .row2{ display:flex; gap:8px; align-items:center; }
+  .export-filters label{ font-size:11px; color:var(--ink-soft); white-space:nowrap; }
+  .export-filters input[type=text]{ flex:1; font-family:'JetBrains Mono',monospace; direction:ltr; text-align:center; background:var(--panel); border:1px solid var(--line); color:var(--ink); border-radius:7px; padding:7px 8px; font-size:12px; }
+
+  .log-item{ background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:10px 12px; margin-bottom:8px; }
+  .log-item .log-top{ display:flex; justify-content:space-between; gap:8px; font-size:12.5px; }
+  .log-item .log-action{ font-weight:700; }
+  .log-item .log-time{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--ink-soft); white-space:nowrap; }
+  .log-item .log-meta{ font-size:11px; color:var(--ink-soft); margin-top:4px; }
+
+  .chart-box{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; margin-top:18px; }
+  .chart-box canvas{ max-height:220px; }
 </style>
 </head>
 <body>
+
+<div id="splashScreen">
+  <img src="./icon-192.png" alt="افراچوب">
+  <div class="splash-title">افراچوب — PMO</div>
+  <div class="splash-spinner"></div>
+</div>
 
 <header>
   <div class="wrap">
@@ -208,7 +252,10 @@
           <p id="headerSub">افراچوب — تابلوی کنترل تولید و نصب</p>
         </div>
       </div>
-      <div id="headerRight"></div>
+      <div style="display:flex; align-items:center; gap:8px;">
+        <button class="theme-toggle" id="themeToggleBtn" onclick="toggleTheme()" title="تغییر تم">🌙</button>
+        <div id="headerRight"></div>
+      </div>
     </div>
   </div>
 </header>
@@ -222,6 +269,7 @@
     <h3>قرارداد جدید</h3>
     <input id="newName" placeholder="نام مشتری / کد قرارداد" />
     <input id="newItemCode" placeholder="کد قلم (اختیاری)" />
+    <input id="newContractDate" placeholder="تاریخ قرارداد (اختیاری) — 1405/06/04" style="direction:ltr; text-align:center; font-family:'JetBrains Mono',monospace;" />
     <div class="row">
       <button class="save-btn" onclick="addContract()">ثبت</button>
       <button class="cancel-btn" onclick="closeModal('addModalBg')">انصراف</button>
@@ -271,6 +319,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 <script src="./firebase-config.js"></script>
 <script src="./app.js"></script>
 

@@ -20,7 +20,7 @@ let myPosition = '';
 let contracts = [];
 let usersList = [];
 let openCardId = null;
-let adminTab = 'dashboard';   // 'dashboard' | 'contracts' | 'users'
+let adminTab = 'dashboard';   // 'dashboard' | 'contracts' | 'users' | 'log'
 let supervisorTab = 'contracts'; // 'contracts' | 'warnings' | 'closed' — V8، دست‌نخورده
 let dataSubscribed = false;
 let historyOpen = {};         // id -> bool
@@ -32,6 +32,35 @@ let adminFilterStatus = 'all';
 let supervisorSearchQuery = '';
 let viewerOpenId = null;
 let viewerSearchQuery = '';
+let activityLog = [];
+let stageChartInstance = null;
+let exportScope = 'all';   // 'all' | 'active' | 'closed' | 'waiting'
+let exportDateFrom = '';
+let exportDateTo = '';
+let logDateFrom = '';
+let logDateTo = '';
+let splashHidden = false;
+
+function toggleTheme(){
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light';
+  if(isLight){
+    document.documentElement.removeAttribute('data-theme');
+    try{ localStorage.setItem('afrachoob-theme', 'dark'); }catch(e){}
+  } else {
+    document.documentElement.setAttribute('data-theme', 'light');
+    try{ localStorage.setItem('afrachoob-theme', 'light'); }catch(e){}
+  }
+  const btn = document.getElementById('themeToggleBtn');
+  if(btn) btn.textContent = document.documentElement.getAttribute('data-theme') === 'light' ? '☀️' : '🌙';
+}
+function hideSplash(){
+  if(splashHidden) return;
+  splashHidden = true;
+  const s = document.getElementById('splashScreen');
+  if(!s) return;
+  s.classList.add('hide');
+  setTimeout(() => { if(s && s.parentNode) s.parentNode.removeChild(s); }, 450);
+}
 
 function setStatus(text, ok){
   const n = document.getElementById('syncNote'), d = document.getElementById('statusDot');
@@ -40,6 +69,14 @@ function setStatus(text, ok){
 }
 function escapeHtml(s){ const d = document.createElement('div'); d.textContent = s||''; return d.innerHTML; }
 function historyEntry(label){ return { label, time: new Date().toISOString(), by: (currentUser && currentUser.email) || '' }; }
+function logActivity(action, contractId, contractName, details){
+  if(!db || !currentUser) return;
+  db.collection('activityLog').add({
+    action, contractId: contractId || null, contractName: contractName || null,
+    details: details || '', by: currentUser.email || '', byUid: currentUser.uid,
+    time: Date.now()
+  }).catch(() => { /* لاگ فقط جنبه‌ی گزارشیه؛ خطای احتمالی نباید کار اصلی رو مختل کنه */ });
+}
 
 /* ---------- Jalali <-> Gregorian ---------- */
 function div_(a,b){ return Math.floor(a/b); }
@@ -236,6 +273,11 @@ function ensureDataSubscriptions(){
       usersList = snap.docs.map(d => ({ id:d.id, ...d.data() }));
       renderApp();
     }, (err) => setStatus('خطا در کاربران: ' + err.message, false));
+
+    db.collection('activityLog').orderBy('time','desc').limit(300).onSnapshot((snap) => {
+      activityLog = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+      if(adminTab === 'log') renderApp();
+    }, () => { /* اگه قوانین Firestore هنوز آپدیت نشده باشه، فقط لاگ کار نمی‌کنه؛ بقیه‌ی اپ دست‌نخورده می‌مونه */ });
   }
 }
 
@@ -280,6 +322,7 @@ function signOutUser(){ auth.signOut(); }
 function renderApp(){
   const el = document.getElementById('app');
   const headerRight = document.getElementById('headerRight');
+  hideSplash();
   refreshContractModal();
 
   if(!currentUser){
@@ -491,12 +534,16 @@ function renderAdmin(el){
       <button class="${adminTab==='contracts'?'active':''}" onclick="switchAdminTab('contracts')">مدیریت قراردادها</button>
       <button class="${adminTab==='users'?'active':''}" onclick="switchAdminTab('users')">کاربران ${pendingCount?('('+pendingCount+')'):''}</button>
     </div>
+    <div class="tabs" style="margin-top:8px;">
+      <button class="${adminTab==='log'?'active':''}" onclick="switchAdminTab('log')">لاگ سیستم</button>
+    </div>
     <div id="adminBody"></div>
     <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
   `;
   document.getElementById('installBtn').style.display = window.__deferredPrompt ? 'block' : 'none';
   if(adminTab === 'dashboard') renderAdminDashboard();
   else if(adminTab === 'contracts') renderAdminContracts();
+  else if(adminTab === 'log') renderAdminLog();
   else renderAdminUsers();
 }
 function switchAdminTab(t){ adminTab = t; renderApp(); }
@@ -512,6 +559,35 @@ function computeDashboardStats(){
     notUpdated: active.filter(isNotUpdated).length,
     waitingDelivery: active.filter(c => getDisplayStageIndex(c) === STAGES.length-2).length
   };
+}
+
+function drawStageChart(){
+  try{
+    const canvas = document.getElementById('stageChartCanvas');
+    if(!canvas || typeof Chart === 'undefined') return;
+    if(stageChartInstance){ stageChartInstance.destroy(); stageChartInstance = null; }
+    const active = contracts.filter(c => !isCompleted(c));
+    const counts = STAGES.map((s,i) => active.filter(c => getDisplayStageIndex(c) === i).length);
+    const styles = getComputedStyle(document.documentElement);
+    const ink = styles.getPropertyValue('--ink-soft').trim() || '#9198A0';
+    const teal = styles.getPropertyValue('--teal').trim() || '#4FD1C5';
+    const line = styles.getPropertyValue('--line').trim() || '#2C3138';
+    stageChartInstance = new Chart(canvas, {
+      type: 'bar',
+      data: {
+        labels: STAGES.map(s => s.name),
+        datasets: [{ label: 'تعداد قراردادهای فعال', data: counts, backgroundColor: teal, borderRadius: 6 }]
+      },
+      options: {
+        responsive: true,
+        plugins: { legend: { display: false }, title: { display: true, text: 'پراکندگی قراردادهای فعال بر اساس مرحله', color: ink, font: { family: 'Vazirmatn', size: 12 } } },
+        scales: {
+          x: { ticks: { color: ink, font: { family: 'Vazirmatn', size: 10 } }, grid: { color: line } },
+          y: { beginAtZero: true, ticks: { color: ink, precision: 0 }, grid: { color: line } }
+        }
+      }
+    });
+  }catch(e){ /* اگه کتابخانه‌ی چارت لود نشه، فقط چارت نمایش داده نمی‌شه؛ بقیه‌ی داشبورد سالم می‌مونه */ }
 }
 
 function renderAdminDashboard(){
@@ -530,9 +606,11 @@ function renderAdminDashboard(){
       <div class="kpi-card kpi-blue" style="cursor:pointer;" onclick="openNotUpdatedList()"><div class="kpi-num">${notUpdated}</div><div class="kpi-label">بروزرسانی نشده</div></div>
       <div class="kpi-card"><div class="kpi-num">${waitingDelivery}</div><div class="kpi-label">در انتظار تحویل‌دهی به مالک</div></div>
     </div>
+    <div class="chart-box"><canvas id="stageChartCanvas"></canvas></div>
     <div class="section-title" style="margin-top:20px;">نیازمند اقدام <span class="cnt">${needAction} مورد</span></div>
     <div id="actionList"></div>
   `;
+  drawStageChart();
   const actionList = document.getElementById('actionList');
   if(!alerts.length){
     actionList.innerHTML = '<div class="empty">موردی نیازمند اقدام فوری نیست.</div>';
@@ -567,6 +645,22 @@ function renderAdminContracts(){
   const body = document.getElementById('adminBody');
   body.innerHTML = `
     <div class="section-title" style="margin-top:14px;">مدیریت قراردادها</div>
+    <div class="export-filters">
+      <div class="row1">
+        <select id="exportScopeSelect" class="admin-select" onchange="onExportScopeChange(this.value)">
+          <option value="all" ${exportScope==='all'?'selected':''}>همه قراردادها</option>
+          <option value="active" ${exportScope==='active'?'selected':''}>فقط فعال (بدون خاتمه)</option>
+          <option value="closed" ${exportScope==='closed'?'selected':''}>فقط خاتمه‌یافته</option>
+          <option value="waiting" ${exportScope==='waiting'?'selected':''}>فقط در انتظار تحویل‌دهی</option>
+        </select>
+      </div>
+      <div class="row2">
+        <label>از تاریخ قرارداد:</label>
+        <input type="text" id="exportFromInput" placeholder="1405/01/01" value="${escapeHtml(exportDateFrom)}" oninput="onExportDateFrom(this.value)">
+        <label>تا:</label>
+        <input type="text" id="exportToInput" placeholder="1405/12/29" value="${escapeHtml(exportDateTo)}" oninput="onExportDateTo(this.value)">
+      </div>
+    </div>
     <div class="export-row">
       <button class="export-btn" id="exportExcelBtn" onclick="exportExcel()">📊 خروجی اکسل</button>
       <button class="export-btn" id="exportPdfBtn" onclick="exportPDF()">📄 خروجی PDF</button>
@@ -592,12 +686,37 @@ function renderAdminContracts(){
 function onAdminSearch(v){ adminSearchQuery = v; renderMgmtList(); }
 function onStageFilter(v){ adminFilterStage = v; renderMgmtList(); }
 function onStatusFilter(v){ adminFilterStatus = v; renderMgmtList(); }
+function onExportScopeChange(v){ exportScope = v; }
+function onExportDateFrom(v){ exportDateFrom = v; }
+function onExportDateTo(v){ exportDateTo = v; }
+
+function getExportContracts(){
+  let list = contracts.slice();
+  if(exportScope === 'active') list = list.filter(c => !isCompleted(c));
+  else if(exportScope === 'closed') list = list.filter(isCompleted);
+  else if(exportScope === 'waiting') list = list.filter(c => !isCompleted(c) && getDisplayStageIndex(c) === STAGES.length-2);
+
+  const fromD = exportDateFrom ? jalaliStrToDate(exportDateFrom) : null;
+  const toD = exportDateTo ? jalaliStrToDate(exportDateTo) : null;
+  if(fromD || toD){
+    list = list.filter(c => {
+      if(!c.contractDate) return false;
+      const d = jalaliStrToDate(c.contractDate);
+      if(!d) return false;
+      if(fromD && d < fromD) return false;
+      if(toD && d > toD) return false;
+      return true;
+    });
+  }
+  return list;
+}
 
 /* ---------- خروجی اکسل و PDF ---------- */
 function exportRows(){
-  return contracts.map(c => ({
+  return getExportContracts().map(c => ({
     'نام قرارداد': c.name || '',
     'کد قلم': c.itemCode || '',
+    'تاریخ قرارداد': c.contractDate || '—',
     'مرحله فعلی': STAGES[getDisplayStageIndex(c)].name,
     'درصد پیشرفت کل': overallPercent(c) + '%',
     'سررسید اصلی': c.dueDate || '—',
@@ -612,6 +731,13 @@ function todayJalaliLabel(){
   return d.toLocaleDateString('fa-IR') + ' ساعت ' + d.toLocaleTimeString('fa-IR', {hour:'2-digit', minute:'2-digit'});
 }
 
+function exportScopeLabel(){
+  const map = { all:'همه قراردادها', active:'فقط فعال (بدون خاتمه)', closed:'فقط خاتمه‌یافته', waiting:'فقط در انتظار تحویل‌دهی' };
+  let label = map[exportScope] || 'همه قراردادها';
+  if(exportDateFrom || exportDateTo) label += ' — بازه‌ی تاریخ قرارداد: ' + (exportDateFrom||'ابتدا') + ' تا ' + (exportDateTo||'انتها');
+  return label;
+}
+
 async function exportExcel(){
   const btn = document.getElementById('exportExcelBtn');
   if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
@@ -620,6 +746,7 @@ async function exportExcel(){
     const summaryRows = [
       ['گزارش افراچوب — PMO', ''],
       ['تاریخ گزارش', todayJalaliLabel()],
+      ['دامنه‌ی خروجی', exportScopeLabel()],
       [],
       ['کل قراردادها', stats.totalAll],
       ['خاتمه‌ها', stats.closedCount],
@@ -633,7 +760,7 @@ async function exportExcel(){
 
     const rows = exportRows();
     const wsList = XLSX.utils.json_to_sheet(rows);
-    wsList['!cols'] = [{wch:22},{wch:14},{wch:22},{wch:14},{wch:14},{wch:14},{wch:20},{wch:16},{wch:14}];
+    wsList['!cols'] = [{wch:22},{wch:14},{wch:14},{wch:22},{wch:14},{wch:14},{wch:14},{wch:20},{wch:16},{wch:14}];
 
     const wb = XLSX.utils.book_new();
     wb.Workbook = { Views: [{ RTL: true }] };
@@ -659,10 +786,11 @@ async function exportPDF(){
       <div style="font-size:11px; color:#666; margin-top:4px;">${label}</div>
     </div>`;
   holder.innerHTML = `
-    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #222; padding-bottom:12px; margin-bottom:16px;">
+    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #222; padding-bottom:12px; margin-bottom:8px;">
       <div style="font-size:20px; font-weight:900;">گزارش افراچوب — PMO</div>
       <div style="font-size:12px; color:#555;">${todayJalaliLabel()}</div>
     </div>
+    <div style="font-size:11px; color:#666; margin-bottom:16px;">دامنه‌ی خروجی: ${escapeHtml(exportScopeLabel())}</div>
     <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:20px;">
       ${kpi('کل قراردادها', stats.totalAll)}
       ${kpi('خاتمه‌ها', stats.closedCount)}
@@ -671,16 +799,17 @@ async function exportPDF(){
       ${kpi('بروزرسانی نشده', stats.notUpdated)}
       ${kpi('در انتظار تحویل به مالک', stats.waitingDelivery)}
     </div>
-    <table style="width:100%; border-collapse:collapse; font-size:11px;">
+    <table style="width:100%; border-collapse:collapse; font-size:10.5px;">
       <thead>
         <tr style="background:#222; color:#fff;">
-          ${['نام قرارداد','کد قلم','مرحله فعلی','پیشرفت','سررسید','وضعیت زمانی','روز بدون آپدیت','وضعیت'].map(h=>`<th style="padding:6px 8px; text-align:right; border:1px solid #333;">${h}</th>`).join('')}
+          ${['نام قرارداد','کد قلم','تاریخ قرارداد','مرحله فعلی','پیشرفت','سررسید','وضعیت زمانی','روز بدون آپدیت','وضعیت'].map(h=>`<th style="padding:6px 8px; text-align:right; border:1px solid #333;">${h}</th>`).join('')}
         </tr>
       </thead>
       <tbody>
         ${rows.map((r,i) => `<tr style="background:${i%2?'#f5f5f5':'#fff'};">
           <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['نام قرارداد'])}</td>
           <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['کد قلم'])}</td>
+          <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['تاریخ قرارداد'])}</td>
           <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['مرحله فعلی'])}</td>
           <td style="padding:6px 8px; border:1px solid #ddd;">${r['درصد پیشرفت کل']}</td>
           <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['سررسید اصلی'])}</td>
@@ -782,6 +911,50 @@ function openNotifications(){
   document.getElementById('notifModalBg').classList.add('open');
 }
 
+function onLogDateFrom(v){ logDateFrom = v; }
+function onLogDateTo(v){ logDateTo = v; }
+function applyLogDateFilter(){ renderAdminLog(); }
+function clearLogDateFilter(){ logDateFrom = ''; logDateTo = ''; renderAdminLog(); }
+
+function renderAdminLog(){
+  const body = document.getElementById('adminBody');
+  if(!body) return;
+  let rows = activityLog;
+  const fromD = logDateFrom ? jalaliStrToDate(logDateFrom) : null;
+  const toD = logDateTo ? jalaliStrToDate(logDateTo) : null;
+  if(fromD) rows = rows.filter(r => new Date(r.time) >= fromD);
+  if(toD){ const end = new Date(toD); end.setHours(23,59,59,999); rows = rows.filter(r => new Date(r.time) <= end); }
+
+  body.innerHTML = `
+    <div class="section-title" style="margin-top:14px;">لاگ فعالیت‌ها <span class="cnt">${rows.length} مورد</span></div>
+    <div class="export-filters">
+      <div class="row2">
+        <label>از تاریخ:</label>
+        <input type="text" id="logFromInput" placeholder="1405/06/01" value="${escapeHtml(logDateFrom)}" oninput="onLogDateFrom(this.value)">
+        <label>تا تاریخ:</label>
+        <input type="text" id="logToInput" placeholder="1405/06/30" value="${escapeHtml(logDateTo)}" oninput="onLogDateTo(this.value)">
+      </div>
+      <div class="row2" style="margin-top:8px;">
+        <button class="field-save" style="flex:1;" onclick="applyLogDateFilter()">اعمال فیلتر</button>
+        <button class="field-save" style="flex:1; background:var(--panel);" onclick="clearLogDateFilter()">پاک‌کردن فیلتر</button>
+      </div>
+    </div>
+    <div id="logList">
+      ${rows.length ? rows.map(r => `
+        <div class="log-item">
+          <div class="log-top">
+            <span class="log-action">${escapeHtml(r.action||'')}</span>
+            <span class="log-time">${fmtTime(new Date(r.time).toISOString())}</span>
+          </div>
+          <div class="log-meta">
+            ${r.contractName ? 'قرارداد: '+escapeHtml(r.contractName)+' — ' : ''}${escapeHtml((r.by||'').split('@')[0])}
+            ${r.details ? '<br>'+escapeHtml(r.details) : ''}
+          </div>
+        </div>`).join('') : '<div class="empty">موردی یافت نشد.</div>'}
+    </div>
+  `;
+}
+
 function renderAdminUsers(){
   const body = document.getElementById('adminBody');
   if(usersList.length === 0){
@@ -805,6 +978,7 @@ function renderAdminUsers(){
     }
     const nameLine = u.name ? escapeHtml(u.name) : '';
     const roleColorLine = u.position ? escapeHtml(u.position) : roleFa(u.role);
+    const resetBtn = `<button class="btn-secondary" style="font-size:10.5px; padding:6px 10px;" onclick="sendPasswordReset('${escapeHtml(u.email)}')">🔑 ایمیل بازیابی رمز</button>`;
     return `
       <div class="user-row">
         <div class="user-info">
@@ -812,9 +986,21 @@ function renderAdminUsers(){
           ${nameLine ? `<div class="user-role" style="color:var(--ink-soft);">${nameLine}</div>` : ''}
           <div class="user-role ${u.role}">${roleColorLine}</div>
         </div>
-        <div class="user-actions">${actions}</div>
+        <div class="user-actions">${actions}${resetBtn}</div>
       </div>`;
   }).join('') + '</div>';
+}
+
+async function sendPasswordReset(email){
+  if(!auth || !email) return;
+  if(!confirm('ایمیل بازیابی رمز عبور برای «' + email + '» ارسال شود؟')) return;
+  try{
+    await auth.sendPasswordResetEmail(email);
+    alert('ایمیل بازیابی رمز برای ' + email + ' ارسال شد.');
+    logActivity('ارسال ایمیل بازیابی رمز', null, null, email);
+  }catch(err){
+    alert('خطا در ارسال ایمیل بازیابی: ' + mapAuthError(err));
+  }
 }
 
 async function setUserRole(uid, role){
@@ -957,6 +1143,13 @@ function renderCard(c, isAdmin, forceOpen){
       <button class="field-save" onclick="saveItemCode('${c.id}')">ثبت</button>
     </div>` : '';
 
+  const contractDateFieldHtml = isAdmin ? `
+    <div class="field-row">
+      <label>تاریخ قرارداد:</label>
+      <input type="text" id="cdate_${c.id}" placeholder="1405/06/04" value="${escapeHtml(c.contractDate||'')}">
+      <button class="field-save" onclick="saveContractDate('${c.id}')">ثبت</button>
+    </div>` : '';
+
   const descFieldHtml = `
     <div class="field-row text">
       <label>توضیحات:</label>
@@ -984,6 +1177,7 @@ function renderCard(c, isAdmin, forceOpen){
         ${dueFieldHtml}
         ${revDueFieldHtml}
         ${itemCodeFieldHtml}
+        ${contractDateFieldHtml}
         ${descFieldHtml}
         <div class="timeline">${timelineHtml}</div>
         <div class="hist-title" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
@@ -1016,8 +1210,10 @@ async function toggleCheck(id, idx){
   const cur = status[idx] || {};
   const nowDone = !cur.done;
   status[idx] = { done: nowDone, doneAt: nowDone ? new Date().toISOString() : null };
-  const history = (c.history || []).concat([historyEntry(STAGES[idx].name + ' — ' + (nowDone?'انجام شد':'لغو شد'))]);
+  const label = STAGES[idx].name + ' — ' + (nowDone?'انجام شد':'لغو شد');
+  const history = (c.history || []).concat([historyEntry(label)]);
   await db.collection('contracts').doc(id).update({ status, history });
+  logActivity('تغییر مرحله', id, c.name, label);
 }
 
 async function togglePanelInstalled(id, idx){
@@ -1030,8 +1226,10 @@ async function togglePanelInstalled(id, idx){
   let percent = cur.percent || 0;
   if(!now && percent > 80) percent = 80;
   status[idx] = { ...cur, panelInstalled: now, percent, doneAt: (percent>=100 && now) ? new Date().toISOString() : null };
-  const history = (c.history || []).concat([historyEntry(STAGES[idx].name + ' — نصب صفحه کابینت ' + (now?'انجام شد':'لغو شد'))]);
+  const label = STAGES[idx].name + ' — نصب صفحه کابینت ' + (now?'انجام شد':'لغو شد');
+  const history = (c.history || []).concat([historyEntry(label)]);
   await db.collection('contracts').doc(id).update({ status, history });
+  logActivity('نصب صفحه کابینت', id, c.name, label);
 }
 
 async function saveProgress(id, idx){
@@ -1048,8 +1246,10 @@ async function saveProgress(id, idx){
   const status = c.status || {};
   status[idx] = { ...cur, percent, predictedDate, updatedAt: new Date().toISOString(),
                    doneAt: (percent>=100 && (!st.requiresPanel || panelInstalled)) ? new Date().toISOString() : null };
-  const history = (c.history || []).concat([historyEntry(STAGES[idx].name + ' — پیشرفت ' + percent + '٪' + (predictedDate?' — پیش‌بینی: '+predictedDate:''))]);
+  const label = STAGES[idx].name + ' — پیشرفت ' + percent + '٪' + (predictedDate?' — پیش‌بینی: '+predictedDate:'');
+  const history = (c.history || []).concat([historyEntry(label)]);
   await db.collection('contracts').doc(id).update({ status, history });
+  logActivity('ثبت پیشرفت', id, c.name, label);
 }
 
 async function saveDueDate(id){
@@ -1059,6 +1259,7 @@ async function saveDueDate(id){
   const c = contracts.find(x => x.id === id);
   const history = (c.history||[]).concat([historyEntry('سررسید ثبت شد: '+val)]);
   await db.collection('contracts').doc(id).update({ dueDate: val, history });
+  logActivity('ویرایش سررسید', id, c && c.name, 'سررسید: '+val);
 }
 async function saveRevisedDueDate(id){
   if(!db) return;
@@ -1067,6 +1268,7 @@ async function saveRevisedDueDate(id){
   const c = contracts.find(x => x.id === id);
   const history = (c.history||[]).concat([historyEntry('سررسید جبرانی ثبت شد: '+val)]);
   await db.collection('contracts').doc(id).update({ revisedDueDate: val, history });
+  logActivity('ویرایش سررسید جبرانی', id, c && c.name, 'سررسید جبرانی: '+val);
 }
 async function saveItemCode(id){
   if(!db) return;
@@ -1074,6 +1276,16 @@ async function saveItemCode(id){
   const c = contracts.find(x => x.id === id);
   const history = (c.history||[]).concat([historyEntry('کد قلم ثبت شد: '+val)]);
   await db.collection('contracts').doc(id).update({ itemCode: val, history });
+  logActivity('ویرایش کد قلم', id, c && c.name, 'کد قلم: '+val);
+}
+async function saveContractDate(id){
+  if(!db) return;
+  const val = document.getElementById(`cdate_${id}`).value.trim();
+  if(val && !parseJalaliStr(val)){ alert('فرمت تاریخ درست نیست. مثال: 1405/06/04'); return; }
+  const c = contracts.find(x => x.id === id);
+  const history = (c.history||[]).concat([historyEntry('تاریخ قرارداد ثبت شد: '+val)]);
+  await db.collection('contracts').doc(id).update({ contractDate: val, history });
+  logActivity('ویرایش تاریخ قرارداد', id, c && c.name, 'تاریخ قرارداد: '+val);
 }
 async function saveDescription(id){
   if(!db) return;
@@ -1081,21 +1293,27 @@ async function saveDescription(id){
   const c = contracts.find(x => x.id === id);
   const history = (c.history||[]).concat([historyEntry('توضیحات ثبت شد')]);
   await db.collection('contracts').doc(id).update({ description: val, history });
+  logActivity('ویرایش توضیحات', id, c && c.name, val);
 }
 async function deleteContract(id){
   if(!db) return;
   if(!confirm('این قرارداد حذف شود؟')) return;
+  const c = contracts.find(x => x.id === id);
   await db.collection('contracts').doc(id).delete();
+  logActivity('حذف قرارداد', id, c && c.name, '');
 }
 async function clearHistory(id){
   if(!db) return;
   if(!confirm('کل تاریخچه‌ی این قرارداد پاک شود؟ این کار قابل بازگشت نیست.')) return;
+  const c = contracts.find(x => x.id === id);
   await db.collection('contracts').doc(id).update({ history: [historyEntry('تاریخچه توسط مدیر پاک شد')] });
+  logActivity('پاک‌کردن تاریخچه', id, c && c.name, '');
 }
 
 function openAddModal(){
   document.getElementById('newName').value = '';
   document.getElementById('newItemCode').value = '';
+  document.getElementById('newContractDate').value = '';
   document.getElementById('addModalBg').classList.add('open');
 }
 function closeModal(id){
@@ -1106,13 +1324,16 @@ async function addContract(){
   if(!db) return;
   const name = document.getElementById('newName').value.trim();
   const itemCode = document.getElementById('newItemCode').value.trim();
+  const contractDate = document.getElementById('newContractDate').value.trim();
   if(!name) return;
-  await db.collection('contracts').add({
-    name, itemCode: itemCode || '',
+  if(contractDate && !parseJalaliStr(contractDate)){ alert('فرمت تاریخ قرارداد درست نیست. مثال: 1405/06/04'); return; }
+  const ref = await db.collection('contracts').add({
+    name, itemCode: itemCode || '', contractDate: contractDate || '',
     status: {},
     history: [historyEntry('قرارداد ثبت شد')],
     createdAt: Date.now()
   });
+  logActivity('ثبت قرارداد جدید', ref.id, name, '');
   closeModal('addModalBg');
 }
 
@@ -1136,5 +1357,12 @@ if('serviceWorker' in navigator){
     navigator.serviceWorker.register('./service-worker.js').catch(() => {});
   });
 }
+
+/* ---------- Splash safety fallback + theme icon sync ---------- */
+setTimeout(hideSplash, 6000);
+(function(){
+  const btn = document.getElementById('themeToggleBtn');
+  if(btn) btn.textContent = document.documentElement.getAttribute('data-theme') === 'light' ? '☀️' : '🌙';
+})();
 
 initAuthAndData();
