@@ -561,12 +561,11 @@ function computeDashboardStats(){
 }
 
 function renderStageChartHtml(){
-  const active = contracts.filter(c => !isCompleted(c));
-  const counts = STAGES.map((s,i) => active.filter(c => getDisplayStageIndex(c) === i).length);
+  const counts = STAGES.map((s,i) => contracts.filter(c => getDisplayStageIndex(c) === i).length);
   const max = Math.max(1, ...counts);
   return `
     <div class="chart-box">
-      <div class="chart-title">پراکندگی قراردادهای فعال بر اساس مرحله</div>
+      <div class="chart-title">پراکندگی قراردادها بر اساس مرحله</div>
       ${STAGES.map((s,i) => `
         <div class="chart-row">
           <span class="chart-label">${s.name}</span>
@@ -681,8 +680,12 @@ function getExportContracts(){
   else if(exportScope === 'closed') list = list.filter(isCompleted);
   else if(exportScope === 'waiting') list = list.filter(c => !isCompleted(c) && getDisplayStageIndex(c) === STAGES.length-2);
 
-  const fromD = exportDateFrom ? jalaliStrToDate(exportDateFrom) : null;
-  const toD = exportDateTo ? jalaliStrToDate(exportDateTo) : null;
+  const fromStr = (exportDateFrom||'').trim();
+  const toStr = (exportDateTo||'').trim();
+  const fromD = fromStr ? jalaliStrToDate(fromStr) : null;
+  const toD = toStr ? jalaliStrToDate(toStr) : null;
+  // فقط وقتی واقعاً یک تاریخ معتبر وارد شده باشد فیلتر تاریخ اعمال می‌شود؛
+  // اگر چیزی وارد نشده (یا نامعتبر بود)، این بخش کاملاً نادیده گرفته می‌شود.
   if(fromD || toD){
     list = list.filter(c => {
       if(!c.contractDate) return false;
@@ -724,6 +727,10 @@ function exportScopeLabel(){
 }
 
 async function exportExcel(){
+  if(getExportContracts().length === 0){
+    alert('با این فیلترها هیچ قراردادی پیدا نشد. فیلترها را بررسی کنید.');
+    return;
+  }
   const btn = document.getElementById('exportExcelBtn');
   if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
   try{
@@ -760,6 +767,10 @@ async function exportExcel(){
 }
 
 async function exportPDF(){
+  if(getExportContracts().length === 0){
+    alert('با این فیلترها هیچ قراردادی پیدا نشد. فیلترها را بررسی کنید.');
+    return;
+  }
   const btn = document.getElementById('exportPdfBtn');
   if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
   const holder = document.createElement('div');
