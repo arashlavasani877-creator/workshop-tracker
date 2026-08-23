@@ -208,6 +208,65 @@ function scheduleText(c){
   return diff > 0 ? ('جلوتر از برنامه (+' + diff + '٪)') : ('عقب‌تر از برنامه (' + diff + '٪)');
 }
 
+/* ---------- Viewer (مدیر پروژه) — منطق بحرانی/گزارش، جدا از منطق هشدار مدیر ----------
+   طبق خواسته: قراردادی که فقط منتظر «تحویل‌دهی به مالک» است (کارش تمام شده، فقط تاییدیه‌ی
+   آخر مانده) هرگز بحرانی نیست، حتی اگر از سررسید گذشته باشد. */
+function viewerCriticalStatus(c){
+  if(isCompleted(c)) return { critical:false, cls:'ok', label:'خاتمه‌یافته' };
+  const displayIdx = getDisplayStageIndex(c);
+  if(displayIdx === STAGES.length-2){
+    return { critical:false, cls:'ok', label:'در انتظار تحویل‌دهی به مالک' };
+  }
+  const ts = adminTimeStatus(c);
+  if(ts.cls === 'late') return { critical:true, cls:'late', label:'بحرانی — ' + ts.label };
+  if(ts.cls === 'near') return { critical:false, cls:'warn', label:ts.label };
+  return { critical:false, cls: (ts.cls==='none'?'none':'ok'), label:ts.label };
+}
+// گزارش: همه‌چیز آماده شده ولی «نصب صفحه کابینت» انجام نشده (پیشرفت مرحله‌ی نصب روی سقف ۸۰٪ گیر کرده)
+function isPanelWaiting(c){
+  if(isCompleted(c)) return false;
+  const s = (c.status||{})[5] || {}; // مرحله‌ی «در حال نصب»
+  return (s.percent||0) >= 80 && !s.panelInstalled;
+}
+
+/* ---------- کامنت‌ها — مدیر پروژه فقط می‌بیند و کامنت می‌گذارد، مدیر و سرپرست هم می‌بینند و می‌توانند اقدام کنند ---------- */
+async function addComment(id, inputElId){
+  if(!db || !currentUser) return;
+  const input = document.getElementById(inputElId);
+  const text = input ? input.value.trim() : '';
+  if(!text) return;
+  const c = contracts.find(x => x.id === id);
+  if(!c) return;
+  try{
+    await db.collection('contracts').doc(id).update({
+      comments: firebase.firestore.FieldValue.arrayUnion({ text, by: currentUser.email || '', time: Date.now() })
+    });
+    if(input) input.value = '';
+    logActivity('ثبت کامنت', id, c.name, text);
+  }catch(err){
+    alert('خطا در ثبت کامنت: ' + (err && err.message ? err.message : String(err)));
+  }
+}
+function renderCommentsHtml(c, idSuffix){
+  const comments = (c.comments || []).slice().sort((a,b) => (b.time||0)-(a.time||0));
+  const inputId = 'cmt_' + c.id + '_' + idSuffix;
+  const list = comments.length ? comments.map(cm => `
+      <div class="comment-item">
+        <div class="comment-top"><span class="comment-by">${escapeHtml((cm.by||'').split('@')[0])}</span><span class="comment-time">${fmtTime(new Date(cm.time).toISOString())}</span></div>
+        <div class="comment-text">${escapeHtml(cm.text)}</div>
+      </div>`).join('') : '<div class="empty" style="padding:14px;">هنوز کامنتی ثبت نشده.</div>';
+  return `
+    <div class="comments-box" onclick="event.stopPropagation();">
+      <div class="hist-title">💬 کامنت‌ها ${comments.length?('('+comments.length+')'):''}</div>
+      ${list}
+      <div class="comment-add-row">
+        <input type="text" id="${inputId}" class="auth-input" style="max-width:none; flex:1;" placeholder="کامنت خود را بنویسید...">
+        <button class="field-save" onclick="addComment('${c.id}', '${inputId}')">ثبت</button>
+      </div>
+    </div>`;
+}
+
+
 /* ---------- Auth ---------- */
 function initAuthAndData(){
   try{
@@ -491,31 +550,84 @@ function renderSupervisorList(){
   renderList(false, predicate);
 }
 
-/* ---------- Viewer role — "مدیر پروژه": read-only report panel, fully separate from admin/supervisor ---------- */
+/* ---------- Viewer role — "مدیر پروژه": پنل کاملاً جدا، فقط گزارش + کامنت، بدون هیچ ویرایشی روی قراردادها ---------- */
 function renderViewer(el){
   const active = contracts.filter(c => !isCompleted(c));
   const completed = contracts.filter(isCompleted);
   const avgProgress = active.length ? Math.round(active.reduce((s,c) => s+overallPercent(c), 0) / active.length) : 0;
-  const late = active.filter(c => adminTimeStatus(c).cls === 'late').length;
-  const near = active.filter(c => adminTimeStatus(c).cls === 'near').length;
+  const criticalList = active.filter(c => viewerCriticalStatus(c).critical);
+  const nearList = active.filter(c => viewerCriticalStatus(c).cls === 'warn');
+  const panelWaitList = active.filter(isPanelWaiting);
+  const totalComments = contracts.reduce((s,c) => s + ((c.comments||[]).length), 0);
+
   el.innerHTML = `
+    <div class="viewer-hero">
+      <img src="./icon-192.png" alt="افراچوب">
+      <div>
+        <div class="viewer-hero-title">${myPosition ? escapeHtml(myPosition) : 'مدیر پروژه'} عزیز، خوش آمدید 👋</div>
+        <div class="viewer-hero-sub">نمای کلی و لحظه‌ای وضعیت همه‌ی پروژه‌های افراچوب — با یک نگاه</div>
+      </div>
+    </div>
+
     <div class="toolbar"><button id="installBtn" class="btn-secondary" onclick="installApp()">نصب اپلیکیشن روی گوشی</button></div>
-    <div class="kpi-grid" style="margin-top:14px;">
+
+    <div class="kpi-grid" style="margin-top:6px;">
       <div class="kpi-card"><div class="kpi-num">${contracts.length}</div><div class="kpi-label">کل قراردادها</div></div>
       <div class="kpi-card"><div class="kpi-num">${active.length}</div><div class="kpi-label">فعال</div></div>
       <div class="kpi-card"><div class="kpi-num">${completed.length}</div><div class="kpi-label">خاتمه‌یافته</div></div>
-      <div class="kpi-card kpi-red"><div class="kpi-num">${late}</div><div class="kpi-label">عقب‌افتاده</div></div>
-      <div class="kpi-card kpi-amber"><div class="kpi-num">${near}</div><div class="kpi-label">نزدیک سررسید</div></div>
-      <div class="kpi-card"><div class="kpi-num">${avgProgress}٪</div><div class="kpi-label">میانگین پیشرفت</div></div>
+      <div class="kpi-card kpi-red" style="cursor:pointer;" onclick="scrollToViewerSection('viewerCritical')"><div class="kpi-num">${criticalList.length}</div><div class="kpi-label">بحرانی</div></div>
+      <div class="kpi-card kpi-amber"><div class="kpi-num">${nearList.length}</div><div class="kpi-label">نزدیک سررسید</div></div>
+      <div class="kpi-card kpi-blue"><div class="kpi-num">${avgProgress}٪</div><div class="kpi-label">میانگین پیشرفت</div></div>
     </div>
-    <div class="section-title" style="margin-top:20px;">وضعیت قراردادها <span class="cnt" id="viewerCount"></span></div>
+
+    ${renderStageChartHtml()}
+
+    ${panelWaitList.length ? `
+    <div class="section-title" id="viewerPanelWait" style="margin-top:22px;">🛠 منتظر نصب صفحه کابینت <span class="cnt">${panelWaitList.length} مورد</span></div>
+    <div class="viewer-report-note">همه‌ی مراحل این قراردادها انجام شده و فقط نصب صفحه کابینت باقی مانده.</div>
+    ${panelWaitList.map(c => `
+      <div class="warn-item soon" style="cursor:pointer;" onclick="toggleViewerCard('${c.id}')">
+        <div>
+          <div class="warn-name">${escapeHtml(c.name)}</div>
+          <div class="warn-sub">پیشرفت کل: ${overallPercent(c)}٪</div>
+        </div>
+        <span class="warn-tag amber">نیازمند اقدام</span>
+      </div>`).join('')}` : ''}
+
+    <div class="section-title" id="viewerCritical" style="margin-top:22px;">🔴 قراردادهای بحرانی <span class="cnt">${criticalList.length} مورد</span></div>
+    ${criticalList.length ? '<div class="viewer-report-note">از سررسید گذشته‌اند و هنوز خاتمه نیافته‌اند (قراردادهای در انتظار تحویل‌دهی به مالک اینجا نشان داده نمی‌شوند).</div>' : '<div class="empty">در حال حاضر هیچ قرارداد بحرانی‌ای وجود ندارد. 👍</div>'}
+    ${criticalList.map(c => renderViewerCard(c)).join('')}
+
+    <div class="section-title" style="margin-top:22px;">همه‌ی قراردادها <span class="cnt" id="viewerCount"></span></div>
     <input type="text" id="viewerSearch" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(viewerSearchQuery)}" class="auth-input" style="max-width:none;width:100%;margin-bottom:10px;" oninput="onViewerSearch(this.value)">
     <div id="viewerList"></div>
+
+    <div class="section-title" style="margin-top:22px;">خروجی گزارش</div>
+    <div class="export-filters">
+      <div class="row1">
+        <select id="exportScopeSelect" class="admin-select" onchange="onExportScopeChange(this.value)">
+          <option value="all" ${exportScope==='all'?'selected':''}>همه قراردادها</option>
+          <option value="active" ${exportScope==='active'?'selected':''}>فقط فعال (بدون خاتمه)</option>
+          <option value="closed" ${exportScope==='closed'?'selected':''}>فقط خاتمه‌یافته</option>
+          <option value="waiting" ${exportScope==='waiting'?'selected':''}>فقط در انتظار تحویل‌دهی</option>
+        </select>
+      </div>
+    </div>
+    <div class="export-row">
+      <button class="export-btn" id="exportExcelBtn" onclick="exportExcel()">📊 خروجی اکسل</button>
+      <button class="export-btn" id="exportPdfBtn" onclick="exportPDF()">📄 خروجی PDF</button>
+    </div>
+
+    <div class="viewer-footer-badge">پنل هوشمند مدیریت پروژه — افراچوب${totalComments?(' · '+totalComments+' کامنت ثبت‌شده'):''}</div>
     <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
   `;
   const installBtn = document.getElementById('installBtn');
   if(installBtn) installBtn.style.display = window.__deferredPrompt ? 'block' : 'none';
   renderViewerList();
+}
+function scrollToViewerSection(id){
+  const elx = document.getElementById(id);
+  if(elx) elx.scrollIntoView({ behavior:'smooth', block:'start' });
 }
 function onViewerSearch(v){ viewerSearchQuery = v; renderViewerList(); }
 function renderViewerList(){
@@ -535,9 +647,14 @@ function renderViewerCard(c){
   const displayIdx = getDisplayStageIndex(c);
   const pct = overallPercent(c);
   const done = isCompleted(c);
-  const ts = adminTimeStatus(c);
+  const vs = viewerCriticalStatus(c);
   const isOpen = viewerOpenId === c.id;
-  const dueTagCls = done ? 'ok' : (ts.cls==='ontime'?'ok':ts.cls==='near'?'warn':ts.cls==='late'?'late':'none');
+  const commentCount = (c.comments||[]).length;
+  const panelWait = isPanelWaiting(c);
+  const badges = [];
+  if(c.itemCode) badges.push('<span class="mini-badge">کد قلم: ' + escapeHtml(c.itemCode) + '</span>');
+  if(commentCount) badges.push('<span class="mini-badge">💬 ' + commentCount + '</span>');
+  if(panelWait) badges.push('<span class="mini-badge" style="color:var(--amber); border-color:var(--amber);">منتظر نصب صفحه</span>');
   const timelineHtml = STAGES.map((st,i) => {
     const s = (c.status||{})[i] || {};
     const stageDone = isStageDone(c.status||{}, i);
@@ -557,20 +674,23 @@ function renderViewerCard(c){
         <div class="card-title">
           <span class="card-name">${escapeHtml(c.name)}</span>
           <span class="card-sub">مرحله: ${STAGES[displayIdx].name}${c.itemCode?' — کد قلم: '+escapeHtml(c.itemCode):''}</span>
+          <div class="card-badges">${badges.join('')}</div>
         </div>
-        <span class="stage-pill" style="${done?'background:var(--green-dim);color:var(--green);':''}">${done?'خاتمه‌یافته':pct+'٪'}</span>
+        <span class="stage-pill" style="${done?'background:var(--green-dim);color:var(--green);':(vs.critical?'background:var(--red-dim);color:var(--red);':'')}">${done?'خاتمه‌یافته':pct+'٪'}</span>
       </div>
-      <div class="progress-strip"><div style="width:${pct}%; ${done?'background:var(--green);':''}"></div></div>
-      ${done ? '' : `<div class="due-row"><span class="due-tag ${dueTagCls}">${ts.label}</span></div>`}
+      <div class="progress-strip"><div style="width:${pct}%; ${done?'background:var(--green);':(vs.critical?'background:var(--red);':'')}"></div></div>
+      ${done ? '' : `<div class="due-row"><span class="due-tag ${vs.cls==='late'?'late':vs.cls==='warn'?'warn':vs.cls==='ok'?'ok':'none'}">${vs.label}</span></div>`}
       <div class="body-panel ${isOpen?'open':''}">
         ${c.description ? `<div class="field-row text"><label>توضیحات:</label><span style="flex:1; font-size:12.5px;">${escapeHtml(c.description)}</span></div>` : ''}
         <div class="timeline">${timelineHtml}</div>
         <div class="hist-title">تاریخچه</div>
         ${histHtml}
+        ${renderCommentsHtml(c, 'v')}
       </div>
     </div>`;
 }
-function toggleViewerCard(id){ viewerOpenId = viewerOpenId===id ? null : id; renderViewerList(); }
+function toggleViewerCard(id){ viewerOpenId = viewerOpenId===id ? null : id; renderApp(); }
+
 
 /* ---------- Admin view (V9 — Professional Dashboard) ---------- */
 function renderAdmin(el){
@@ -1113,7 +1233,8 @@ function renderSupervisorRow(c){
   const pct = overallPercent(c);
   const done = isCompleted(c);
   const due = dueStatus(c);
-  const badges = c.itemCode ? `<span class="mini-badge">کد قلم: ${escapeHtml(c.itemCode)}</span>` : '';
+  const badges = (c.itemCode ? `<span class="mini-badge">کد قلم: ${escapeHtml(c.itemCode)}</span>` : '')
+    + ((c.comments||[]).length ? `<span class="mini-badge">💬 ${c.comments.length}</span>` : '');
   return `
     <div class="card" style="cursor:pointer;" onclick="openContractDetail('${c.id}', false)">
       <div class="card-head">
@@ -1141,6 +1262,7 @@ function renderCard(c, isAdmin, forceOpen){
 
   const badges = [];
   if(c.itemCode) badges.push('<span class="mini-badge">کد قلم: ' + escapeHtml(c.itemCode) + '</span>');
+  if((c.comments||[]).length) badges.push('<span class="mini-badge">💬 ' + c.comments.length + '</span>');
 
   const timelineHtml = STAGES.map((st,i) => {
     const s = status[i] || {};
@@ -1264,6 +1386,7 @@ function renderCard(c, isAdmin, forceOpen){
           ${isAdmin ? `<button onclick="event.stopPropagation(); clearHistory('${c.id}')" style="border:none;background:none;color:var(--red);font-size:10.5px;cursor:pointer;font-family:'Vazirmatn';text-decoration:underline;">پاک‌کردن تاریخچه</button>` : ''}
         </div>
         ${hOpen ? histHtml : ''}
+        ${renderCommentsHtml(c, isAdmin ? 'a' : 's')}
         ${isAdmin ? `<div class="del-row"><button onclick="event.stopPropagation(); deleteContract('${c.id}')">حذف قرارداد</button></div>` : ''}
       </div>
     </div>`;
