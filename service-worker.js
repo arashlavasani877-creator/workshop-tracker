@@ -1,4 +1,4 @@
-const CACHE_NAME = 'afrachoob-tracker-v15';
+const CACHE_NAME = 'afrachoob-tracker-v17';
 const APP_SHELL = [
   './',
   './index.html',

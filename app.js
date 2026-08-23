@@ -219,6 +219,19 @@ function initAuthAndData(){
     auth = firebase.auth();
     db = firebase.firestore();
 
+    // نگه‌داشتن نشست ورود روی خود دستگاه — کاربر با بستن/بازکردن اپ دوباره بیرون نمی‌افتد
+    auth.setPersistence(firebase.auth.Auth.Persistence.LOCAL).catch(() => {});
+
+    // فعال‌سازی حالت آفلاین: تغییرات وقتی اینترنت نیست هم ذخیره می‌شوند و
+    // به‌محض وصل‌شدن اینترنت خودکار با سرور همگام می‌شوند (هم مدیر، هم سرپرست).
+    try{
+      db.enablePersistence({ synchronizeTabs: true }).catch(() => {});
+    }catch(e){}
+
+    window.addEventListener('online', () => setStatus('همگام — لحظه‌ای', true));
+    window.addEventListener('offline', () => setStatus('آفلاین — تغییرات ذخیره و بعداً همگام می‌شود', false));
+    if(!navigator.onLine) setStatus('آفلاین — تغییرات ذخیره و بعداً همگام می‌شود', false);
+
     auth.onAuthStateChanged(async (user) => {
       currentUser = user;
       dataSubscribed = false;
@@ -879,11 +892,14 @@ function renderMgmtList(){
 }
 
 let openContractModalId = null;
-function openContractDetail(id){
+let openContractModalIsAdmin = true;
+function openContractDetail(id, isAdmin){
+  if(isAdmin === undefined) isAdmin = true;
   const c = contracts.find(x => x.id === id);
   if(!c) return;
   openContractModalId = id;
-  document.getElementById('contractModalBody').innerHTML = renderCard(c, true, true);
+  openContractModalIsAdmin = isAdmin;
+  document.getElementById('contractModalBody').innerHTML = renderCard(c, isAdmin, true);
   document.getElementById('contractModalBg').classList.add('open');
 }
 function refreshContractModal(){
@@ -892,7 +908,7 @@ function refreshContractModal(){
   if(!bg || !bg.classList.contains('open')) return;
   const c = contracts.find(x => x.id === openContractModalId);
   if(!c){ closeModal('contractModalBg'); return; }
-  document.getElementById('contractModalBody').innerHTML = renderCard(c, true, true);
+  document.getElementById('contractModalBody').innerHTML = renderCard(c, openContractModalIsAdmin, true);
 }
 
 function openNotifications(){
@@ -1045,7 +1061,28 @@ function renderList(isAdmin, predicate){
     list.innerHTML = '<div class="empty">موردی برای نمایش نیست.</div>';
     return;
   }
-  list.innerHTML = items.map(c => renderCard(c, isAdmin)).join('');
+  list.innerHTML = items.map(c => renderSupervisorRow(c)).join('');
+}
+
+function renderSupervisorRow(c){
+  const displayIdx = getDisplayStageIndex(c);
+  const pct = overallPercent(c);
+  const done = isCompleted(c);
+  const due = dueStatus(c);
+  const badges = c.itemCode ? `<span class="mini-badge">کد قلم: ${escapeHtml(c.itemCode)}</span>` : '';
+  return `
+    <div class="card" style="cursor:pointer;" onclick="openContractDetail('${c.id}', false)">
+      <div class="card-head">
+        <div class="card-title">
+          <span class="card-name">${escapeHtml(c.name)}</span>
+          <span class="card-sub">مرحله: ${STAGES[displayIdx].name}</span>
+          <div class="card-badges">${badges}</div>
+        </div>
+        <span class="stage-pill" style="${done?'background:var(--green-dim);color:var(--green);':''}">${done?'خاتمه‌یافته':pct+'٪'}</span>
+      </div>
+      <div class="progress-strip"><div style="width:${pct}%; ${done?'background:var(--green);':''}"></div></div>
+      ${done ? '' : `<div class="due-row"><span class="due-tag ${due.cls}">${due.label}</span></div>`}
+    </div>`;
 }
 
 function renderCard(c, isAdmin, forceOpen){
@@ -1077,14 +1114,18 @@ function renderCard(c, isAdmin, forceOpen){
       const panelInstalled = !!s.panelInstalled;
       const maxAllowed = st.requiresPanel ? (panelInstalled ? 100 : 80) : 100;
       const panelBtnHtml = st.requiresPanel ? `
-          <button class="chk-btn ${panelInstalled?'done':''}" style="width:100%;margin-bottom:10px;" onclick="event.stopPropagation(); togglePanelInstalled('${c.id}', ${i})">
+          <button class="chk-btn ${panelInstalled?'done':''}" style="width:100%;margin-top:10px;" onclick="event.stopPropagation(); togglePanelInstalled('${c.id}', ${i})">
             ${panelInstalled ? '✓ نصب صفحه کابینت انجام شد' : 'نصب صفحه کابینت'}
           </button>
           ${!panelInstalled ? '<div class="admin-only-note">تا نصب نشدن این مرحله، پیشرفت حداکثر ۸۰٪ ثبت می‌شود.</div>' : ''}
         ` : '';
+      const dateFieldHtml = isAdmin ? `
+          <div class="prog-date">
+            <label>پیش‌بینی پایان (شمسی):</label>
+            <input type="text" id="date_${c.id}_${i}" placeholder="1405/06/04" value="${escapeHtml(pd)}">
+          </div>` : '';
       progBox = `
         <div class="prog-box">
-          ${panelBtnHtml}
           <div class="prog-row">
             <input type="range" min="0" max="${maxAllowed}" value="${Math.min(pv,maxAllowed)}" id="range_${c.id}_${i}"
               style="background:${rangeFillCss(Math.min(pv,maxAllowed), maxAllowed)}"
@@ -1092,10 +1133,8 @@ function renderCard(c, isAdmin, forceOpen){
             <span class="prog-val" id="val_${c.id}_${i}">${Math.min(pv,maxAllowed)}%</span>
           </div>
           <div class="prog-strip-mini"><div style="width:${Math.min(pv,maxAllowed)}%"></div></div>
-          <div class="prog-date">
-            <label>پیش‌بینی پایان (شمسی):</label>
-            <input type="text" id="date_${c.id}_${i}" placeholder="1405/06/04" value="${escapeHtml(pd)}">
-          </div>
+          ${panelBtnHtml}
+          ${dateFieldHtml}
           <button class="prog-save" onclick="event.stopPropagation(); saveProgress('${c.id}', ${i})">ثبت پیشرفت</button>
         </div>`;
     }
@@ -1220,8 +1259,12 @@ async function togglePanelInstalled(id, idx){
   const cur = status[idx] || {};
   const now = !cur.panelInstalled;
   let percent = cur.percent || 0;
-  if(!now && percent > 80) percent = 80;
-  status[idx] = { ...cur, panelInstalled: now, percent, doneAt: (percent>=100 && now) ? new Date().toISOString() : null };
+  if(now){
+    percent = 100; // نصب صفحه کابینت که زده شد، پیشرفت خودکار می‌رود روی ۱۰۰٪
+  } else if(percent > 80){
+    percent = 80;
+  }
+  status[idx] = { ...cur, panelInstalled: now, percent, doneAt: now ? new Date().toISOString() : null };
   const label = STAGES[idx].name + ' — نصب صفحه کابینت ' + (now?'انجام شد':'لغو شد');
   const history = (c.history || []).concat([historyEntry(label)]);
   await db.collection('contracts').doc(id).update({ status, history });
@@ -1238,7 +1281,8 @@ async function saveProgress(id, idx){
   const maxAllowed = st.requiresPanel ? (panelInstalled ? 100 : 80) : 100;
   let percent = parseInt(document.getElementById(`range_${id}_${idx}`).value, 10);
   if(percent > maxAllowed) percent = maxAllowed;
-  const predictedDate = document.getElementById(`date_${id}_${idx}`).value.trim();
+  const dateEl = document.getElementById(`date_${id}_${idx}`);
+  const predictedDate = dateEl ? dateEl.value.trim() : (cur.predictedDate || '');
   const status = c.status || {};
   status[idx] = { ...cur, percent, predictedDate, updatedAt: new Date().toISOString(),
                    doneAt: (percent>=100 && (!st.requiresPanel || panelInstalled)) ? new Date().toISOString() : null };
@@ -1350,7 +1394,13 @@ function installApp(){
 }
 if('serviceWorker' in navigator){
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./service-worker.js').catch(() => {});
+    navigator.serviceWorker.register('./service-worker.js').then((reg) => {
+      // هر بار اپ دوباره جلوی چشم کاربر بیاید (باز شدن مجدد تب/برنامه)،
+      // خودش چک می‌کند نسخه‌ی جدیدتری هست یا نه — بدون نیاز به خروج/ورود دوباره.
+      document.addEventListener('visibilitychange', () => {
+        if(document.visibilityState === 'visible') reg.update().catch(() => {});
+      });
+    }).catch(() => {});
   });
 }
 
