@@ -33,7 +33,6 @@ let supervisorSearchQuery = '';
 let viewerOpenId = null;
 let viewerSearchQuery = '';
 let activityLog = [];
-let stageChartInstance = null;
 let exportScope = 'all';   // 'all' | 'active' | 'closed' | 'waiting'
 let exportDateFrom = '';
 let exportDateTo = '';
@@ -561,33 +560,20 @@ function computeDashboardStats(){
   };
 }
 
-function drawStageChart(){
-  try{
-    const canvas = document.getElementById('stageChartCanvas');
-    if(!canvas || typeof Chart === 'undefined') return;
-    if(stageChartInstance){ stageChartInstance.destroy(); stageChartInstance = null; }
-    const active = contracts.filter(c => !isCompleted(c));
-    const counts = STAGES.map((s,i) => active.filter(c => getDisplayStageIndex(c) === i).length);
-    const styles = getComputedStyle(document.documentElement);
-    const ink = styles.getPropertyValue('--ink-soft').trim() || '#9198A0';
-    const teal = styles.getPropertyValue('--teal').trim() || '#4FD1C5';
-    const line = styles.getPropertyValue('--line').trim() || '#2C3138';
-    stageChartInstance = new Chart(canvas, {
-      type: 'bar',
-      data: {
-        labels: STAGES.map(s => s.name),
-        datasets: [{ label: 'تعداد قراردادهای فعال', data: counts, backgroundColor: teal, borderRadius: 6 }]
-      },
-      options: {
-        responsive: true,
-        plugins: { legend: { display: false }, title: { display: true, text: 'پراکندگی قراردادهای فعال بر اساس مرحله', color: ink, font: { family: 'Vazirmatn', size: 12 } } },
-        scales: {
-          x: { ticks: { color: ink, font: { family: 'Vazirmatn', size: 10 } }, grid: { color: line } },
-          y: { beginAtZero: true, ticks: { color: ink, precision: 0 }, grid: { color: line } }
-        }
-      }
-    });
-  }catch(e){ /* اگه کتابخانه‌ی چارت لود نشه، فقط چارت نمایش داده نمی‌شه؛ بقیه‌ی داشبورد سالم می‌مونه */ }
+function renderStageChartHtml(){
+  const active = contracts.filter(c => !isCompleted(c));
+  const counts = STAGES.map((s,i) => active.filter(c => getDisplayStageIndex(c) === i).length);
+  const max = Math.max(1, ...counts);
+  return `
+    <div class="chart-box">
+      <div class="chart-title">پراکندگی قراردادهای فعال بر اساس مرحله</div>
+      ${STAGES.map((s,i) => `
+        <div class="chart-row">
+          <span class="chart-label">${s.name}</span>
+          <div class="chart-bar-track"><div class="chart-bar-fill" style="width:${(counts[i]/max*100)}%"></div></div>
+          <span class="chart-count">${counts[i]}</span>
+        </div>`).join('')}
+    </div>`;
 }
 
 function renderAdminDashboard(){
@@ -606,11 +592,10 @@ function renderAdminDashboard(){
       <div class="kpi-card kpi-blue" style="cursor:pointer;" onclick="openNotUpdatedList()"><div class="kpi-num">${notUpdated}</div><div class="kpi-label">بروزرسانی نشده</div></div>
       <div class="kpi-card"><div class="kpi-num">${waitingDelivery}</div><div class="kpi-label">در انتظار تحویل‌دهی به مالک</div></div>
     </div>
-    <div class="chart-box"><canvas id="stageChartCanvas"></canvas></div>
+    ${renderStageChartHtml()}
     <div class="section-title" style="margin-top:20px;">نیازمند اقدام <span class="cnt">${needAction} مورد</span></div>
     <div id="actionList"></div>
   `;
-  drawStageChart();
   const actionList = document.getElementById('actionList');
   if(!alerts.length){
     actionList.innerHTML = '<div class="empty">موردی نیازمند اقدام فوری نیست.</div>';
@@ -655,10 +640,10 @@ function renderAdminContracts(){
         </select>
       </div>
       <div class="row2">
-        <label>از تاریخ قرارداد:</label>
-        <input type="text" id="exportFromInput" placeholder="1405/01/01" value="${escapeHtml(exportDateFrom)}" oninput="onExportDateFrom(this.value)">
-        <label>تا:</label>
-        <input type="text" id="exportToInput" placeholder="1405/12/29" value="${escapeHtml(exportDateTo)}" oninput="onExportDateTo(this.value)">
+        <div class="date-field"><label>از تاریخ قرارداد:</label>
+          <input type="text" id="exportFromInput" placeholder="1405/01/01" value="${escapeHtml(exportDateFrom)}" oninput="onExportDateFrom(this.value)"></div>
+        <div class="date-field"><label>تا:</label>
+          <input type="text" id="exportToInput" placeholder="1405/12/29" value="${escapeHtml(exportDateTo)}" oninput="onExportDateTo(this.value)"></div>
       </div>
     </div>
     <div class="export-row">
@@ -929,10 +914,10 @@ function renderAdminLog(){
     <div class="section-title" style="margin-top:14px;">لاگ فعالیت‌ها <span class="cnt">${rows.length} مورد</span></div>
     <div class="export-filters">
       <div class="row2">
-        <label>از تاریخ:</label>
-        <input type="text" id="logFromInput" placeholder="1405/06/01" value="${escapeHtml(logDateFrom)}" oninput="onLogDateFrom(this.value)">
-        <label>تا تاریخ:</label>
-        <input type="text" id="logToInput" placeholder="1405/06/30" value="${escapeHtml(logDateTo)}" oninput="onLogDateTo(this.value)">
+        <div class="date-field"><label>از تاریخ:</label>
+          <input type="text" id="logFromInput" placeholder="1405/06/01" value="${escapeHtml(logDateFrom)}" oninput="onLogDateFrom(this.value)"></div>
+        <div class="date-field"><label>تا تاریخ:</label>
+          <input type="text" id="logToInput" placeholder="1405/06/30" value="${escapeHtml(logDateTo)}" oninput="onLogDateTo(this.value)"></div>
       </div>
       <div class="row2" style="margin-top:8px;">
         <button class="field-save" style="flex:1;" onclick="applyLogDateFilter()">اعمال فیلتر</button>

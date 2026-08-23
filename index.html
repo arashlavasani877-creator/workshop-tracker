@@ -40,16 +40,17 @@
     --red:#C43F32; --red-dim:#C43F321A;
   }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
-  html,body{margin:0;padding:0;}
+  html,body{margin:0;padding:0; overflow-x:hidden; max-width:100%; }
   body{ background:var(--bg); color:var(--ink); font-family:'Vazirmatn',sans-serif; min-height:100vh; padding-bottom:40px; transition:background .25s ease, color .25s ease; }
-  header{ background:linear-gradient(180deg,#1A1D21,#15171A); padding:18px 18px 22px; border-bottom:1px solid var(--line); position:relative; }
+  header{ background:linear-gradient(180deg,#1A1D21,#15171A); padding:18px 18px 22px; border-bottom:1px solid var(--line); position:relative; overflow:hidden; }
   html[data-theme="light"] header{ background:linear-gradient(180deg,#FFFFFF,#F4F4F2); }
-  .theme-toggle{ background:none; border:1px solid var(--line); color:var(--ink-soft); font-size:16px; width:34px; height:34px; border-radius:50%; cursor:pointer; display:flex; align-items:center; justify-content:center; }
-  .head-row{ display:flex; align-items:center; justify-content:space-between; gap:10px; }
-  .head-left{ display:flex; align-items:center; gap:10px; }
-  header img.logo{ width:34px; height:34px; border-radius:8px; background:#fff; object-fit:contain; padding:3px; }
-  header h1{ margin:0; font-size:18px; font-weight:900; letter-spacing:.2px; }
-  header p{ margin:4px 0 0; font-size:11.5px; color:var(--ink-soft); }
+  .theme-toggle{ background:none; border:1px solid var(--line); color:var(--ink-soft); font-size:16px; width:32px; height:32px; border-radius:50%; cursor:pointer; display:flex; align-items:center; justify-content:center; flex-shrink:0; padding:0; }
+  .head-row{ display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .head-left{ display:flex; align-items:center; gap:10px; min-width:0; flex:1 1 auto; overflow:hidden; }
+  .head-left > div{ min-width:0; overflow:hidden; }
+  header img.logo{ width:34px; height:34px; border-radius:8px; background:#fff; object-fit:contain; padding:3px; flex-shrink:0; }
+  header h1{ margin:0; font-size:16px; font-weight:900; letter-spacing:.2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  header p{ margin:4px 0 0; font-size:11px; color:var(--ink-soft); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .role-badge{ font-family:'JetBrains Mono',monospace; font-size:10px; padding:4px 9px; border-radius:20px; background:var(--amber-dim); color:var(--amber); white-space:nowrap; }
   .signout-btn{ background:none; border:1px solid var(--line); color:var(--ink-soft); font-size:11px; padding:5px 10px; border-radius:7px; font-family:'Vazirmatn'; cursor:pointer; margin-inline-start:6px; }
   .wrap{ max-width:640px; margin:0 auto; padding:0 14px; }
@@ -218,11 +219,13 @@
   .export-btn{ flex:1; border:1px solid var(--line); background:var(--panel-2); color:var(--ink); font-family:'Vazirmatn',sans-serif; font-weight:700; font-size:12.5px; padding:10px; border-radius:9px; cursor:pointer; }
   .export-btn:active{ opacity:.7; }
   .export-btn:disabled{ opacity:.5; cursor:default; }
-  .export-filters{ background:var(--panel-2); border:1px solid var(--line); border-radius:10px; padding:10px; margin-bottom:10px; }
+  .export-filters{ background:var(--panel-2); border:1px solid var(--line); border-radius:10px; padding:10px; margin-bottom:10px; max-width:100%; overflow:hidden; }
   .export-filters .row1{ display:flex; gap:8px; margin-bottom:8px; }
-  .export-filters .row2{ display:flex; gap:8px; align-items:center; }
+  .export-filters .row2{ display:flex; flex-wrap:wrap; gap:8px; }
+  .export-filters .date-field{ display:flex; align-items:center; gap:6px; flex:1 1 130px; min-width:0; }
+  .export-filters .date-field label{ flex-shrink:0; }
   .export-filters label{ font-size:11px; color:var(--ink-soft); white-space:nowrap; }
-  .export-filters input[type=text]{ flex:1; font-family:'JetBrains Mono',monospace; direction:ltr; text-align:center; background:var(--panel); border:1px solid var(--line); color:var(--ink); border-radius:7px; padding:7px 8px; font-size:12px; }
+  .export-filters input[type=text]{ flex:1; min-width:0; width:0; font-family:'JetBrains Mono',monospace; direction:ltr; text-align:center; background:var(--panel); border:1px solid var(--line); color:var(--ink); border-radius:7px; padding:7px 8px; font-size:12px; }
 
   .log-item{ background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:10px 12px; margin-bottom:8px; }
   .log-item .log-top{ display:flex; justify-content:space-between; gap:8px; font-size:12.5px; }
@@ -230,8 +233,14 @@
   .log-item .log-time{ font-family:'JetBrains Mono',monospace; font-size:10.5px; color:var(--ink-soft); white-space:nowrap; }
   .log-item .log-meta{ font-size:11px; color:var(--ink-soft); margin-top:4px; }
 
-  .chart-box{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px; margin-top:18px; }
-  .chart-box canvas{ max-height:220px; }
+  .chart-box{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:14px 16px; margin-top:18px; }
+  .chart-title{ font-size:12.5px; font-weight:700; color:var(--ink-soft); margin-bottom:12px; }
+  .chart-row{ display:flex; align-items:center; gap:8px; margin-bottom:9px; }
+  .chart-row:last-child{ margin-bottom:0; }
+  .chart-label{ font-size:11px; color:var(--ink-soft); width:88px; flex-shrink:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .chart-bar-track{ flex:1; height:14px; background:var(--panel-2); border-radius:7px; overflow:hidden; min-width:0; }
+  .chart-bar-fill{ height:100%; background:var(--teal); border-radius:7px; transition:width .3s ease; }
+  .chart-count{ font-family:'JetBrains Mono',monospace; font-size:11.5px; color:var(--ink); width:22px; text-align:left; flex-shrink:0; }
 </style>
 </head>
 <body>
@@ -252,9 +261,9 @@
           <p id="headerSub">افراچوب — تابلوی کنترل تولید و نصب</p>
         </div>
       </div>
-      <div style="display:flex; align-items:center; gap:8px;">
+      <div style="display:flex; align-items:center; gap:8px; flex-shrink:0;">
         <button class="theme-toggle" id="themeToggleBtn" onclick="toggleTheme()" title="تغییر تم">🌙</button>
-        <div id="headerRight"></div>
+        <div id="headerRight" style="display:flex; align-items:center; flex-wrap:wrap; gap:6px; justify-content:flex-end;"></div>
       </div>
     </div>
   </div>
@@ -319,7 +328,6 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 <script src="./firebase-config.js"></script>
 <script src="./app.js"></script>
 
