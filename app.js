@@ -261,6 +261,7 @@ function signOutUser(){ auth.signOut(); }
 function renderApp(){
   const el = document.getElementById('app');
   const headerRight = document.getElementById('headerRight');
+  refreshContractModal();
 
   if(!currentUser){
     headerRight.innerHTML = '';
@@ -488,11 +489,21 @@ function renderMgmtList(){
   }).join('');
 }
 
+let openContractModalId = null;
 function openContractDetail(id){
   const c = contracts.find(x => x.id === id);
   if(!c) return;
+  openContractModalId = id;
   document.getElementById('contractModalBody').innerHTML = renderCard(c, true, true);
   document.getElementById('contractModalBg').classList.add('open');
+}
+function refreshContractModal(){
+  if(!openContractModalId) return;
+  const bg = document.getElementById('contractModalBg');
+  if(!bg || !bg.classList.contains('open')) return;
+  const c = contracts.find(x => x.id === openContractModalId);
+  if(!c){ closeModal('contractModalBg'); return; }
+  document.getElementById('contractModalBody').innerHTML = renderCard(c, true, true);
 }
 
 function openNotifications(){
@@ -570,6 +581,13 @@ async function confirmApprove(){
   approveTargetUid = null;
 }
 
+function rangeFillCss(val, max){
+  const v = Math.max(0, Math.min(Number(val)||0, Number(max)||100));
+  const m = Number(max)||100;
+  const pct = m > 0 ? (v / m * 100) : 0;
+  return `linear-gradient(to right, var(--teal) 0%, var(--teal) ${pct}%, var(--line) ${pct}%, var(--line) 100%)`;
+}
+
 /* ---------- Contract list & card ---------- */
 function renderList(isAdmin, predicate){
   const list = document.getElementById('list');
@@ -618,7 +636,9 @@ function renderCard(c, isAdmin, forceOpen){
         <div class="prog-box">
           ${panelBtnHtml}
           <div class="prog-row">
-            <input type="range" min="0" max="${maxAllowed}" value="${Math.min(pv,maxAllowed)}" id="range_${c.id}_${i}" oninput="document.getElementById('val_${c.id}_${i}').textContent = this.value + '%'">
+            <input type="range" min="0" max="${maxAllowed}" value="${Math.min(pv,maxAllowed)}" id="range_${c.id}_${i}"
+              style="background:${rangeFillCss(Math.min(pv,maxAllowed), maxAllowed)}"
+              oninput="document.getElementById('val_${c.id}_${i}').textContent = this.value + '%'; this.style.background = rangeFillCss(this.value, ${maxAllowed});">
             <span class="prog-val" id="val_${c.id}_${i}">${Math.min(pv,maxAllowed)}%</span>
           </div>
           <div class="prog-strip-mini"><div style="width:${Math.min(pv,maxAllowed)}%"></div></div>
@@ -809,7 +829,10 @@ function openAddModal(){
   document.getElementById('newItemCode').value = '';
   document.getElementById('addModalBg').classList.add('open');
 }
-function closeModal(id){ document.getElementById(id).classList.remove('open'); }
+function closeModal(id){
+  document.getElementById(id).classList.remove('open');
+  if(id === 'contractModalBg') openContractModalId = null;
+}
 async function addContract(){
   if(!db) return;
   const name = document.getElementById('newName').value.trim();
