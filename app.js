@@ -339,6 +339,7 @@ function renderWarningsHtml(){
 function renderSupervisor(el){
   const closedCount = contracts.filter(isCompleted).length;
   el.innerHTML = `
+    <div class="toolbar"><button id="installBtn" class="btn-secondary" onclick="installApp()">نصب اپلیکیشن روی گوشی</button></div>
     <div class="tabs">
       <button class="${supervisorTab==='contracts'?'active':''}" onclick="switchSupervisorTab('contracts')">قراردادها</button>
       <button class="${supervisorTab==='warnings'?'active':''}" onclick="switchSupervisorTab('warnings')">هشدار سررسید</button>
@@ -347,6 +348,8 @@ function renderSupervisor(el){
     <div id="supBody"></div>
     <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
   `;
+  const installBtn = document.getElementById('installBtn');
+  if(installBtn) installBtn.style.display = window.__deferredPrompt ? 'block' : 'none';
   const body = document.getElementById('supBody');
   if(supervisorTab === 'contracts'){
     const openCount = contracts.filter(c=>!isCompleted(c)).length;
