@@ -189,6 +189,11 @@
   .kpi-amber .kpi-num{ color:var(--amber); }
   .kpi-blue .kpi-num{ color:var(--teal); }
   .admin-select{ flex:1; font-family:'Vazirmatn'; font-size:12.5px; padding:9px 8px; border-radius:8px; border:1px solid var(--line); background:var(--panel-2); color:var(--ink); }
+
+  .export-row{ display:flex; gap:8px; margin-bottom:12px; }
+  .export-btn{ flex:1; border:1px solid var(--line); background:var(--panel-2); color:var(--ink); font-family:'Vazirmatn',sans-serif; font-weight:700; font-size:12.5px; padding:10px; border-radius:9px; cursor:pointer; }
+  .export-btn:active{ opacity:.7; }
+  .export-btn:disabled{ opacity:.5; cursor:default; }
 </style>
 </head>
 <body>
@@ -263,6 +268,9 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="./firebase-config.js"></script>
 <script src="./app.js"></script>
 

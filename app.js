@@ -501,22 +501,30 @@ function renderAdmin(el){
 }
 function switchAdminTab(t){ adminTab = t; renderApp(); }
 
-function renderAdminDashboard(){
-  const body = document.getElementById('adminBody');
+function computeDashboardStats(){
   const active = contracts.filter(c => !isCompleted(c));
   const closed = contracts.filter(isCompleted);
-  const totalAll = contracts.length;
-  const delayed = active.filter(c => adminTimeStatus(c).cls === 'late').length;
-  const nearDue = active.filter(c => adminTimeStatus(c).cls === 'near').length;
-  const notUpdated = active.filter(isNotUpdated).length;
-  const waitingDelivery = active.filter(c => getDisplayStageIndex(c) === STAGES.length-2).length;
+  return {
+    totalAll: contracts.length,
+    closedCount: closed.length,
+    delayed: active.filter(c => adminTimeStatus(c).cls === 'late').length,
+    nearDue: active.filter(c => adminTimeStatus(c).cls === 'near').length,
+    notUpdated: active.filter(isNotUpdated).length,
+    waitingDelivery: active.filter(c => getDisplayStageIndex(c) === STAGES.length-2).length
+  };
+}
+
+function renderAdminDashboard(){
+  const body = document.getElementById('adminBody');
+  const stats = computeDashboardStats();
+  const { totalAll, closedCount: closedLen, delayed, nearDue, notUpdated, waitingDelivery } = stats;
   const alerts = adminAlerts();
   const needAction = new Set(alerts.map(a => a.c.id)).size;
 
   body.innerHTML = `
     <div class="kpi-grid">
       <div class="kpi-card"><div class="kpi-num">${totalAll}</div><div class="kpi-label">کل قراردادها</div></div>
-      <div class="kpi-card" style="cursor:pointer;" onclick="openClosedList()"><div class="kpi-num">${closed.length}</div><div class="kpi-label">خاتمه‌ها</div></div>
+      <div class="kpi-card" style="cursor:pointer;" onclick="openClosedList()"><div class="kpi-num">${closedLen}</div><div class="kpi-label">خاتمه‌ها</div></div>
       <div class="kpi-card kpi-red"><div class="kpi-num">${delayed}</div><div class="kpi-label">عقب‌افتاده</div></div>
       <div class="kpi-card kpi-amber"><div class="kpi-num">${nearDue}</div><div class="kpi-label">نزدیک سررسید</div></div>
       <div class="kpi-card kpi-blue" style="cursor:pointer;" onclick="openNotUpdatedList()"><div class="kpi-num">${notUpdated}</div><div class="kpi-label">بروزرسانی نشده</div></div>
@@ -559,6 +567,10 @@ function renderAdminContracts(){
   const body = document.getElementById('adminBody');
   body.innerHTML = `
     <div class="section-title" style="margin-top:14px;">مدیریت قراردادها</div>
+    <div class="export-row">
+      <button class="export-btn" id="exportExcelBtn" onclick="exportExcel()">📊 خروجی اکسل</button>
+      <button class="export-btn" id="exportPdfBtn" onclick="exportPDF()">📄 خروجی PDF</button>
+    </div>
     <input type="text" id="adminSearch" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(adminSearchQuery)}" class="auth-input" style="max-width:none; width:100%; margin-bottom:10px;" oninput="onAdminSearch(this.value)">
     <div style="display:flex; gap:8px; margin-bottom:14px;">
       <select id="stageFilter" class="admin-select" onchange="onStageFilter(this.value)">
@@ -580,6 +592,131 @@ function renderAdminContracts(){
 function onAdminSearch(v){ adminSearchQuery = v; renderMgmtList(); }
 function onStageFilter(v){ adminFilterStage = v; renderMgmtList(); }
 function onStatusFilter(v){ adminFilterStatus = v; renderMgmtList(); }
+
+/* ---------- خروجی اکسل و PDF ---------- */
+function exportRows(){
+  return contracts.map(c => ({
+    'نام قرارداد': c.name || '',
+    'کد قلم': c.itemCode || '',
+    'مرحله فعلی': STAGES[getDisplayStageIndex(c)].name,
+    'درصد پیشرفت کل': overallPercent(c) + '%',
+    'سررسید اصلی': c.dueDate || '—',
+    'سررسید جبرانی': c.revisedDueDate || '—',
+    'وضعیت زمانی': isCompleted(c) ? 'خاتمه‌یافته' : adminTimeStatus(c).label,
+    'روز از آخرین آپدیت': daysSinceUpdate(c),
+    'وضعیت': isCompleted(c) ? 'خاتمه‌یافته' : 'فعال'
+  }));
+}
+function todayJalaliLabel(){
+  const d = new Date();
+  return d.toLocaleDateString('fa-IR') + ' ساعت ' + d.toLocaleTimeString('fa-IR', {hour:'2-digit', minute:'2-digit'});
+}
+
+async function exportExcel(){
+  const btn = document.getElementById('exportExcelBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
+  try{
+    const stats = computeDashboardStats();
+    const summaryRows = [
+      ['گزارش افراچوب — PMO', ''],
+      ['تاریخ گزارش', todayJalaliLabel()],
+      [],
+      ['کل قراردادها', stats.totalAll],
+      ['خاتمه‌ها', stats.closedCount],
+      ['عقب‌افتاده', stats.delayed],
+      ['نزدیک سررسید', stats.nearDue],
+      ['بروزرسانی نشده', stats.notUpdated],
+      ['در انتظار تحویل‌دهی به مالک', stats.waitingDelivery]
+    ];
+    const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+    wsSummary['!cols'] = [{wch:30},{wch:24}];
+
+    const rows = exportRows();
+    const wsList = XLSX.utils.json_to_sheet(rows);
+    wsList['!cols'] = [{wch:22},{wch:14},{wch:22},{wch:14},{wch:14},{wch:14},{wch:20},{wch:16},{wch:14}];
+
+    const wb = XLSX.utils.book_new();
+    wb.Workbook = { Views: [{ RTL: true }] };
+    XLSX.utils.book_append_sheet(wb, wsSummary, 'خلاصه');
+    XLSX.utils.book_append_sheet(wb, wsList, 'قراردادها');
+    XLSX.writeFile(wb, `افراچوب-گزارش-${new Date().toISOString().slice(0,10)}.xlsx`);
+  }catch(err){
+    alert('خطا در ساخت فایل اکسل: ' + err.message);
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '📊 خروجی اکسل'; }
+  }
+}
+
+async function exportPDF(){
+  const btn = document.getElementById('exportPdfBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
+  const holder = document.createElement('div');
+  holder.style.cssText = 'position:fixed; top:0; left:-99999px; width:820px; background:#ffffff; color:#1a1a1a; font-family:Vazirmatn,sans-serif; direction:rtl; padding:28px;';
+  const stats = computeDashboardStats();
+  const rows = exportRows();
+  const kpi = (label, val) => `<div style="border:1px solid #ddd; border-radius:8px; padding:12px; text-align:center;">
+      <div style="font-size:20px; font-weight:900;">${val}</div>
+      <div style="font-size:11px; color:#666; margin-top:4px;">${label}</div>
+    </div>`;
+  holder.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #222; padding-bottom:12px; margin-bottom:16px;">
+      <div style="font-size:20px; font-weight:900;">گزارش افراچوب — PMO</div>
+      <div style="font-size:12px; color:#555;">${todayJalaliLabel()}</div>
+    </div>
+    <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:20px;">
+      ${kpi('کل قراردادها', stats.totalAll)}
+      ${kpi('خاتمه‌ها', stats.closedCount)}
+      ${kpi('عقب‌افتاده', stats.delayed)}
+      ${kpi('نزدیک سررسید', stats.nearDue)}
+      ${kpi('بروزرسانی نشده', stats.notUpdated)}
+      ${kpi('در انتظار تحویل به مالک', stats.waitingDelivery)}
+    </div>
+    <table style="width:100%; border-collapse:collapse; font-size:11px;">
+      <thead>
+        <tr style="background:#222; color:#fff;">
+          ${['نام قرارداد','کد قلم','مرحله فعلی','پیشرفت','سررسید','وضعیت زمانی','روز بدون آپدیت','وضعیت'].map(h=>`<th style="padding:6px 8px; text-align:right; border:1px solid #333;">${h}</th>`).join('')}
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map((r,i) => `<tr style="background:${i%2?'#f5f5f5':'#fff'};">
+          <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['نام قرارداد'])}</td>
+          <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['کد قلم'])}</td>
+          <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['مرحله فعلی'])}</td>
+          <td style="padding:6px 8px; border:1px solid #ddd;">${r['درصد پیشرفت کل']}</td>
+          <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['سررسید اصلی'])}</td>
+          <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['وضعیت زمانی'])}</td>
+          <td style="padding:6px 8px; border:1px solid #ddd;">${r['روز از آخرین آپدیت']}</td>
+          <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['وضعیت'])}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  `;
+  document.body.appendChild(holder);
+  try{
+    const canvas = await html2canvas(holder, { scale:2, backgroundColor:'#ffffff', useCORS:true });
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF('p', 'pt', 'a4');
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const imgW = pageW;
+    const imgH = canvas.height * (imgW / canvas.width);
+    let remaining = imgH, position = 0, first = true;
+    const imgData = canvas.toDataURL('image/jpeg', 0.92);
+    while(remaining > 0){
+      if(!first) pdf.addPage();
+      pdf.addImage(imgData, 'JPEG', 0, position, imgW, imgH);
+      remaining -= pageH;
+      position -= pageH;
+      first = false;
+    }
+    pdf.save(`افراچوب-گزارش-${new Date().toISOString().slice(0,10)}.pdf`);
+  }catch(err){
+    alert('خطا در ساخت فایل PDF: ' + err.message);
+  }finally{
+    document.body.removeChild(holder);
+    if(btn){ btn.disabled = false; btn.textContent = '📄 خروجی PDF'; }
+  }
+}
 
 function renderMgmtList(){
   const el = document.getElementById('mgmtList');
