@@ -49,7 +49,7 @@
   .head-left{ display:flex; align-items:center; gap:10px; min-width:0; flex:1 1 auto; overflow:hidden; }
   .head-left > div{ min-width:0; overflow:hidden; }
   header img.logo{ width:34px; height:34px; border-radius:8px; background:#fff; object-fit:contain; padding:3px; flex-shrink:0; }
-  header h1{ margin:0; font-size:16px; font-weight:900; letter-spacing:.2px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  header h1{ margin:0; font-size:13px; font-weight:800; letter-spacing:0; white-space:normal; overflow:visible; line-height:1.35; }
   header p{ margin:4px 0 0; font-size:11px; color:var(--ink-soft); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .role-badge{ font-family:'JetBrains Mono',monospace; font-size:10px; padding:4px 9px; border-radius:20px; background:var(--amber-dim); color:var(--amber); white-space:nowrap; }
   .signout-btn{ background:none; border:1px solid var(--line); color:var(--ink-soft); font-size:11px; padding:5px 10px; border-radius:7px; font-family:'Vazirmatn'; cursor:pointer; margin-inline-start:6px; }
@@ -180,6 +180,7 @@
   .user-role{ font-family:'JetBrains Mono',monospace; font-size:10px; margin-top:2px; }
   .user-role.pending{ color:var(--amber); }
   .user-role.supervisor{ color:var(--green); }
+  .user-role.viewer{ color:var(--teal); }
   .user-role.admin{ color:var(--teal); }
   .user-role.blocked{ color:var(--red); }
   .user-status{ display:inline-flex; align-items:center; gap:5px; font-family:'JetBrains Mono',monospace; font-size:10px; color:var(--ink-faint); margin-top:4px; }
@@ -232,13 +233,18 @@
   .viewer-hero-sub{ font-size:11.5px; color:var(--ink-soft); margin-top:4px; line-height:1.7; }
   .viewer-report-note{ font-size:11.5px; color:var(--ink-soft); margin:-4px 0 10px; line-height:1.8; }
   .viewer-footer-badge{ text-align:center; font-size:10.5px; color:var(--ink-faint); font-family:'JetBrains Mono',monospace; margin:22px 0 2px; }
+  .viewer-quicklinks{ display:flex; flex-wrap:wrap; gap:7px; margin-top:18px; }
+  .viewer-quicklinks button{ flex:1 1 calc(50% - 7px); background:var(--panel); color:var(--ink-soft); font-family:'Vazirmatn'; font-weight:700; font-size:11.5px; padding:10px 8px; border-radius:9px; cursor:pointer; border:1px solid var(--line) !important; }
+  .viewer-quicklinks button.active{ background:var(--teal-dim); color:var(--teal); border-color:var(--teal) !important; }
 
   /* ---- کامنت‌ها (مدیر پروژه / سرپرست / مدیر) ---- */
   .comments-box{ margin-top:16px; border-top:1px dashed var(--line); padding-top:12px; }
   .comment-item{ background:var(--panel-2); border:1px solid var(--line); border-radius:9px; padding:8px 10px; margin-bottom:7px; }
-  .comment-top{ display:flex; justify-content:space-between; gap:8px; font-size:10.5px; }
+  .comment-top{ display:flex; justify-content:space-between; gap:8px; font-size:10.5px; align-items:center; }
   .comment-by{ color:var(--teal); font-weight:700; font-family:'JetBrains Mono',monospace; }
+  .comment-time-wrap{ display:flex; align-items:center; gap:6px; }
   .comment-time{ color:var(--ink-faint); font-family:'JetBrains Mono',monospace; white-space:nowrap; }
+  .comment-del{ border:none; background:none; color:var(--red); font-size:12px; cursor:pointer; padding:0 2px; line-height:1; }
   .comment-text{ font-size:12.5px; margin-top:4px; line-height:1.7; }
   .comment-add-row{ display:flex; gap:8px; margin-top:10px; }
   .comment-add-row input{ direction:rtl; text-align:right; }

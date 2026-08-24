@@ -33,6 +33,11 @@ let adminFilterStatus = 'all';
 let supervisorSearchQuery = '';
 let viewerOpenId = null;
 let viewerSearchQuery = '';
+let viewerSection = null;     // null | 'critical' | 'panelwait' | 'waitingdelivery' | 'all' | 'contact'
+let viewerHistoryOpen = {};   // id -> bool — برای مدیر پروژه همیشه پیش‌فرض بسته
+let pmNotes = [];             // پیام‌های عمومی «ارتباط با کنترل پروژه» / «ارتباط با مدیر»
+let pmoCommentsSearch = '';   // جستجو در بخش «کامنت‌های مدیر پروژه» (پنل مدیر/سرپرست)
+const PMO_DISPLAY_NAME = 'مدیر پروژه مهندس سمنانی'; // به‌جای ایمیل مدیر پروژه، همه‌جا همین نام نشان داده می‌شود
 let activityLog = [];
 let exportScope = 'all';   // 'all' | 'active' | 'closed' | 'waiting'
 let exportDateFrom = '';
@@ -73,9 +78,14 @@ function logActivity(action, contractId, contractName, details){
   if(!db || !currentUser) return;
   db.collection('activityLog').add({
     action, contractId: contractId || null, contractName: contractName || null,
-    details: details || '', by: currentUser.email || '', byUid: currentUser.uid,
+    details: details || '', by: currentUser.email || '', byUid: currentUser.uid, byRole: myRole || '',
     time: Date.now()
   }).catch(() => { /* لاگ فقط جنبه‌ی گزارشیه؛ خطای احتمالی نباید کار اصلی رو مختل کنه */ });
+}
+// هرجا نام نویسنده‌ی یک کامنت/لاگ نمایش داده می‌شه: اگر مدیر پروژه بوده، به‌جای ایمیلش این عنوان نشان داده می‌شود
+function authorLabel(entry){
+  if(entry && entry.byRole === 'viewer') return PMO_DISPLAY_NAME;
+  return escapeHtml(((entry && entry.by) || '').split('@')[0]);
 }
 
 /* ---------- Jalali <-> Gregorian ---------- */
@@ -239,7 +249,7 @@ async function addComment(id, inputElId){
   if(!c) return;
   try{
     await db.collection('contracts').doc(id).update({
-      comments: firebase.firestore.FieldValue.arrayUnion({ text, by: currentUser.email || '', time: Date.now() })
+      comments: firebase.firestore.FieldValue.arrayUnion({ text, by: currentUser.email || '', byRole: myRole || '', time: Date.now() })
     });
     if(input) input.value = '';
     logActivity('ثبت کامنت', id, c.name, text);
@@ -247,14 +257,36 @@ async function addComment(id, inputElId){
     alert('خطا در ثبت کامنت: ' + (err && err.message ? err.message : String(err)));
   }
 }
+async function deleteComment(id, time){
+  if(!db || !currentUser) return;
+  const c = contracts.find(x => x.id === id);
+  if(!c) return;
+  const cm = (c.comments||[]).find(x => x.time === time);
+  if(!cm) return;
+  if(!(cm.by === currentUser.email || myRole === 'admin')) return;
+  if(!confirm('این کامنت حذف شود؟')) return;
+  try{
+    await db.collection('contracts').doc(id).update({
+      comments: firebase.firestore.FieldValue.arrayRemove(cm)
+    });
+  }catch(err){
+    alert('خطا در حذف کامنت: ' + (err && err.message ? err.message : String(err)));
+  }
+}
 function renderCommentsHtml(c, idSuffix){
   const comments = (c.comments || []).slice().sort((a,b) => (b.time||0)-(a.time||0));
   const inputId = 'cmt_' + c.id + '_' + idSuffix;
-  const list = comments.length ? comments.map(cm => `
+  const list = comments.length ? comments.map(cm => {
+    const canDelete = currentUser && (cm.by === currentUser.email || myRole === 'admin');
+    return `
       <div class="comment-item">
-        <div class="comment-top"><span class="comment-by">${escapeHtml((cm.by||'').split('@')[0])}</span><span class="comment-time">${fmtTime(new Date(cm.time).toISOString())}</span></div>
+        <div class="comment-top">
+          <span class="comment-by">${authorLabel(cm)}</span>
+          <span class="comment-time-wrap"><span class="comment-time">${fmtTime(new Date(cm.time).toISOString())}</span>${canDelete?`<button class="comment-del" title="حذف کامنت" onclick="event.stopPropagation(); deleteComment('${c.id}', ${cm.time})">✕</button>`:''}</span>
+        </div>
         <div class="comment-text">${escapeHtml(cm.text)}</div>
-      </div>`).join('') : '<div class="empty" style="padding:14px;">هنوز کامنتی ثبت نشده.</div>';
+      </div>`;
+  }).join('') : '<div class="empty" style="padding:14px;">هنوز کامنتی ثبت نشده.</div>';
   return `
     <div class="comments-box" onclick="event.stopPropagation();">
       <div class="hist-title">💬 کامنت‌ها ${comments.length?('('+comments.length+')'):''}</div>
@@ -264,6 +296,89 @@ function renderCommentsHtml(c, idSuffix){
         <button class="field-save" onclick="addComment('${c.id}', '${inputId}')">ثبت</button>
       </div>
     </div>`;
+}
+
+/* ---------- کامنت‌های مدیر پروژه — بخش مشترک برای پنل مدیر و سرپرست (نه خود مدیر پروژه) ----------
+   همه‌ی کامنت‌هایی که روی هر قرارداد توسط «مدیر پروژه» گذاشته شده رو یک‌جا (با نام قرارداد) نشون می‌ده،
+   و شمارنده‌ی «جدید» رو بر اساس آخرین باری که این بخش باز شده حساب می‌کنه (نوتیف داخل‌اپی). */
+function getAllPmoComments(){
+  const list = [];
+  contracts.forEach(c => {
+    (c.comments||[]).forEach(cm => {
+      if(cm.byRole === 'viewer') list.push({ contractId: c.id, contractName: c.name, ...cm });
+    });
+  });
+  list.sort((a,b) => (b.time||0)-(a.time||0));
+  return list;
+}
+function pmoSeenKey(){ return 'afrachoob-pmo-seen-' + (currentUser ? currentUser.uid : 'x'); }
+function getPmoLastSeen(){ try{ return parseInt(localStorage.getItem(pmoSeenKey())||'0',10); }catch(e){ return 0; } }
+function markPmoCommentsSeen(){
+  try{ localStorage.setItem(pmoSeenKey(), String(Date.now())); }catch(e){}
+}
+function pmoUnseenCount(){
+  const lastSeen = getPmoLastSeen();
+  return getAllPmoComments().filter(cm => (cm.time||0) > lastSeen).length;
+}
+function onPmoCommentsSearch(v){ pmoCommentsSearch = v; renderPmoCommentsList(); }
+function renderPmoCommentsHtml(){
+  markPmoCommentsSeen();
+  return `
+    <div class="section-title" style="margin-top:14px;">💬 کامنت‌های مدیر پروژه <span class="cnt" id="pmoCmtCount"></span></div>
+    <input type="text" id="pmoCmtSearch" placeholder="جستجو بر اساس نام قرارداد یا متن کامنت..." value="${escapeHtml(pmoCommentsSearch)}" class="auth-input" style="max-width:none;width:100%;margin-bottom:10px;" oninput="onPmoCommentsSearch(this.value)">
+    <div id="pmoCmtList"></div>`;
+}
+function renderPmoCommentsList(){
+  const el = document.getElementById('pmoCmtList');
+  if(!el) return;
+  let items = getAllPmoComments();
+  const q = pmoCommentsSearch.trim().toLowerCase();
+  if(q) items = items.filter(cm => (cm.contractName||'').toLowerCase().includes(q) || (cm.text||'').toLowerCase().includes(q));
+  const cntEl = document.getElementById('pmoCmtCount');
+  if(cntEl) cntEl.textContent = items.length + ' مورد';
+  if(!items.length){ el.innerHTML = '<div class="empty">هنوز کامنتی از مدیر پروژه ثبت نشده.</div>'; return; }
+  el.innerHTML = items.map(cm => `
+      <div class="warn-item" style="cursor:pointer;" onclick="openContractDetail('${cm.contractId}', ${myRole==='admin'})">
+        <div>
+          <div class="warn-name">${escapeHtml(cm.contractName||'')}</div>
+          <div class="warn-sub">${escapeHtml(cm.text)}</div>
+        </div>
+        <span class="warn-tag" style="color:var(--ink-faint); background:var(--panel-2);">${fmtTime(new Date(cm.time).toISOString())}</span>
+      </div>`).join('');
+}
+
+/* ---------- ارتباط با کنترل پروژه / ارتباط با مدیر — پیام عمومی، مستقل از قرارداد خاص ---------- */
+async function sendPmNote(){
+  if(!db || !currentUser) return;
+  const input = document.getElementById('pmNoteInput');
+  const text = input ? input.value.trim() : '';
+  if(!text) return;
+  try{
+    await db.collection('pmNotes').add({ text, by: currentUser.email||'', byRole: myRole||'', byUid: currentUser.uid, time: Date.now() });
+    if(input) input.value = '';
+  }catch(err){
+    alert('خطا در ارسال پیام: ' + (err && err.message ? err.message : String(err)));
+  }
+}
+async function deletePmNote(id){
+  if(!db) return;
+  if(!confirm('این پیام حذف شود؟')) return;
+  try{ await db.collection('pmNotes').doc(id).delete(); }catch(err){ alert('خطا در حذف: ' + (err && err.message ? err.message : String(err))); }
+}
+function renderPmNotesListHtml(canDeleteAll){
+  const items = pmNotes.slice().sort((a,b) => (b.time||0)-(a.time||0));
+  if(!items.length) return '<div class="empty" style="padding:14px;">هنوز پیامی ثبت نشده.</div>';
+  return items.map(n => {
+    const canDelete = canDeleteAll || (currentUser && n.byUid === currentUser.uid);
+    return `
+      <div class="comment-item">
+        <div class="comment-top">
+          <span class="comment-by">${authorLabel(n)}</span>
+          <span class="comment-time-wrap"><span class="comment-time">${fmtTime(new Date(n.time).toISOString())}</span>${canDelete?`<button class="comment-del" title="حذف پیام" onclick="deletePmNote('${n.id}')">✕</button>`:''}</span>
+        </div>
+        <div class="comment-text">${escapeHtml(n.text)}</div>
+      </div>`;
+  }).join('');
 }
 
 
@@ -386,6 +501,17 @@ function ensureDataSubscriptions(){
       activityLog = snap.docs.map(d => ({ id:d.id, ...d.data() }));
       if(adminTab === 'log') renderApp();
     }, () => { /* اگه قوانین Firestore هنوز آپدیت نشده باشه، فقط لاگ کار نمی‌کنه؛ بقیه‌ی اپ دست‌نخورده می‌مونه */ });
+
+    db.collection('pmNotes').orderBy('time','desc').limit(200).onSnapshot((snap) => {
+      pmNotes = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+      renderApp();
+    }, () => { /* اگه قوانین هنوز آپدیت نشده، فقط این بخش کار نمی‌کنه */ });
+  }
+  if(myRole === 'viewer'){
+    db.collection('pmNotes').where('byUid','==', currentUser.uid).onSnapshot((snap) => {
+      pmNotes = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+      renderApp();
+    }, () => {});
   }
 }
 
@@ -514,12 +640,16 @@ function renderWarningsHtml(){
 /* ---------- Supervisor view ---------- */
 function renderSupervisor(el){
   const closedCount = contracts.filter(isCompleted).length;
+  const pmoUnseen = pmoUnseenCount();
   el.innerHTML = `
     <div class="toolbar"><button id="installBtn" class="btn-secondary" onclick="installApp()">نصب اپلیکیشن روی گوشی</button></div>
     <div class="tabs">
       <button class="${supervisorTab==='contracts'?'active':''}" onclick="switchSupervisorTab('contracts')">قراردادها</button>
       <button class="${supervisorTab==='warnings'?'active':''}" onclick="switchSupervisorTab('warnings')">هشدار سررسید</button>
       <button class="${supervisorTab==='closed'?'active':''}" onclick="switchSupervisorTab('closed')">خاتمه‌ها ${closedCount?('('+closedCount+')'):''}</button>
+    </div>
+    <div class="tabs" style="margin-top:8px;">
+      <button class="${supervisorTab==='pmoComments'?'active':''}" onclick="switchSupervisorTab('pmoComments')">💬 کامنت‌های مدیر پروژه ${pmoUnseen?('('+pmoUnseen+')'):''}</button>
     </div>
     <div id="supBody"></div>
     <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
@@ -535,6 +665,9 @@ function renderSupervisor(el){
     renderSupervisorList();
   } else if(supervisorTab === 'warnings'){
     body.innerHTML = renderWarningsHtml();
+  } else if(supervisorTab === 'pmoComments'){
+    body.innerHTML = renderPmoCommentsHtml();
+    renderPmoCommentsList();
   } else {
     body.innerHTML = `<div class="section-title" style="margin-top:14px;">خاتمه‌ها <span class="cnt">${closedCount} مورد</span></div><div id="list"></div>`;
     renderList(false, isCompleted);
@@ -551,15 +684,19 @@ function renderSupervisorList(){
 }
 
 /* ---------- Viewer role — "مدیر پروژه": پنل کاملاً جدا، فقط گزارش + کامنت، بدون هیچ ویرایشی روی قراردادها ---------- */
-function renderViewer(el){
+function computeViewerStats(){
   const active = contracts.filter(c => !isCompleted(c));
   const completed = contracts.filter(isCompleted);
   const avgProgress = active.length ? Math.round(active.reduce((s,c) => s+overallPercent(c), 0) / active.length) : 0;
   const criticalList = active.filter(c => viewerCriticalStatus(c).critical);
   const nearList = active.filter(c => viewerCriticalStatus(c).cls === 'warn');
   const panelWaitList = active.filter(isPanelWaiting);
-  const totalComments = contracts.reduce((s,c) => s + ((c.comments||[]).length), 0);
+  const waitingDeliveryList = active.filter(c => getDisplayStageIndex(c) === STAGES.length-2);
+  return { active, completed, avgProgress, criticalList, nearList, panelWaitList, waitingDeliveryList };
+}
 
+function renderViewer(el){
+  const s = computeViewerStats();
   el.innerHTML = `
     <div class="viewer-hero">
       <img src="./icon-192.png" alt="افراچوب">
@@ -573,71 +710,94 @@ function renderViewer(el){
 
     <div class="kpi-grid" style="margin-top:6px;">
       <div class="kpi-card"><div class="kpi-num">${contracts.length}</div><div class="kpi-label">کل قراردادها</div></div>
-      <div class="kpi-card"><div class="kpi-num">${active.length}</div><div class="kpi-label">فعال</div></div>
-      <div class="kpi-card"><div class="kpi-num">${completed.length}</div><div class="kpi-label">خاتمه‌یافته</div></div>
-      <div class="kpi-card kpi-red" style="cursor:pointer;" onclick="scrollToViewerSection('viewerCritical')"><div class="kpi-num">${criticalList.length}</div><div class="kpi-label">بحرانی</div></div>
-      <div class="kpi-card kpi-amber"><div class="kpi-num">${nearList.length}</div><div class="kpi-label">نزدیک سررسید</div></div>
-      <div class="kpi-card kpi-blue"><div class="kpi-num">${avgProgress}٪</div><div class="kpi-label">میانگین پیشرفت</div></div>
+      <div class="kpi-card"><div class="kpi-num">${s.active.length}</div><div class="kpi-label">خاتمه نیافته</div></div>
+      <div class="kpi-card"><div class="kpi-num">${s.completed.length}</div><div class="kpi-label">خاتمه‌یافته</div></div>
+      <div class="kpi-card kpi-red"><div class="kpi-num">${s.criticalList.length}</div><div class="kpi-label">بحرانی</div></div>
+      <div class="kpi-card kpi-amber"><div class="kpi-num">${s.nearList.length}</div><div class="kpi-label">نزدیک سررسید</div></div>
+      <div class="kpi-card kpi-blue"><div class="kpi-num">${s.avgProgress}٪</div><div class="kpi-label">میانگین پیشرفت</div></div>
     </div>
 
     ${renderStageChartHtml()}
 
-    ${panelWaitList.length ? `
-    <div class="section-title" id="viewerPanelWait" style="margin-top:22px;">🛠 منتظر نصب صفحه کابینت <span class="cnt">${panelWaitList.length} مورد</span></div>
-    <div class="viewer-report-note">همه‌ی مراحل این قراردادها انجام شده و فقط نصب صفحه کابینت باقی مانده.</div>
-    ${panelWaitList.map(c => `
-      <div class="warn-item soon" style="cursor:pointer;" onclick="toggleViewerCard('${c.id}')">
-        <div>
-          <div class="warn-name">${escapeHtml(c.name)}</div>
-          <div class="warn-sub">پیشرفت کل: ${overallPercent(c)}٪</div>
-        </div>
-        <span class="warn-tag amber">نیازمند اقدام</span>
-      </div>`).join('')}` : ''}
+    <div class="viewer-quicklinks">
+      <button class="${viewerSection==='critical'?'active':''}" onclick="switchViewerSection('critical')">🔴 قراردادهای بحرانی ${s.criticalList.length?('('+s.criticalList.length+')'):''}</button>
+      <button class="${viewerSection==='panelwait'?'active':''}" onclick="switchViewerSection('panelwait')">🛠 منتظر نصب صفحه کابینت ${s.panelWaitList.length?('('+s.panelWaitList.length+')'):''}</button>
+      <button class="${viewerSection==='waitingdelivery'?'active':''}" onclick="switchViewerSection('waitingdelivery')">📦 در انتظار تحویل‌دهی به مالک ${s.waitingDeliveryList.length?('('+s.waitingDeliveryList.length+')'):''}</button>
+      <button class="${viewerSection==='all'?'active':''}" onclick="switchViewerSection('all')">📋 همه قراردادها (${contracts.length})</button>
+      <button class="${viewerSection==='contact'?'active':''}" onclick="switchViewerSection('contact')">✉️ ارتباط با کنترل پروژه</button>
+    </div>
 
-    <div class="section-title" id="viewerCritical" style="margin-top:22px;">🔴 قراردادهای بحرانی <span class="cnt">${criticalList.length} مورد</span></div>
-    ${criticalList.length ? '<div class="viewer-report-note">از سررسید گذشته‌اند و هنوز خاتمه نیافته‌اند (قراردادهای در انتظار تحویل‌دهی به مالک اینجا نشان داده نمی‌شوند).</div>' : '<div class="empty">در حال حاضر هیچ قرارداد بحرانی‌ای وجود ندارد. 👍</div>'}
-    ${criticalList.map(c => renderViewerCard(c)).join('')}
-
-    <div class="section-title" style="margin-top:22px;">همه‌ی قراردادها <span class="cnt" id="viewerCount"></span></div>
-    <input type="text" id="viewerSearch" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(viewerSearchQuery)}" class="auth-input" style="max-width:none;width:100%;margin-bottom:10px;" oninput="onViewerSearch(this.value)">
-    <div id="viewerList"></div>
+    <div id="viewerSectionBody"></div>
 
     <div class="section-title" style="margin-top:22px;">خروجی گزارش</div>
     <div class="export-filters">
       <div class="row1">
         <select id="exportScopeSelect" class="admin-select" onchange="onExportScopeChange(this.value)">
           <option value="all" ${exportScope==='all'?'selected':''}>همه قراردادها</option>
-          <option value="active" ${exportScope==='active'?'selected':''}>فقط فعال (بدون خاتمه)</option>
+          <option value="active" ${exportScope==='active'?'selected':''}>فقط خاتمه‌نیافته</option>
           <option value="closed" ${exportScope==='closed'?'selected':''}>فقط خاتمه‌یافته</option>
           <option value="waiting" ${exportScope==='waiting'?'selected':''}>فقط در انتظار تحویل‌دهی</option>
         </select>
       </div>
     </div>
     <div class="export-row">
-      <button class="export-btn" id="exportExcelBtn" onclick="exportExcel()">📊 خروجی اکسل</button>
-      <button class="export-btn" id="exportPdfBtn" onclick="exportPDF()">📄 خروجی PDF</button>
+      <button class="export-btn" id="exportExcelBtn" onclick="exportExcelViewer()">📊 خروجی اکسل</button>
+      <button class="export-btn" id="exportPdfBtn" onclick="exportPDFViewer()">📄 خروجی PDF (شامل نمودار)</button>
     </div>
 
-    <div class="viewer-footer-badge">پنل هوشمند مدیریت پروژه — افراچوب${totalComments?(' · '+totalComments+' کامنت ثبت‌شده'):''}</div>
+    <div class="viewer-footer-badge">پنل هوشمند مدیریت پروژه — افراچوب</div>
     <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
   `;
   const installBtn = document.getElementById('installBtn');
   if(installBtn) installBtn.style.display = window.__deferredPrompt ? 'block' : 'none';
-  renderViewerList();
+  renderViewerSectionBody();
 }
-function scrollToViewerSection(id){
-  const elx = document.getElementById(id);
-  if(elx) elx.scrollIntoView({ behavior:'smooth', block:'start' });
+function switchViewerSection(sec){
+  viewerSection = (viewerSection === sec) ? null : sec;
+  viewerSearchQuery = '';
+  renderApp();
 }
-function onViewerSearch(v){ viewerSearchQuery = v; renderViewerList(); }
-function renderViewerList(){
+function onViewerSearch(v){ viewerSearchQuery = v; renderViewerSectionList(); }
+function viewerSectionContracts(){
+  const s = computeViewerStats();
+  if(viewerSection === 'critical') return s.criticalList;
+  if(viewerSection === 'panelwait') return s.panelWaitList;
+  if(viewerSection === 'waitingdelivery') return s.waitingDeliveryList;
+  if(viewerSection === 'all') return contracts.slice();
+  return [];
+}
+function viewerSectionTitle(){
+  return { critical:'قراردادهای بحرانی', panelwait:'منتظر نصب صفحه کابینت', waitingdelivery:'در انتظار تحویل‌دهی به مالک', all:'همه قراردادها' }[viewerSection] || '';
+}
+function renderViewerSectionBody(){
+  const body = document.getElementById('viewerSectionBody');
+  if(!body) return;
+  if(!viewerSection){ body.innerHTML = ''; return; }
+  if(viewerSection === 'contact'){
+    body.innerHTML = `
+      <div class="section-title" style="margin-top:18px;">✉️ ارتباط با کنترل پروژه</div>
+      <div class="viewer-report-note">پیام‌هایی که اینجا می‌نویسید مستقیم برای مدیر (کنترل پروژه) ارسال می‌شود — مخصوص موضوعات کلی، نه یک قرارداد خاص.</div>
+      <div class="comment-add-row" style="margin-bottom:12px;">
+        <input type="text" id="pmNoteInput" class="auth-input" style="max-width:none; flex:1;" placeholder="پیام خود را بنویسید...">
+        <button class="field-save" onclick="sendPmNote()">ارسال</button>
+      </div>
+      <div id="pmNotesList">${renderPmNotesListHtml(false)}</div>`;
+    return;
+  }
+  body.innerHTML = `
+    <div class="section-title" style="margin-top:18px;">${viewerSectionTitle()} <span class="cnt" id="viewerSecCount"></span></div>
+    <input type="text" id="viewerSearch" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(viewerSearchQuery)}" class="auth-input" style="max-width:none;width:100%;margin-bottom:10px;" oninput="onViewerSearch(this.value)">
+    <div id="viewerList"></div>`;
+  renderViewerSectionList();
+}
+function renderViewerSectionList(){
   const el = document.getElementById('viewerList');
   if(!el) return;
   const q = viewerSearchQuery.trim().toLowerCase();
-  let items = contracts;
+  let items = viewerSectionContracts();
   if(q) items = items.filter(c => (c.name||'').toLowerCase().includes(q) || (c.itemCode||'').toLowerCase().includes(q));
   items = items.slice().sort((a,b) => { const ac = isCompleted(a), bc = isCompleted(b); return ac===bc ? 0 : (ac?1:-1); });
-  const cntEl = document.getElementById('viewerCount');
+  const cntEl = document.getElementById('viewerSecCount');
   if(cntEl) cntEl.textContent = items.length + ' مورد';
   if(!items.length){ el.innerHTML = '<div class="empty">موردی یافت نشد.</div>'; return; }
   el.innerHTML = items.map(c => renderViewerCard(c)).join('');
@@ -649,6 +809,7 @@ function renderViewerCard(c){
   const done = isCompleted(c);
   const vs = viewerCriticalStatus(c);
   const isOpen = viewerOpenId === c.id;
+  const hOpen = !!viewerHistoryOpen[c.id]; // همیشه پیش‌فرض بسته
   const commentCount = (c.comments||[]).length;
   const panelWait = isPanelWaiting(c);
   const badges = [];
@@ -665,7 +826,7 @@ function renderViewerCard(c){
   }).join('');
   const history = c.history || [];
   const histHtml = history.slice().reverse().slice(0,20).map(h =>
-    `<div class="hist-item"><span>${escapeHtml(h.label)}</span><span class="hist-time">${fmtTime(h.time)}${h.by?' — '+escapeHtml(h.by.split('@')[0]):''}</span></div>`
+    `<div class="hist-item"><span>${escapeHtml(h.label)}</span><span class="hist-time">${fmtTime(h.time)}${h.by?' — '+authorLabel(h):''}</span></div>`
   ).join('') || '<div class="hist-item"><span>—</span></div>';
 
   return `
@@ -683,19 +844,23 @@ function renderViewerCard(c){
       <div class="body-panel ${isOpen?'open':''}">
         ${c.description ? `<div class="field-row text"><label>توضیحات:</label><span style="flex:1; font-size:12.5px;">${escapeHtml(c.description)}</span></div>` : ''}
         <div class="timeline">${timelineHtml}</div>
-        <div class="hist-title">تاریخچه</div>
-        ${histHtml}
+        <div class="hist-title" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center;" onclick="event.stopPropagation(); toggleViewerHistory('${c.id}')">
+          <span>تاریخچه ${hOpen ? '▲' : '▼'}</span>
+        </div>
+        ${hOpen ? histHtml : ''}
         ${renderCommentsHtml(c, 'v')}
       </div>
     </div>`;
 }
 function toggleViewerCard(id){ viewerOpenId = viewerOpenId===id ? null : id; renderApp(); }
+function toggleViewerHistory(id){ viewerHistoryOpen[id] = !viewerHistoryOpen[id]; renderApp(); }
 
 
 /* ---------- Admin view (V9 — Professional Dashboard) ---------- */
 function renderAdmin(el){
   const pendingCount = usersList.filter(u => u.role === 'pending').length;
   const alertCount = adminAlerts().length;
+  const pmoUnseen = pmoUnseenCount();
   el.innerHTML = `
     <div class="toolbar">
       <button class="btn-primary" onclick="openAddModal()">+ قرارداد جدید</button>
@@ -709,6 +874,8 @@ function renderAdmin(el){
     </div>
     <div class="tabs" style="margin-top:8px;">
       <button class="${adminTab==='log'?'active':''}" onclick="switchAdminTab('log')">لاگ سیستم</button>
+      <button class="${adminTab==='pmoComments'?'active':''}" onclick="switchAdminTab('pmoComments')">💬 کامنت‌های مدیر پروژه ${pmoUnseen?('('+pmoUnseen+')'):''}</button>
+      <button class="${adminTab==='pmoMessages'?'active':''}" onclick="switchAdminTab('pmoMessages')">✉️ ارتباط با مدیر</button>
     </div>
     <div id="adminBody"></div>
     <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
@@ -717,7 +884,15 @@ function renderAdmin(el){
   if(adminTab === 'dashboard') renderAdminDashboard();
   else if(adminTab === 'contracts') renderAdminContracts();
   else if(adminTab === 'log') renderAdminLog();
-  else renderAdminUsers();
+  else if(adminTab === 'pmoComments'){
+    document.getElementById('adminBody').innerHTML = renderPmoCommentsHtml();
+    renderPmoCommentsList();
+  } else if(adminTab === 'pmoMessages'){
+    document.getElementById('adminBody').innerHTML = `
+      <div class="section-title" style="margin-top:14px;">✉️ ارتباط با مدیر</div>
+      <div class="viewer-report-note">پیام‌های عمومی که مدیر پروژه (بدون اشاره به قرارداد خاصی) برای شما فرستاده.</div>
+      <div id="pmNotesList">${renderPmNotesListHtml(true)}</div>`;
+  } else renderAdminUsers();
 }
 function switchAdminTab(t){ adminTab = t; renderApp(); }
 
@@ -1017,6 +1192,146 @@ async function exportPDF(){
   }
 }
 
+/* ---------- خروجی مخصوص مدیر پروژه — ستون‌های خلاصه‌تر (بدون جزئیات ریز مثل روز بروزرسانی) + نمودار ---------- */
+function viewerExportRows(){
+  return getExportContracts().map(c => ({
+    'نام قرارداد': c.name || '',
+    'کد قلم': c.itemCode || '',
+    'مرحله فعلی': STAGES[getDisplayStageIndex(c)].name,
+    'پیشرفت': overallPercent(c) + '%',
+    'وضعیت': isCompleted(c) ? 'خاتمه‌یافته' : viewerCriticalStatus(c).label
+  }));
+}
+function viewerChartRowsForPdf(){
+  const counts = STAGES.map((s,i) => contracts.filter(c => getDisplayStageIndex(c) === i).length);
+  const max = Math.max(1, ...counts);
+  return STAGES.map((s,i) => `
+    <div style="display:flex; align-items:center; gap:8px; margin-bottom:7px;">
+      <div style="width:140px; font-size:10px; color:#333; flex-shrink:0;">${escapeHtml(s.name)}</div>
+      <div style="flex:1; background:#eee; border-radius:4px; height:14px; overflow:hidden;">
+        <div style="width:${(counts[i]/max*100)}%; background:#0f766e; height:100%;"></div>
+      </div>
+      <div style="width:22px; text-align:left; font-size:10px; color:#333;">${counts[i]}</div>
+    </div>`).join('');
+}
+async function exportExcelViewer(){
+  if(getExportContracts().length === 0){
+    alert('با این فیلترها هیچ قراردادی پیدا نشد. فیلترها را بررسی کنید.');
+    return;
+  }
+  const btn = document.getElementById('exportExcelBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
+  try{
+    const s = computeViewerStats();
+    const summaryRows = [
+      ['گزارش افراچوب — مدیر پروژه', ''],
+      ['تاریخ گزارش', todayJalaliLabel()],
+      ['دامنه‌ی خروجی', exportScopeLabel()],
+      [],
+      ['کل قراردادها', contracts.length],
+      ['خاتمه نیافته', s.active.length],
+      ['خاتمه‌یافته', s.completed.length],
+      ['بحرانی', s.criticalList.length],
+      ['نزدیک سررسید', s.nearList.length],
+      ['منتظر نصب صفحه کابینت', s.panelWaitList.length],
+      ['در انتظار تحویل‌دهی به مالک', s.waitingDeliveryList.length],
+      [],
+      ['پراکندگی بر اساس مرحله', '']
+    ];
+    STAGES.forEach((st,i) => summaryRows.push([st.name, contracts.filter(c => getDisplayStageIndex(c)===i).length]));
+    const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+    wsSummary['!cols'] = [{wch:30},{wch:24}];
+
+    const rows = viewerExportRows();
+    const wsList = XLSX.utils.json_to_sheet(rows);
+    wsList['!cols'] = [{wch:24},{wch:14},{wch:24},{wch:10},{wch:26}];
+
+    const wb = XLSX.utils.book_new();
+    wb.Workbook = { Views: [{ RTL: true }] };
+    XLSX.utils.book_append_sheet(wb, wsSummary, 'خلاصه و پراکندگی مراحل');
+    XLSX.utils.book_append_sheet(wb, wsList, 'قراردادها');
+    XLSX.writeFile(wb, `افراچوب-گزارش-مدیر-پروژه-${new Date().toISOString().slice(0,10)}.xlsx`);
+  }catch(err){
+    alert('خطا در ساخت فایل اکسل: ' + err.message);
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '📊 خروجی اکسل'; }
+  }
+}
+async function exportPDFViewer(){
+  if(getExportContracts().length === 0){
+    alert('با این فیلترها هیچ قراردادی پیدا نشد. فیلترها را بررسی کنید.');
+    return;
+  }
+  const btn = document.getElementById('exportPdfBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
+  const holder = document.createElement('div');
+  holder.style.cssText = 'position:fixed; top:0; left:-99999px; width:820px; background:#ffffff; color:#1a1a1a; font-family:Vazirmatn,sans-serif; direction:rtl; padding:28px;';
+  const s = computeViewerStats();
+  const rows = viewerExportRows();
+  const kpi = (label, val) => `<div style="border:1px solid #ddd; border-radius:8px; padding:12px; text-align:center;">
+      <div style="font-size:20px; font-weight:900;">${val}</div>
+      <div style="font-size:11px; color:#666; margin-top:4px;">${label}</div>
+    </div>`;
+  holder.innerHTML = `
+    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #222; padding-bottom:12px; margin-bottom:8px;">
+      <div style="font-size:20px; font-weight:900;">گزارش افراچوب — مدیر پروژه</div>
+      <div style="font-size:12px; color:#555;">${todayJalaliLabel()}</div>
+    </div>
+    <div style="font-size:11px; color:#666; margin-bottom:16px;">دامنه‌ی خروجی: ${escapeHtml(exportScopeLabel())}</div>
+    <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:20px;">
+      ${kpi('کل قراردادها', contracts.length)}
+      ${kpi('خاتمه نیافته', s.active.length)}
+      ${kpi('خاتمه‌یافته', s.completed.length)}
+      ${kpi('بحرانی', s.criticalList.length)}
+      ${kpi('نزدیک سررسید', s.nearList.length)}
+      ${kpi('منتظر نصب صفحه', s.panelWaitList.length)}
+    </div>
+    <div style="font-size:13px; font-weight:800; margin-bottom:10px;">پراکندگی قراردادها بر اساس مرحله</div>
+    <div style="margin-bottom:22px;">${viewerChartRowsForPdf()}</div>
+    <table style="width:100%; border-collapse:collapse; font-size:10.5px;">
+      <thead>
+        <tr style="background:#222; color:#fff;">
+          ${['نام قرارداد','کد قلم','مرحله فعلی','پیشرفت','وضعیت'].map(h=>`<th style="padding:6px 8px; text-align:right; border:1px solid #333;">${h}</th>`).join('')}
+        </tr>
+      </thead>
+      <tbody>
+        ${rows.map((r,i) => `<tr style="background:${i%2?'#f5f5f5':'#fff'};">
+          <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['نام قرارداد'])}</td>
+          <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['کد قلم'])}</td>
+          <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['مرحله فعلی'])}</td>
+          <td style="padding:6px 8px; border:1px solid #ddd;">${r['پیشرفت']}</td>
+          <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['وضعیت'])}</td>
+        </tr>`).join('')}
+      </tbody>
+    </table>
+  `;
+  document.body.appendChild(holder);
+  try{
+    const canvas = await html2canvas(holder, { scale:2, backgroundColor:'#ffffff', useCORS:true });
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF('p', 'pt', 'a4');
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const imgW = pageW;
+    const imgH = canvas.height * (imgW / canvas.width);
+    let remaining = imgH, position = 0, first = true;
+    const imgData = canvas.toDataURL('image/jpeg', 0.92);
+    while(remaining > 0){
+      if(!first) pdf.addPage();
+      pdf.addImage(imgData, 'JPEG', 0, position, imgW, imgH);
+      remaining -= pageH;
+      position -= pageH;
+      first = false;
+    }
+    pdf.save(`افراچوب-گزارش-مدیر-پروژه-${new Date().toISOString().slice(0,10)}.pdf`);
+  }catch(err){
+    alert('خطا در ساخت فایل PDF: ' + err.message);
+  }finally{
+    document.body.removeChild(holder);
+    if(btn){ btn.disabled = false; btn.textContent = '📄 خروجی PDF (شامل نمودار)'; }
+  }
+}
+
 function renderMgmtList(){
   const el = document.getElementById('mgmtList');
   if(!el) return;
@@ -1120,7 +1435,7 @@ function renderAdminLog(){
             <span class="log-time">${fmtTime(new Date(r.time).toISOString())}</span>
           </div>
           <div class="log-meta">
-            ${r.contractName ? 'قرارداد: '+escapeHtml(r.contractName)+' — ' : ''}${escapeHtml((r.by||'').split('@')[0])}
+            ${r.contractName ? 'قرارداد: '+escapeHtml(r.contractName)+' — ' : ''}${authorLabel(r)}
             ${r.details ? '<br>'+escapeHtml(r.details) : ''}
           </div>
         </div>`).join('') : '<div class="empty">موردی یافت نشد.</div>'}
@@ -1140,7 +1455,7 @@ function renderAdminUsers(){
     if(u.role === 'pending'){
       actions = `<button class="btn-approve" onclick="openApproveModal('${u.id}','${escapeHtml(u.name||'')}')">تایید و تعیین سمت</button>
                  <button class="btn-block" onclick="setUserRole('${u.id}','blocked')">رد</button>`;
-    } else if(u.role === 'supervisor'){
+    } else if(u.role === 'supervisor' || u.role === 'viewer'){
       actions = `<button class="btn-revoke" onclick="setUserRole('${u.id}','pending')">لغو دسترسی</button>
                  <button class="btn-block" onclick="setUserRole('${u.id}','blocked')">مسدود کن</button>`;
     } else if(u.role === 'blocked'){
@@ -1316,7 +1631,7 @@ function renderCard(c, isAdmin, forceOpen){
   const history = c.history || [];
   const hOpen = isHistoryOpen(c.id, isAdmin);
   const histHtml = history.slice().reverse().slice(0,30).map(h =>
-    `<div class="hist-item"><span>${escapeHtml(h.label)}</span><span class="hist-time">${fmtTime(h.time)}${h.by ? ' — '+escapeHtml(h.by.split('@')[0]) : ''}</span></div>`
+    `<div class="hist-item"><span>${escapeHtml(h.label)}</span><span class="hist-time">${fmtTime(h.time)}${h.by ? ' — '+authorLabel(h) : ''}</span></div>`
   ).join('') || '<div class="hist-item"><span>—</span></div>';
 
   const dueFieldHtml = isAdmin ? `
