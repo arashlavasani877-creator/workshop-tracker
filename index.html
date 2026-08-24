@@ -245,6 +245,9 @@
   .comment-time-wrap{ display:flex; align-items:center; gap:6px; }
   .comment-time{ color:var(--ink-faint); font-family:'JetBrains Mono',monospace; white-space:nowrap; }
   .comment-del{ border:none; background:none; color:var(--red); font-size:12px; cursor:pointer; padding:0 2px; line-height:1; }
+  .pm-seen{ display:block; font-size:9.5px; color:var(--teal); margin-top:5px; font-family:'JetBrains Mono',monospace; }
+  .pm-thread{ background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px; margin-bottom:14px; }
+  .pm-thread-title{ font-size:12.5px; font-weight:800; color:var(--teal); margin-bottom:8px; }
   .comment-text{ font-size:12.5px; margin-top:4px; line-height:1.7; }
   .comment-add-row{ display:flex; gap:8px; margin-top:10px; }
   .comment-add-row input{ direction:rtl; text-align:right; }
@@ -313,6 +316,7 @@
     <input id="newName" placeholder="نام مشتری / کد قرارداد" />
     <input id="newItemCode" placeholder="کد قلم (اختیاری)" />
     <input id="newContractDate" placeholder="تاریخ قرارداد (اختیاری) — 1405/06/04" style="direction:ltr; text-align:center; font-family:'JetBrains Mono',monospace;" />
+    <input id="newDueDate" placeholder="سررسید (اختیاری) — 1405/06/04" style="direction:ltr; text-align:center; font-family:'JetBrains Mono',monospace;" />
     <div class="row">
       <button class="save-btn" onclick="addContract()">ثبت</button>
       <button class="cancel-btn" onclick="closeModal('addModalBg')">انصراف</button>

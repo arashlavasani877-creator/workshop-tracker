@@ -35,10 +35,14 @@ let viewerOpenId = null;
 let viewerSearchQuery = '';
 let viewerSection = null;     // null | 'critical' | 'panelwait' | 'waitingdelivery' | 'all' | 'contact'
 let viewerHistoryOpen = {};   // id -> bool — برای مدیر پروژه همیشه پیش‌فرض بسته
-let pmNotes = [];             // پیام‌های عمومی «ارتباط با کنترل پروژه» / «ارتباط با مدیر»
+let pmNotes = [];             // پیام‌های عمومی «ارتباط با کنترل پروژه» / «ارتباط با مدیر» — لیست ادغام‌شده‌ی نهایی
+let pmNotesA = [];            // نتیجه‌ی listener اول (برای مدیر پروژه: پیام‌های خودش)
+let pmNotesB = [];            // نتیجه‌ی listener دوم (برای مدیر پروژه: پاسخ‌های مدیر)
 let pmoCommentsSearch = '';   // جستجو در بخش «کامنت‌های مدیر پروژه» (پنل مدیر/سرپرست)
 const PMO_DISPLAY_NAME = 'مدیر پروژه مهندس سمنانی'; // به‌جای ایمیل مدیر پروژه، همه‌جا همین نام نشان داده می‌شود
 let activityLog = [];
+let adminDashSection = null;  // null | 'critical' | 'waitingdelivery' | 'panelwait' — دکمه‌های داشبورد مدیر
+let adminDashSearch = '';
 let exportScope = 'all';   // 'all' | 'active' | 'closed' | 'waiting'
 let exportDateFrom = '';
 let exportDateTo = '';
@@ -347,14 +351,22 @@ function renderPmoCommentsList(){
       </div>`).join('');
 }
 
-/* ---------- ارتباط با کنترل پروژه / ارتباط با مدیر — پیام عمومی، مستقل از قرارداد خاص ---------- */
-async function sendPmNote(){
+/* ---------- ارتباط با کنترل پروژه / ارتباط با مدیر — پیام عمومی، مستقل از قرارداد خاص، دوطرفه با وضعیت «دیده شد» ---------- */
+function mergePmNotesAB(){
+  const map = {};
+  pmNotesA.concat(pmNotesB).forEach(n => { map[n.id] = n; });
+  pmNotes = Object.values(map);
+}
+async function sendPmNote(toUid){
   if(!db || !currentUser) return;
-  const input = document.getElementById('pmNoteInput');
+  const inputId = toUid ? ('pmReply_' + toUid) : 'pmNoteInput';
+  const input = document.getElementById(inputId);
   const text = input ? input.value.trim() : '';
   if(!text) return;
   try{
-    await db.collection('pmNotes').add({ text, by: currentUser.email||'', byRole: myRole||'', byUid: currentUser.uid, time: Date.now() });
+    const doc = { text, by: currentUser.email||'', byRole: myRole||'', byUid: currentUser.uid, time: Date.now(), seen: false };
+    if(toUid) doc.toUid = toUid;
+    await db.collection('pmNotes').add(doc);
     if(input) input.value = '';
   }catch(err){
     alert('خطا در ارسال پیام: ' + (err && err.message ? err.message : String(err)));
@@ -365,20 +377,61 @@ async function deletePmNote(id){
   if(!confirm('این پیام حذف شود؟')) return;
   try{ await db.collection('pmNotes').doc(id).delete(); }catch(err){ alert('خطا در حذف: ' + (err && err.message ? err.message : String(err))); }
 }
-function renderPmNotesListHtml(canDeleteAll){
-  const items = pmNotes.slice().sort((a,b) => (b.time||0)-(a.time||0));
+// وقتی طرف مقابل پیام رو باز/می‌بینه، این تابع اون پیام‌های ندیده رو seen می‌کنه (بی‌صدا، بدون رندر مجدد دستی)
+async function markPmNotesSeen(filterFn){
+  if(!db) return;
+  const unseen = pmNotes.filter(n => !n.seen && filterFn(n));
+  if(!unseen.length) return;
+  try{
+    const batch = db.batch();
+    unseen.forEach(n => batch.update(db.collection('pmNotes').doc(n.id), { seen: true }));
+    await batch.commit();
+  }catch(e){ /* غیر حیاتیه — اگه ناموفق بود، دفعه‌ی بعد دوباره تلاش می‌شه */ }
+}
+function pmMessagesUnseenCountForAdmin(){ return pmNotes.filter(n => n.byRole === 'viewer' && !n.seen).length; }
+function pmMessagesUnseenCountForViewer(){ return currentUser ? pmNotes.filter(n => n.byRole === 'admin' && n.toUid === currentUser.uid && !n.seen).length : 0; }
+function renderPmMessageHtml(n){
+  const seenTag = n.seen ? '<span class="pm-seen">✓ دیده شد</span>' : '';
+  const canDelete = currentUser && (n.byUid === currentUser.uid || myRole === 'admin');
+  const who = n.byRole === 'admin' ? 'مدیر (کنترل پروژه)' : PMO_DISPLAY_NAME;
+  return `
+    <div class="comment-item">
+      <div class="comment-top">
+        <span class="comment-by">${who}</span>
+        <span class="comment-time-wrap"><span class="comment-time">${fmtTime(new Date(n.time).toISOString())}</span>${canDelete?`<button class="comment-del" title="حذف پیام" onclick="deletePmNote('${n.id}')">✕</button>`:''}</span>
+      </div>
+      <div class="comment-text">${escapeHtml(n.text)}</div>
+      ${seenTag}
+    </div>`;
+}
+function renderPmNotesFlatHtml(){
+  const items = pmNotes.slice().sort((a,b) => (a.time||0)-(b.time||0));
   if(!items.length) return '<div class="empty" style="padding:14px;">هنوز پیامی ثبت نشده.</div>';
-  return items.map(n => {
-    const canDelete = canDeleteAll || (currentUser && n.byUid === currentUser.uid);
-    return `
-      <div class="comment-item">
-        <div class="comment-top">
-          <span class="comment-by">${authorLabel(n)}</span>
-          <span class="comment-time-wrap"><span class="comment-time">${fmtTime(new Date(n.time).toISOString())}</span>${canDelete?`<button class="comment-del" title="حذف پیام" onclick="deletePmNote('${n.id}')">✕</button>`:''}</span>
-        </div>
-        <div class="comment-text">${escapeHtml(n.text)}</div>
-      </div>`;
-  }).join('');
+  return items.map(renderPmMessageHtml).join('');
+}
+// پنل مدیر: پیام‌ها را بر اساس مدیر پروژه‌ی فرستنده/گیرنده گروه‌بندی می‌کند (برای پشتیبانی از چند مدیر پروژه در آینده)
+function pmConversations(){
+  const map = {};
+  pmNotes.forEach(n => {
+    const otherUid = n.byRole === 'viewer' ? n.byUid : n.toUid;
+    if(!otherUid) return;
+    if(!map[otherUid]) map[otherUid] = [];
+    map[otherUid].push(n);
+  });
+  return Object.keys(map).map(uid => ({ uid, messages: map[uid].sort((a,b) => (a.time||0)-(b.time||0)) }));
+}
+function renderPmConversationsHtml(){
+  const convos = pmConversations();
+  if(!convos.length) return '<div class="empty">هنوز پیامی از مدیر پروژه دریافت نشده.</div>';
+  return convos.map(cv => `
+    <div class="pm-thread">
+      <div class="pm-thread-title">${PMO_DISPLAY_NAME}</div>
+      ${cv.messages.map(renderPmMessageHtml).join('')}
+      <div class="comment-add-row">
+        <input type="text" id="pmReply_${cv.uid}" class="auth-input" style="max-width:none; flex:1;" placeholder="پاسخ...">
+        <button class="field-save" onclick="sendPmNote('${cv.uid}')">ارسال</button>
+      </div>
+    </div>`).join('');
 }
 
 
@@ -509,7 +562,13 @@ function ensureDataSubscriptions(){
   }
   if(myRole === 'viewer'){
     db.collection('pmNotes').where('byUid','==', currentUser.uid).onSnapshot((snap) => {
-      pmNotes = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+      pmNotesA = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+      mergePmNotesAB();
+      renderApp();
+    }, () => {});
+    db.collection('pmNotes').where('toUid','==', currentUser.uid).onSnapshot((snap) => {
+      pmNotesB = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+      mergePmNotesAB();
       renderApp();
     }, () => {});
   }
@@ -724,7 +783,7 @@ function renderViewer(el){
       <button class="${viewerSection==='panelwait'?'active':''}" onclick="switchViewerSection('panelwait')">🛠 منتظر نصب صفحه کابینت ${s.panelWaitList.length?('('+s.panelWaitList.length+')'):''}</button>
       <button class="${viewerSection==='waitingdelivery'?'active':''}" onclick="switchViewerSection('waitingdelivery')">📦 در انتظار تحویل‌دهی به مالک ${s.waitingDeliveryList.length?('('+s.waitingDeliveryList.length+')'):''}</button>
       <button class="${viewerSection==='all'?'active':''}" onclick="switchViewerSection('all')">📋 همه قراردادها (${contracts.length})</button>
-      <button class="${viewerSection==='contact'?'active':''}" onclick="switchViewerSection('contact')">✉️ ارتباط با کنترل پروژه</button>
+      <button class="${viewerSection==='contact'?'active':''}" onclick="switchViewerSection('contact')">✉️ ارتباط با کنترل پروژه ${pmMessagesUnseenCountForViewer()?('('+pmMessagesUnseenCountForViewer()+')'):''}</button>
     </div>
 
     <div id="viewerSectionBody"></div>
@@ -774,14 +833,15 @@ function renderViewerSectionBody(){
   if(!body) return;
   if(!viewerSection){ body.innerHTML = ''; return; }
   if(viewerSection === 'contact'){
+    markPmNotesSeen(n => n.byRole === 'admin' && currentUser && n.toUid === currentUser.uid);
     body.innerHTML = `
       <div class="section-title" style="margin-top:18px;">✉️ ارتباط با کنترل پروژه</div>
       <div class="viewer-report-note">پیام‌هایی که اینجا می‌نویسید مستقیم برای مدیر (کنترل پروژه) ارسال می‌شود — مخصوص موضوعات کلی، نه یک قرارداد خاص.</div>
-      <div class="comment-add-row" style="margin-bottom:12px;">
+      <div id="pmNotesList">${renderPmNotesFlatHtml()}</div>
+      <div class="comment-add-row" style="margin-top:12px;">
         <input type="text" id="pmNoteInput" class="auth-input" style="max-width:none; flex:1;" placeholder="پیام خود را بنویسید...">
         <button class="field-save" onclick="sendPmNote()">ارسال</button>
-      </div>
-      <div id="pmNotesList">${renderPmNotesListHtml(false)}</div>`;
+      </div>`;
     return;
   }
   body.innerHTML = `
@@ -861,6 +921,7 @@ function renderAdmin(el){
   const pendingCount = usersList.filter(u => u.role === 'pending').length;
   const alertCount = adminAlerts().length;
   const pmoUnseen = pmoUnseenCount();
+  const pmMsgUnseen = pmMessagesUnseenCountForAdmin();
   el.innerHTML = `
     <div class="toolbar">
       <button class="btn-primary" onclick="openAddModal()">+ قرارداد جدید</button>
@@ -875,7 +936,7 @@ function renderAdmin(el){
     <div class="tabs" style="margin-top:8px;">
       <button class="${adminTab==='log'?'active':''}" onclick="switchAdminTab('log')">لاگ سیستم</button>
       <button class="${adminTab==='pmoComments'?'active':''}" onclick="switchAdminTab('pmoComments')">💬 کامنت‌های مدیر پروژه ${pmoUnseen?('('+pmoUnseen+')'):''}</button>
-      <button class="${adminTab==='pmoMessages'?'active':''}" onclick="switchAdminTab('pmoMessages')">✉️ ارتباط با مدیر</button>
+      <button class="${adminTab==='pmoMessages'?'active':''}" onclick="switchAdminTab('pmoMessages')">✉️ ارتباط با مدیر ${pmMsgUnseen?('('+pmMsgUnseen+')'):''}</button>
     </div>
     <div id="adminBody"></div>
     <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
@@ -888,10 +949,11 @@ function renderAdmin(el){
     document.getElementById('adminBody').innerHTML = renderPmoCommentsHtml();
     renderPmoCommentsList();
   } else if(adminTab === 'pmoMessages'){
+    markPmNotesSeen(n => n.byRole === 'viewer');
     document.getElementById('adminBody').innerHTML = `
       <div class="section-title" style="margin-top:14px;">✉️ ارتباط با مدیر</div>
-      <div class="viewer-report-note">پیام‌های عمومی که مدیر پروژه (بدون اشاره به قرارداد خاصی) برای شما فرستاده.</div>
-      <div id="pmNotesList">${renderPmNotesListHtml(true)}</div>`;
+      <div class="viewer-report-note">گفتگوی عمومی با مدیر پروژه — مستقل از یک قرارداد خاص. می‌توانید مستقیماً از همین‌جا پاسخ بدهید.</div>
+      <div id="pmConvos">${renderPmConversationsHtml()}</div>`;
   } else renderAdminUsers();
 }
 function switchAdminTab(t){ adminTab = t; renderApp(); }
@@ -927,9 +989,8 @@ function renderStageChartHtml(){
 function renderAdminDashboard(){
   const body = document.getElementById('adminBody');
   const stats = computeDashboardStats();
-  const { totalAll, closedCount: closedLen, delayed, nearDue, notUpdated, waitingDelivery } = stats;
-  const alerts = adminAlerts();
-  const needAction = new Set(alerts.map(a => a.c.id)).size;
+  const { totalAll, closedCount: closedLen, delayed, nearDue, notUpdated } = stats;
+  const vs = computeViewerStats();
 
   body.innerHTML = `
     <div class="kpi-grid">
@@ -938,28 +999,62 @@ function renderAdminDashboard(){
       <div class="kpi-card kpi-red"><div class="kpi-num">${delayed}</div><div class="kpi-label">عقب‌افتاده</div></div>
       <div class="kpi-card kpi-amber"><div class="kpi-num">${nearDue}</div><div class="kpi-label">نزدیک سررسید</div></div>
       <div class="kpi-card kpi-blue" style="cursor:pointer;" onclick="openNotUpdatedList()"><div class="kpi-num">${notUpdated}</div><div class="kpi-label">بروزرسانی نشده</div></div>
-      <div class="kpi-card"><div class="kpi-num">${waitingDelivery}</div><div class="kpi-label">در انتظار تحویل‌دهی به مالک</div></div>
+      <div class="kpi-card"><div class="kpi-num">${vs.waitingDeliveryList.length}</div><div class="kpi-label">در انتظار تحویل‌دهی به مالک</div></div>
     </div>
     ${renderStageChartHtml()}
-    <div class="section-title" style="margin-top:20px;">نیازمند اقدام <span class="cnt">${needAction} مورد</span></div>
-    <div id="actionList"></div>
+    <div class="viewer-quicklinks" style="margin-top:20px;">
+      <button class="${adminDashSection==='critical'?'active':''}" onclick="switchAdminDashSection('critical')">🔴 بحرانی ${vs.criticalList.length?('('+vs.criticalList.length+')'):''}</button>
+      <button class="${adminDashSection==='waitingdelivery'?'active':''}" onclick="switchAdminDashSection('waitingdelivery')">📦 در انتظار تحویل‌دهی به مالک ${vs.waitingDeliveryList.length?('('+vs.waitingDeliveryList.length+')'):''}</button>
+      <button class="${adminDashSection==='panelwait'?'active':''}" onclick="switchAdminDashSection('panelwait')">🛠 منتظر نصب صفحه کابینت ${vs.panelWaitList.length?('('+vs.panelWaitList.length+')'):''}</button>
+    </div>
+    <div id="adminDashSectionBody"></div>
   `;
-  const actionList = document.getElementById('actionList');
-  if(!alerts.length){
-    actionList.innerHTML = '<div class="empty">موردی نیازمند اقدام فوری نیست.</div>';
-    return;
-  }
-  actionList.innerHTML = alerts.map(a => {
-    const idx = getDisplayStageIndex(a.c);
-    const pct = overallPercent(a.c);
-    const tagColor = a.type === 'late' ? 'red' : (a.type === 'near' ? 'amber' : '');
+  renderAdminDashSectionBody();
+}
+function switchAdminDashSection(sec){
+  adminDashSection = (adminDashSection === sec) ? null : sec;
+  adminDashSearch = '';
+  renderApp();
+}
+function adminDashSectionContracts(){
+  const vs = computeViewerStats();
+  if(adminDashSection === 'critical') return vs.criticalList;
+  if(adminDashSection === 'waitingdelivery') return vs.waitingDeliveryList;
+  if(adminDashSection === 'panelwait') return vs.panelWaitList;
+  return [];
+}
+function onAdminDashSearch(v){ adminDashSearch = v; renderAdminDashSectionList(); }
+function renderAdminDashSectionBody(){
+  const wrap = document.getElementById('adminDashSectionBody');
+  if(!wrap) return;
+  if(!adminDashSection){ wrap.innerHTML = ''; return; }
+  const titles = { critical:'قراردادهای بحرانی', waitingdelivery:'در انتظار تحویل‌دهی به مالک', panelwait:'منتظر نصب صفحه کابینت' };
+  wrap.innerHTML = `
+    <div class="section-title" style="margin-top:16px;">${titles[adminDashSection]} <span class="cnt" id="adminDashCount"></span></div>
+    <input type="text" id="adminDashSearchInput" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(adminDashSearch)}" class="auth-input" style="max-width:none;width:100%;margin-bottom:10px;" oninput="onAdminDashSearch(this.value)">
+    <div id="adminDashList"></div>`;
+  renderAdminDashSectionList();
+}
+function renderAdminDashSectionList(){
+  const el = document.getElementById('adminDashList');
+  if(!el) return;
+  let items = adminDashSectionContracts();
+  const q = adminDashSearch.trim().toLowerCase();
+  if(q) items = items.filter(c => (c.name||'').toLowerCase().includes(q) || (c.itemCode||'').toLowerCase().includes(q));
+  const cnt = document.getElementById('adminDashCount');
+  if(cnt) cnt.textContent = items.length + ' مورد';
+  if(!items.length){ el.innerHTML = '<div class="empty">موردی یافت نشد.</div>'; return; }
+  el.innerHTML = items.map(c => {
+    const idx = getDisplayStageIndex(c);
+    const pct = overallPercent(c);
+    const vsC = viewerCriticalStatus(c);
     return `
-      <div class="warn-item ${a.type==='near'?'soon':''}" style="cursor:pointer;" onclick="openContractDetail('${a.c.id}')">
+      <div class="warn-item" style="cursor:pointer;" onclick="openContractDetail('${c.id}')">
         <div>
-          <div class="warn-name">${escapeHtml(a.c.name)}</div>
+          <div class="warn-name">${escapeHtml(c.name)}</div>
           <div class="warn-sub">مرحله: ${STAGES[idx].name} — پیشرفت ${pct}٪</div>
         </div>
-        <span class="warn-tag ${tagColor}" style="${a.type==='stale' ? 'background:var(--teal-dim);color:var(--teal);' : ''}">${a.label}</span>
+        <span class="warn-tag ${vsC.cls==='late'?'red':''}">${vsC.label}</span>
       </div>`;
   }).join('');
 }
@@ -1067,6 +1162,17 @@ function todayJalaliLabel(){
   const d = new Date();
   return d.toLocaleDateString('fa-IR') + ' ساعت ' + d.toLocaleTimeString('fa-IR', {hour:'2-digit', minute:'2-digit'});
 }
+// برای اسم فایل: تاریخ شمسی با رقم لاتین و بدون «/» (چون «/» توی اسم فایل مجاز نیست)
+function todayJalaliFileLabel(){
+  try{
+    return new Date().toLocaleDateString('fa-IR-u-nu-latn').replace(/\//g, '-');
+  }catch(e){
+    return new Date().toISOString().slice(0,10);
+  }
+}
+function reportFileName(ext){
+  return `گزارش افراچوب - ${todayJalaliFileLabel()}.${ext}`;
+}
 
 function exportScopeLabel(){
   const map = { all:'همه قراردادها', active:'فقط فعال (بدون خاتمه)', closed:'فقط خاتمه‌یافته', waiting:'فقط در انتظار تحویل‌دهی' };
@@ -1107,7 +1213,7 @@ async function exportExcel(){
     wb.Workbook = { Views: [{ RTL: true }] };
     XLSX.utils.book_append_sheet(wb, wsSummary, 'خلاصه');
     XLSX.utils.book_append_sheet(wb, wsList, 'قراردادها');
-    XLSX.writeFile(wb, `افراچوب-گزارش-${new Date().toISOString().slice(0,10)}.xlsx`);
+    XLSX.writeFile(wb, reportFileName('xlsx'));
   }catch(err){
     alert('خطا در ساخت فایل اکسل: ' + err.message);
   }finally{
@@ -1183,7 +1289,7 @@ async function exportPDF(){
       position -= pageH;
       first = false;
     }
-    pdf.save(`افراچوب-گزارش-${new Date().toISOString().slice(0,10)}.pdf`);
+    pdf.save(reportFileName('pdf'));
   }catch(err){
     alert('خطا در ساخت فایل PDF: ' + err.message);
   }finally{
@@ -1250,7 +1356,7 @@ async function exportExcelViewer(){
     wb.Workbook = { Views: [{ RTL: true }] };
     XLSX.utils.book_append_sheet(wb, wsSummary, 'خلاصه و پراکندگی مراحل');
     XLSX.utils.book_append_sheet(wb, wsList, 'قراردادها');
-    XLSX.writeFile(wb, `افراچوب-گزارش-مدیر-پروژه-${new Date().toISOString().slice(0,10)}.xlsx`);
+    XLSX.writeFile(wb, reportFileName('xlsx'));
   }catch(err){
     alert('خطا در ساخت فایل اکسل: ' + err.message);
   }finally{
@@ -1323,7 +1429,7 @@ async function exportPDFViewer(){
       position -= pageH;
       first = false;
     }
-    pdf.save(`افراچوب-گزارش-مدیر-پروژه-${new Date().toISOString().slice(0,10)}.pdf`);
+    pdf.save(reportFileName('pdf'));
   }catch(err){
     alert('خطا در ساخت فایل PDF: ' + err.message);
   }finally{
@@ -1652,6 +1758,13 @@ function renderCard(c, isAdmin, forceOpen){
       <button class="field-save" onclick="saveRevisedDueDate('${c.id}')">ثبت</button>
     </div>`;
 
+  const nameFieldHtml = isAdmin ? `
+    <div class="field-row text">
+      <label>نام قرارداد:</label>
+      <input type="text" id="name_${c.id}" placeholder="نام مشتری / کد قرارداد" value="${escapeHtml(c.name||'')}">
+      <button class="field-save" onclick="saveName('${c.id}')">ثبت</button>
+    </div>` : '';
+
   const itemCodeFieldHtml = isAdmin ? `
     <div class="field-row text">
       <label>کد قلم:</label>
@@ -1690,6 +1803,7 @@ function renderCard(c, isAdmin, forceOpen){
         ${sched ? `<span class="schedule-tag">${sched}</span>` : ''}
       </div>`}
       <div class="body-panel ${isOpen ? 'open' : ''}">
+        ${nameFieldHtml}
         ${dueFieldHtml}
         ${revDueFieldHtml}
         ${itemCodeFieldHtml}
@@ -1800,6 +1914,15 @@ async function saveItemCode(id){
   await db.collection('contracts').doc(id).update({ itemCode: val, history });
   logActivity('ویرایش کد قلم', id, c && c.name, 'کد قلم: '+val);
 }
+async function saveName(id){
+  if(!db) return;
+  const val = document.getElementById(`name_${id}`).value.trim();
+  if(!val){ alert('نام قرارداد نمی‌تواند خالی باشد.'); return; }
+  const c = contracts.find(x => x.id === id);
+  const history = (c.history||[]).concat([historyEntry('نام قرارداد ویرایش شد: '+val)]);
+  await db.collection('contracts').doc(id).update({ name: val, history });
+  logActivity('ویرایش نام قرارداد', id, val, '');
+}
 async function saveContractDate(id){
   if(!db) return;
   const val = document.getElementById(`cdate_${id}`).value.trim();
@@ -1836,6 +1959,7 @@ function openAddModal(){
   document.getElementById('newName').value = '';
   document.getElementById('newItemCode').value = '';
   document.getElementById('newContractDate').value = '';
+  document.getElementById('newDueDate').value = '';
   document.getElementById('addModalBg').classList.add('open');
 }
 function closeModal(id){
@@ -1847,10 +1971,12 @@ async function addContract(){
   const name = document.getElementById('newName').value.trim();
   const itemCode = document.getElementById('newItemCode').value.trim();
   const contractDate = document.getElementById('newContractDate').value.trim();
+  const dueDate = document.getElementById('newDueDate').value.trim();
   if(!name) return;
   if(contractDate && !parseJalaliStr(contractDate)){ alert('فرمت تاریخ قرارداد درست نیست. مثال: 1405/06/04'); return; }
+  if(dueDate && !parseJalaliStr(dueDate)){ alert('فرمت سررسید درست نیست. مثال: 1405/06/04'); return; }
   const ref = await db.collection('contracts').add({
-    name, itemCode: itemCode || '', contractDate: contractDate || '',
+    name, itemCode: itemCode || '', contractDate: contractDate || '', dueDate: dueDate || '',
     status: {},
     history: [historyEntry('قرارداد ثبت شد')],
     createdAt: Date.now()
