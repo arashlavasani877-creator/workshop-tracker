@@ -34,6 +34,8 @@ let supervisorSearchQuery = '';
 let viewerOpenId = null;
 let viewerSearchQuery = '';
 let viewerSection = null;     // null | 'critical' | 'panelwait' | 'waitingdelivery' | 'all' | 'contact'
+let viewerFilterStage = 'all';  // فیلتر مرحله — فقط داخل بخش «همه قراردادها»ی پنل مدیر پروژه (V10)
+let viewerFilterStatus = 'all'; // فیلتر وضعیت — همون گزینه‌های فیلتر پنل مدیر (V10)
 let viewerHistoryOpen = {};   // id -> bool — برای مدیر پروژه همیشه پیش‌فرض بسته
 let pmNotes = [];             // پیام‌های عمومی «ارتباط با کنترل پروژه» / «ارتباط با مدیر» — لیست ادغام‌شده‌ی نهایی
 let pmNotesA = [];            // نتیجه‌ی listener اول (برای مدیر پروژه: پیام‌های خودش)
@@ -48,6 +50,8 @@ let afrTab = 'dashboard';     // 'dashboard' | 'contracts' | 'warnings' | 'close
 let afrSearchQuery = '';
 let afrDashSection = null;    // null | 'critical' | 'waitingdelivery' | 'panelwait'
 let afrDashSearch = '';
+let afrFilterStage = 'all';   // فیلتر مرحله — تب «قراردادها»ی پنل سرپرست افراچوب (مثل پنل مدیر)
+let afrFilterStatus = 'all';  // فیلتر وضعیت — همون گزینه‌های فیلتر پنل مدیر
 let exportScope = 'all';   // 'all' | 'active' | 'closed' | 'waiting'
 let exportDateFrom = '';
 let exportDateTo = '';
@@ -254,6 +258,7 @@ function isPanelWaiting(c){
 /* ---------- کامنت‌ها — مدیر پروژه فقط می‌بیند و کامنت می‌گذارد، مدیر و سرپرست هم می‌بینند و می‌توانند اقدام کنند ---------- */
 async function addComment(id, inputElId){
   if(!db || !currentUser) return;
+  if(myRole === 'afrachoobSupervisor') return; // V10: سرپرست افراچوب اجازه‌ی کامنت‌گذاری ندارد
   const input = document.getElementById(inputElId);
   const text = input ? input.value.trim() : '';
   if(!text) return;
@@ -788,6 +793,19 @@ function renderAfrachoobSupervisor(el){
     body.innerHTML = `
       <div class="section-title" style="margin-top:14px;">قراردادها <span class="cnt" id="afrCount"></span></div>
       <input type="text" id="afrSearch" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(afrSearchQuery)}" class="auth-input" style="max-width:none;width:100%;margin-bottom:10px;" oninput="onAfrSearch(this.value)">
+      <div style="display:flex; gap:8px; margin-bottom:14px;">
+        <select id="afrStageFilter" class="admin-select" onchange="onAfrStageFilter(this.value)">
+          <option value="all">همه مراحل</option>
+          ${STAGES.map((s,i) => `<option value="${i}" ${afrFilterStage===String(i)?'selected':''}>${s.name}</option>`).join('')}
+        </select>
+        <select id="afrStatusFilter" class="admin-select" onchange="onAfrStatusFilter(this.value)">
+          <option value="all">همه وضعیت‌ها</option>
+          <option value="late" ${afrFilterStatus==='late'?'selected':''}>عقب‌افتاده</option>
+          <option value="near" ${afrFilterStatus==='near'?'selected':''}>نزدیک سررسید</option>
+          <option value="stale" ${afrFilterStatus==='stale'?'selected':''}>بروزرسانی نشده</option>
+          <option value="closed" ${afrFilterStatus==='closed'?'selected':''}>خاتمه‌یافته</option>
+        </select>
+      </div>
       <div id="list"></div>`;
     renderAfrList();
   } else if(afrTab === 'warnings'){
@@ -802,9 +820,20 @@ function renderAfrachoobSupervisor(el){
 }
 function switchAfrTab(t){ afrTab = t; renderApp(); }
 function onAfrSearch(v){ afrSearchQuery = v; renderAfrList(); }
+function onAfrStageFilter(v){ afrFilterStage = v; renderAfrList(); }
+function onAfrStatusFilter(v){ afrFilterStatus = v; renderAfrList(); }
 function renderAfrList(){
   const q = afrSearchQuery.trim().toLowerCase();
-  const predicate = c => !isCompleted(c) && (!q || (c.name||'').toLowerCase().includes(q) || (c.itemCode||'').toLowerCase().includes(q));
+  const predicate = c => {
+    if(q && !((c.name||'').toLowerCase().includes(q) || (c.itemCode||'').toLowerCase().includes(q))) return false;
+    if(afrFilterStage !== 'all' && getDisplayStageIndex(c) !== parseInt(afrFilterStage,10)) return false;
+    if(afrFilterStatus === 'closed') return isCompleted(c);
+    if(afrFilterStatus !== 'all'){
+      if(isCompleted(c)) return false;
+      return afrFilterStatus === 'stale' ? isNotUpdated(c) : adminTimeStatus(c).cls === afrFilterStatus;
+    }
+    return true;
+  };
   const cntEl = document.getElementById('afrCount');
   if(cntEl) cntEl.textContent = contracts.filter(predicate).length + ' مورد';
   renderList(false, predicate);
@@ -940,6 +969,8 @@ function renderViewer(el){
 function switchViewerSection(sec){
   viewerSection = (viewerSection === sec) ? null : sec;
   viewerSearchQuery = '';
+  viewerFilterStage = 'all';
+  viewerFilterStatus = 'all';
   renderApp();
 }
 function onViewerSearch(v){ viewerSearchQuery = v; renderViewerSectionList(); }
@@ -973,15 +1004,39 @@ function renderViewerSectionBody(){
   body.innerHTML = `
     <div class="section-title" style="margin-top:18px;">${viewerSectionTitle()} <span class="cnt" id="viewerSecCount"></span></div>
     <input type="text" id="viewerSearch" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(viewerSearchQuery)}" class="auth-input" style="max-width:none;width:100%;margin-bottom:10px;" oninput="onViewerSearch(this.value)">
+    ${viewerSection === 'all' ? `
+    <div style="display:flex; gap:8px; margin-bottom:14px;">
+      <select id="viewerStageFilter" class="admin-select" onchange="onViewerStageFilter(this.value)">
+        <option value="all">همه مراحل</option>
+        ${STAGES.map((s,i) => `<option value="${i}" ${viewerFilterStage===String(i)?'selected':''}>${s.name}</option>`).join('')}
+      </select>
+      <select id="viewerStatusFilter" class="admin-select" onchange="onViewerStatusFilter(this.value)">
+        <option value="all">همه وضعیت‌ها</option>
+        <option value="late" ${viewerFilterStatus==='late'?'selected':''}>عقب‌افتاده</option>
+        <option value="near" ${viewerFilterStatus==='near'?'selected':''}>نزدیک سررسید</option>
+        <option value="stale" ${viewerFilterStatus==='stale'?'selected':''}>بروزرسانی نشده</option>
+        <option value="closed" ${viewerFilterStatus==='closed'?'selected':''}>خاتمه‌یافته</option>
+      </select>
+    </div>` : ''}
     <div id="viewerList"></div>`;
   renderViewerSectionList();
 }
+function onViewerStageFilter(v){ viewerFilterStage = v; renderViewerSectionList(); }
+function onViewerStatusFilter(v){ viewerFilterStatus = v; renderViewerSectionList(); }
 function renderViewerSectionList(){
   const el = document.getElementById('viewerList');
   if(!el) return;
   const q = viewerSearchQuery.trim().toLowerCase();
   let items = viewerSectionContracts();
   if(q) items = items.filter(c => (c.name||'').toLowerCase().includes(q) || (c.itemCode||'').toLowerCase().includes(q));
+  if(viewerSection === 'all'){
+    if(viewerFilterStage !== 'all') items = items.filter(c => getDisplayStageIndex(c) === parseInt(viewerFilterStage,10));
+    if(viewerFilterStatus === 'closed'){
+      items = items.filter(isCompleted);
+    } else if(viewerFilterStatus !== 'all'){
+      items = items.filter(c => !isCompleted(c) && (viewerFilterStatus === 'stale' ? isNotUpdated(c) : adminTimeStatus(c).cls === viewerFilterStatus));
+    }
+  }
   items = items.slice().sort((a,b) => { const ac = isCompleted(a), bc = isCompleted(b); return ac===bc ? 0 : (ac?1:-1); });
   const cntEl = document.getElementById('viewerSecCount');
   if(cntEl) cntEl.textContent = items.length + ' مورد';
@@ -1781,7 +1836,7 @@ function renderSupervisorRow(c){
   const done = isCompleted(c);
   const due = dueStatus(c);
   const badges = (c.itemCode ? `<span class="mini-badge">کد قلم: ${escapeHtml(c.itemCode)}</span>` : '')
-    + ((c.comments||[]).length ? `<span class="mini-badge">💬 ${c.comments.length}</span>` : '');
+    + (myRole !== 'afrachoobSupervisor' && (c.comments||[]).length ? `<span class="mini-badge">💬 ${c.comments.length}</span>` : '');
   return `
     <div class="card" style="cursor:pointer;" onclick="openContractDetail('${c.id}', false)">
       <div class="card-head">
@@ -1809,7 +1864,7 @@ function renderCard(c, isAdmin, forceOpen){
 
   const badges = [];
   if(c.itemCode) badges.push('<span class="mini-badge">کد قلم: ' + escapeHtml(c.itemCode) + '</span>');
-  if((c.comments||[]).length) badges.push('<span class="mini-badge">💬 ' + c.comments.length + '</span>');
+  if(myRole !== 'afrachoobSupervisor' && (c.comments||[]).length) badges.push('<span class="mini-badge">💬 ' + c.comments.length + '</span>');
 
   const timelineHtml = STAGES.map((st,i) => {
     const s = status[i] || {};
@@ -1865,6 +1920,10 @@ function renderCard(c, isAdmin, forceOpen){
   const histHtml = history.slice().reverse().slice(0,30).map(h =>
     `<div class="hist-item"><span>${escapeHtml(h.label)}</span><span class="hist-time">${fmtTime(h.time)}${h.by ? ' — '+authorLabel(h) : ''}</span></div>`
   ).join('') || '<div class="hist-item"><span>—</span></div>';
+  // V10: تاریخچه برای سرپرست نصب و سرپرست افراچوب اصلاً نمایش داده نمی‌شود (فقط مدیر می‌بیند)
+  const showHistory = (myRole !== 'supervisor' && myRole !== 'afrachoobSupervisor');
+  // V10: سرپرست افراچوب اجازه‌ی کامنت‌گذاری/دیدن کامنت‌های قرارداد را ندارد
+  const showComments = (myRole !== 'afrachoobSupervisor');
 
   const dueFieldHtml = isAdmin ? `
     <div class="field-row">
@@ -1936,12 +1995,13 @@ function renderCard(c, isAdmin, forceOpen){
         ${contractDateFieldHtml}
         ${descFieldHtml}
         <div class="timeline">${timelineHtml}</div>
+        ${showHistory ? `
         <div class="hist-title" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
           <span onclick="event.stopPropagation(); toggleHistory('${c.id}')">تاریخچه ${hOpen ? '▲' : '▼'}</span>
           ${isAdmin ? `<button onclick="event.stopPropagation(); clearHistory('${c.id}')" style="border:none;background:none;color:var(--red);font-size:10.5px;cursor:pointer;font-family:'Vazirmatn';text-decoration:underline;">پاک‌کردن تاریخچه</button>` : ''}
         </div>
-        ${hOpen ? histHtml : ''}
-        ${renderCommentsHtml(c, isAdmin ? 'a' : 's')}
+        ${hOpen ? histHtml : ''}` : ''}
+        ${showComments ? renderCommentsHtml(c, isAdmin ? 'a' : 's') : ''}
         ${isAdmin ? `<div class="del-row"><button onclick="event.stopPropagation(); deleteContract('${c.id}')">حذف قرارداد</button></div>` : ''}
       </div>
     </div>`;
