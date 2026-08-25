@@ -45,6 +45,8 @@ let adminDashSection = null;  // null | 'critical' | 'waitingdelivery' | 'panelw
 let adminDashSearch = '';
 let adminPlanContractId = '';
 let adminPlanData = null;
+let adminPlanSearchQuery = '';
+let adminPlanParallelMode = false;
 let exportScope = 'all';   // 'all' | 'active' | 'closed' | 'waiting'
 let exportDateFrom = '';
 let exportDateTo = '';
@@ -64,6 +66,11 @@ function toggleTheme(){
   const btn = document.getElementById('themeToggleBtn');
   if(btn) btn.textContent = document.documentElement.getAttribute('data-theme') === 'light' ? '☀️' : '🌙';
 }
+function refreshPanel(){
+  // فقط صفحه وب را تازه می‌کند؛ احراز هویت و داده‌های Firebase دست‌نخورده می‌مانند.
+  window.location.reload();
+}
+
 function hideSplash(){
   if(splashHidden) return;
   splashHidden = true;
@@ -703,6 +710,7 @@ function renderSupervisor(el){
   const closedCount = contracts.filter(isCompleted).length;
   const pmoUnseen = pmoUnseenCount();
   el.innerHTML = `
+    <div class="panel-topbar"><span>پنل سرپرست</span><button class="panel-refresh" onclick="refreshPanel()" title="تازه‌سازی صفحه" aria-label="تازه‌سازی صفحه">↻</button></div>
     <div class="toolbar"><button id="installBtn" class="btn-secondary" onclick="installApp()">نصب اپلیکیشن روی گوشی</button></div>
     <div class="tabs">
       <button class="${supervisorTab==='contracts'?'active':''}" onclick="switchSupervisorTab('contracts')">قراردادها</button>
@@ -759,6 +767,7 @@ function computeViewerStats(){
 function renderViewer(el){
   const s = computeViewerStats();
   el.innerHTML = `
+    <div class="panel-topbar"><span>پنل مدیر پروژه</span><button class="panel-refresh" onclick="refreshPanel()" title="تازه‌سازی صفحه" aria-label="تازه‌سازی صفحه">↻</button></div>
     <div class="viewer-hero">
       <img src="./icon-192.png" alt="افراچوب">
       <div>
@@ -925,6 +934,7 @@ function renderAdmin(el){
   const pmoUnseen = pmoUnseenCount();
   const pmMsgUnseen = pmMessagesUnseenCountForAdmin();
   el.innerHTML = `
+    <div class="panel-topbar"><span>پنل مدیر</span><button class="panel-refresh" onclick="refreshPanel()" title="تازه‌سازی صفحه" aria-label="تازه‌سازی صفحه">↻</button></div>
     <div class="toolbar">
       <button class="btn-primary" onclick="openAddModal()">+ قرارداد جدید</button>
       <button class="btn-secondary" onclick="openNotifications()">🔔 هشدارها ${alertCount ? '('+alertCount+')' : ''}</button>
@@ -1075,8 +1085,9 @@ function openNotUpdatedList(){
 
 
 /* ---------- Admin-only: برنامه قراردادها ----------
-   این بخش عمداً فقط داخل پنل مدیر است. از تاریخ قرارداد تا سررسید برنامه می‌سازد
-   و وزن‌ها را مستقیماً از STAGE_WEIGHTS فعلی سیستم می‌گیرد؛ هیچ داده‌ای از contracts تغییر نمی‌کند. */
+   فقط برای پنل مدیر. برنامه بدون دکمه ذخیره، بر اساس تاریخ قرارداد،
+   سررسید/سررسید جبرانی و وزن‌های STAGE_WEIGHTS ساخته می‌شود.
+   محدودیت منابع: ۱ اکیپ ساخت و برش + ۲ اکیپ نصب. */
 function gregorianToJalali(gy, gm, gd){
   const gdm = [0,31,28,31,30,31,30,31,31,30,31,30,31];
   const jdm = [0,31,31,31,31,31,30,30,30,30,30,30,29];
@@ -1093,109 +1104,244 @@ function gregorianToJalali(gy, gm, gd){
   while(jm < 11 && jDayNo >= jdm[jm+1]){ jDayNo -= jdm[jm+1]; jm++; }
   return `${jy}/${String(jm+1).padStart(2,'0')}/${String(jDayNo+1).padStart(2,'0')}`;
 }
-function formatJalaliDate(d){
-  return gregorianToJalali(d.getFullYear(), d.getMonth()+1, d.getDate());
+function formatJalaliDate(d){ return gregorianToJalali(d.getFullYear(), d.getMonth()+1, d.getDate()); }
+function planDeadline(c){ return c && (c.revisedDueDate || c.dueDate) || ''; }
+function stageResource(i){
+  if(i===3) return {key:'build', label:'اکیپ ساخت و برش', capacity:1};
+  if(i===5) return {key:'install', label:'اکیپ نصب', capacity:2};
+  return null;
 }
-function buildAdminPlan(c){
-  if(!c || !c.contractDate || !c.dueDate) return null;
-  const start = jalaliStrToDate(c.contractDate), end = jalaliStrToDate(c.dueDate);
+function stageDurationDays(totalDays, weight, totalWeight){
+  if(weight<=0) return 0;
+  return Math.max(1, Math.round(totalDays * weight / totalWeight));
+}
+function addDays(d,n){ const x=new Date(d); x.setDate(x.getDate()+n); return x; }
+function overlap(aStart,aEnd,bStart,bEnd){ return aStart < bEnd && bStart < aEnd; }
+function buildBasePlan(c){
+  const deadline=planDeadline(c);
+  if(!c || !c.contractDate || !deadline) return null;
+  const start=jalaliStrToDate(c.contractDate), end=jalaliStrToDate(deadline);
   if(!start || !end || end < start) return null;
-  const totalDays = daysBetween(start,end);
-  const totalWeight = STAGE_WEIGHTS.reduce((a,b)=>a+b,0);
-  let cursor = new Date(start);
-  const rows=[];
-  let cumulative = 0;
+  const totalDays=Math.max(1,daysBetween(start,end));
+  const totalWeight=STAGE_WEIGHTS.reduce((a,b)=>a+b,0);
+  let cursor=new Date(start);
+  const stages=[];
   STAGES.forEach((st,i)=>{
-    const weight = Number(STAGE_WEIGHTS[i] || 0);
-    const plannedStart = new Date(cursor);
-    let plannedEnd = new Date(cursor);
-    if(weight > 0){
-      cumulative += weight;
-      const targetOffset = Math.round(totalDays * cumulative / totalWeight);
-      plannedEnd = new Date(start); plannedEnd.setDate(start.getDate() + targetOffset);
-      if(plannedEnd > end) plannedEnd = new Date(end);
-      cursor = new Date(plannedEnd);
-    }
-    rows.push({ stageIndex:i, name:st.name, weight, start:formatJalaliDate(plannedStart), end:formatJalaliDate(plannedEnd) });
+    const weight=Number(STAGE_WEIGHTS[i]||0);
+    const duration=stageDurationDays(totalDays,weight,totalWeight);
+    const ps=new Date(cursor);
+    const pe=duration>0 ? addDays(ps,duration) : new Date(ps);
+    cursor=new Date(pe);
+    stages.push({stageIndex:i,name:st.name,weight,duration,start:ps,end:pe,resource:stageResource(i)});
   });
-  rows[rows.length-1].end = c.dueDate;
-  return { contractId:c.id, contractDate:c.contractDate, dueDate:c.dueDate, weights:STAGE_WEIGHTS.slice(), stages:rows, generatedAt:Date.now() };
+  // پایان آخرین مرحله همیشه همان سررسید فعال است؛ اگر وزن‌ها به‌علت گرد کردن جا افتادند، فاصله در مرحله آخر جمع می‌شود.
+  if(stages.length){
+    stages[stages.length-1].end=new Date(end);
+    stages[stages.length-1].duration=Math.max(0,daysBetween(stages[stages.length-1].start,end));
+  }
+  return {contractId:c.id,name:c.name,itemCode:c.itemCode||'',contractDate:c.contractDate,dueDate:c.dueDate||'',revisedDueDate:c.revisedDueDate||'',deadline,stages,baseStart:start,deadlineDate:end,totalDays};
+}
+function schedulePlans(){
+  const plans=contracts.map(buildBasePlan).filter(Boolean).sort((a,b)=>a.baseStart-b.baseStart || a.deadlineDate-b.deadlineDate);
+  const resourceBusy={build:[],install:[]};
+  const findResourceSlot=(start,duration,res)=>{
+    if(!res || duration<=0) return new Date(start);
+    let candidate=new Date(start);
+    while(true){
+      const conflicts=resourceBusy[res.key].filter(x=>overlap(candidate,addDays(candidate,duration),x.start,x.end));
+      if(conflicts.length < res.capacity) return candidate;
+      const next=Math.min(...conflicts.map(x=>x.end.getTime()));
+      candidate=new Date(next);
+    }
+  };
+  for(const plan of plans){
+    let cursor=new Date(plan.baseStart);
+    for(const st of plan.stages){
+      const duration=st.duration;
+      let ss=new Date(cursor);
+      if(st.resource && duration>0) ss=findResourceSlot(ss,duration,st.resource);
+      const ee=duration>0 ? addDays(ss,duration) : new Date(ss);
+      st.start=ss; st.end=ee;
+      if(st.resource && duration>0) resourceBusy[st.resource.key].push({start:ss,end:ee,contractId:plan.contractId,stageIndex:st.stageIndex});
+      cursor=new Date(ee);
+    }
+    plan.scheduledEnd=new Date(cursor);
+    plan.delayDays=Math.max(0,daysBetween(plan.deadlineDate,plan.scheduledEnd));
+    plan.onTime=plan.delayDays===0;
+    plan.parallelConflicts=plan.stages.filter(s=>s.resource).map(s=>{
+      const peers=resourceBusy[s.resource.key].filter(x=>x.contractId!==plan.contractId && x.stageIndex===s.stageIndex && overlap(s.start,s.end,x.start,x.end)).map(x=>x.contractId);
+      return {...s,peers};
+    }).filter(x=>x.peers.length);
+    plan.actualPercent=overallPercent(contracts.find(c=>c.id===plan.contractId)||{});
+    plan.plannedPercent=plannedPercentAtDate(plan,todayMid());
+    plan.deviation=plan.actualPercent-plan.plannedPercent;
+  }
+  return plans;
+}
+function plannedPercentAtDate(plan,date){
+  if(!plan || !plan.stages) return 0;
+  let total=0;
+  for(const st of plan.stages){
+    if(st.weight<=0) continue;
+    let frac=0;
+    if(date>=st.end) frac=1;
+    else if(date>st.start && st.end>st.start) frac=(date-st.start)/(st.end-st.start);
+    total += st.weight*Math.max(0,Math.min(1,frac));
+  }
+  return Math.round(total);
+}
+function planGanttRows(plans, parallelOnly){
+  const rows=[];
+  plans.forEach(p=>p.stages.forEach(s=>{
+    if(parallelOnly && !s.resource) return;
+    rows.push({plan:p,stage:s});
+  }));
+  return rows;
+}
+function ganttDateBounds(plans){
+  const vals=[]; plans.forEach(p=>p.stages.forEach(s=>{vals.push(s.start,s.end)}));
+  if(!vals.length) return null;
+  return {start:new Date(Math.min(...vals.map(x=>x.getTime()))),end:new Date(Math.max(...vals.map(x=>x.getTime())))};
+}
+function renderPlanGantt(plans, parallelOnly){
+  const bounds=ganttDateBounds(plans);
+  if(!bounds) return '<div class="empty">برنامه‌ای برای نمایش وجود ندارد.</div>';
+  const span=Math.max(1,daysBetween(bounds.start,bounds.end));
+  const rows=planGanttRows(plans,parallelOnly);
+  return `<div class="chart-box" style="margin-top:14px;overflow:auto;">
+    <div class="chart-title">${parallelOnly?'گانت موازی‌کاری — فعالیت‌های دارای محدودیت اکیپ':'گانت برنامه قراردادها'}</div>
+    <div style="min-width:980px;">
+      <div style="display:grid;grid-template-columns:190px 170px 1fr 90px;gap:8px;font-size:11px;font-weight:800;padding:8px 6px;border-bottom:1px solid var(--line);">
+        <span>قرارداد</span><span>مرحله / منبع</span><span>برنامه</span><span>وضعیت</span>
+      </div>
+      ${rows.map(({plan,stage})=>{
+        const left=Math.max(0,daysBetween(bounds.start,stage.start))/span*100;
+        const width=Math.max(1,daysBetween(stage.start,stage.end))/span*100;
+        const peers=plan.parallelConflicts.find(x=>x.stageIndex===stage.stageIndex);
+        const status=stage.resource ? (peers?'موازی':'آزاد') : '—';
+        const color=stage.resource ? (peers?'var(--amber)':'var(--blue)') : 'var(--green)';
+        return `<div style="display:grid;grid-template-columns:190px 170px 1fr 90px;gap:8px;align-items:center;padding:7px 6px;border-bottom:1px solid var(--line);font-size:11px;">
+          <span style="font-weight:800;">${escapeHtml(plan.name)}${plan.itemCode?' — '+escapeHtml(plan.itemCode):''}</span>
+          <span>${escapeHtml(stage.name)}${stage.resource?`<small style="display:block;color:var(--ink-soft);">${escapeHtml(stage.resource.label)}</small>`:''}</span>
+          <div style="position:relative;height:28px;background:var(--panel);border-radius:6px;overflow:hidden;">
+            <div style="position:absolute;right:${100-left-width}%;width:${width}%;top:4px;height:20px;background:${color};border-radius:5px;opacity:.9;"></div>
+            <span style="position:absolute;left:6px;top:7px;font-family:'Vazirmatn',sans-serif;font-size:9px;direction:ltr;">${formatJalaliDate(stage.start)} → ${formatJalaliDate(stage.end)}</span>
+          </div>
+          <span style="color:${peers?'var(--red)':'var(--ink-soft)'};font-weight:800;">${status}</span>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+}
+function planStatusHtml(p){
+  const dev=p.deviation;
+  const cls=dev<0?'var(--red)':dev>0?'var(--green)':'var(--ink-soft)';
+  return `<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+    <span class="mini-badge">برنامه ${p.plannedPercent}٪</span>
+    <span class="mini-badge">واقعی ${p.actualPercent}٪</span>
+    <span class="mini-badge" style="color:${cls};">انحراف ${dev>0?'+':''}${dev}٪</span>
+    <span class="mini-badge" style="color:${p.onTime?'var(--green)':'var(--red)'};">${p.onTime?'طبق سررسید':'تاخیر '+p.delayDays+' روز'}</span>
+  </div>`;
 }
 function renderAdminPlans(){
-  const body=document.getElementById('adminBody');
-  if(!body) return;
-  const activeId=adminPlanContractId || (contracts[0] && contracts[0].id) || '';
-  adminPlanContractId=activeId;
-  const c=contracts.find(x=>x.id===activeId);
+  const body=document.getElementById('adminBody'); if(!body) return;
+  const plans=schedulePlans();
+  const q=adminPlanSearchQuery.trim().toLowerCase();
+  const filtered=plans.filter(p=>!q || (p.name||'').toLowerCase().includes(q) || (p.itemCode||'').toLowerCase().includes(q));
+  const late=plans.filter(p=>p.delayDays>0).length;
+  const avgDev=plans.length?Math.round(plans.reduce((s,p)=>s+p.deviation,0)/plans.length):0;
   body.innerHTML=`
     <div class="section-title" style="margin-top:14px;">برنامه قراردادها</div>
-    <div class="viewer-report-note">برنامه از تاریخ قرارداد تا تاریخ سررسید محاسبه می‌شود و وزن مراحل دقیقاً از درصددهی فعلی سیستم استفاده می‌کند.</div>
-    <div class="export-filters">
-      <div class="row1">
-        <select id="adminPlanContract" class="admin-select" onchange="selectAdminPlanContract(this.value)">
-          <option value="">انتخاب قرارداد...</option>
-          ${contracts.map(x=>`<option value="${escapeHtml(x.id)}" ${x.id===activeId?'selected':''}>${escapeHtml(x.name)}${x.itemCode?' — '+escapeHtml(x.itemCode):''}</option>`).join('')}
-        </select>
-      </div>
-    </div>
-    <div id="adminPlanContent"></div>`;
-  renderAdminPlanContent(c);
-}
-function selectAdminPlanContract(id){ adminPlanContractId=id; adminPlanData=null; renderAdminPlanContent(contracts.find(x=>x.id===id)); }
-async function loadAdminPlan(){
-  if(!db || !adminPlanContractId) return;
-  try{
-    const snap=await db.collection('contractPlans').doc(adminPlanContractId).get();
-    adminPlanData=snap.exists ? snap.data() : null;
-    renderAdminPlanContent(contracts.find(x=>x.id===adminPlanContractId));
-  }catch(e){ alert('خطا در دریافت برنامه قرارداد.'); }
-}
-async function saveAdminPlan(){
-  if(myRole!=='admin' || !db || !adminPlanContractId) return;
-  const c=contracts.find(x=>x.id===adminPlanContractId);
-  const plan=buildAdminPlan(c);
-  if(!plan){ alert('برای این قرارداد، تاریخ قرارداد و تاریخ سررسید معتبر لازم است.'); return; }
-  try{
-    await db.collection('contractPlans').doc(c.id).set(plan);
-    adminPlanData=plan;
-    renderAdminPlanContent(c);
-    logActivity('ثبت برنامه قرارداد', c.id, c.name, 'برنامه بر اساس تاریخ قرارداد، سررسید و وزن‌های درصددهی فعلی محاسبه شد.');
-  }catch(e){ alert('خطا در ذخیره برنامه: '+(e.message||'دسترسی مجاز نیست')); }
-}
-function renderAdminPlanContent(c){
-  const el=document.getElementById('adminPlanContent');
-  if(!el) return;
-  if(!c){ el.innerHTML='<div class="empty">قراردادی برای برنامه‌ریزی انتخاب نشده است.</div>'; return; }
-  const plan=adminPlanData || buildAdminPlan(c);
-  if(!plan){
-    el.innerHTML=`<div class="empty">برای «${escapeHtml(c.name)}» تاریخ قرارداد یا تاریخ سررسید ثبت نشده/نامعتبر است. ابتدا تاریخ‌ها را در مدیریت قراردادها ثبت کنید.</div>`;
-    return;
-  }
-  const totalDays=Math.max(0,daysBetween(jalaliStrToDate(c.contractDate),jalaliStrToDate(c.dueDate)));
-  el.innerHTML=`
+    <div class="viewer-report-note">تاریخ شروع = تاریخ قرارداد. اگر «سررسید جبرانی» ثبت شده باشد، همان تاریخ مبنای برنامه است. وزن مراحل مستقیماً از درصددهی فعلی سیستم گرفته می‌شود.</div>
     <div class="kpi-grid" style="margin-top:14px;">
-      <div class="kpi-card"><div class="kpi-num" style="font-size:17px;">${escapeHtml(c.contractDate)}</div><div class="kpi-label">تاریخ شروع برنامه</div></div>
-      <div class="kpi-card"><div class="kpi-num" style="font-size:17px;">${escapeHtml(c.dueDate)}</div><div class="kpi-label">تاریخ پایان برنامه</div></div>
-      <div class="kpi-card"><div class="kpi-num">${totalDays}</div><div class="kpi-label">روزهای برنامه</div></div>
+      <div class="kpi-card"><div class="kpi-num">${plans.length}</div><div class="kpi-label">قراردادهای دارای برنامه</div></div>
+      <div class="kpi-card kpi-red"><div class="kpi-num">${late}</div><div class="kpi-label">غیرقابل اتمام تا سررسید</div></div>
+      <div class="kpi-card"><div class="kpi-num">${avgDev>0?'+':''}${avgDev}٪</div><div class="kpi-label">میانگین انحراف از برنامه</div></div>
+      <div class="kpi-card"><div class="kpi-num">۱ + ۲</div><div class="kpi-label">اکیپ ساخت + اکیپ نصب</div></div>
+    </div>
+    <div class="export-filters" style="margin-top:14px;">
+      <input type="text" class="auth-input" style="max-width:none;width:100%;margin:0;" placeholder="جستجو بر اساس نام قرارداد یا کد قلم..." value="${escapeHtml(adminPlanSearchQuery)}" oninput="onAdminPlanSearch(this.value)">
+    </div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;">
+      <button class="export-btn" onclick="exportPlansExcel()">📊 خروجی اکسل برنامه</button>
+      <button class="export-btn" onclick="exportPlansPDF()">📄 خروجی PDF برنامه</button>
+      <button class="field-save" style="background:${adminPlanParallelMode?'var(--blue)':'var(--panel)'};" onclick="toggleAdminPlanParallel()">${adminPlanParallelMode?'✓ نمایش موازی‌کاری':'🔀 نمایش موازی‌کاری'}</button>
+    </div>
+    ${renderPlanGantt(filtered, adminPlanParallelMode)}
+    <div class="chart-box" style="margin-top:14px;overflow:auto;">
+      <div class="chart-title">انحراف هر قرارداد — برنامه در برابر پیشرفت واقعی</div>
+      <div style="min-width:760px;">
+        ${filtered.map(p=>{
+          const planned=Math.max(0,Math.min(100,p.plannedPercent)), actual=Math.max(0,Math.min(100,p.actualPercent));
+          const dev=p.deviation;
+          return `<div style="display:grid;grid-template-columns:190px 1fr 80px;gap:10px;align-items:center;padding:9px 6px;border-bottom:1px solid var(--line);">
+            <div style="font-size:11px;font-weight:800;">${escapeHtml(p.name)}</div>
+            <div style="position:relative;height:34px;background:var(--panel);border-radius:7px;overflow:hidden;">
+              <div style="position:absolute;right:0;top:4px;width:${planned}%;height:10px;background:var(--blue);border-radius:5px;"></div>
+              <div style="position:absolute;right:0;top:20px;width:${actual}%;height:10px;background:${dev<0?'var(--red)':'var(--green)'};border-radius:5px;"></div>
+            </div>
+            <div style="font-weight:900;color:${dev<0?'var(--red)':dev>0?'var(--green)':'var(--ink-soft)'};direction:ltr;text-align:center;">${dev>0?'+':''}${dev}٪</div>
+          </div>`;
+        }).join('') || '<div class="empty">قراردادی با این جستجو پیدا نشد.</div>'}
+        <div style="font-size:10px;color:var(--ink-soft);margin-top:8px;">خط بالا = برنامه‌ای، خط پایین = واقعی، عدد سمت راست = انحراف از برنامه</div>
+      </div>
     </div>
     <div class="chart-box" style="margin-top:14px;overflow:auto;">
-      <div class="chart-title">برنامه زمانی مراحل</div>
-      <div style="min-width:650px;">
-        ${plan.stages.map((r,i)=>`
-          <div class="chart-row" style="display:grid;grid-template-columns:190px 70px 120px 120px 1fr;gap:8px;align-items:center;">
-            <span class="chart-label">${escapeHtml(r.name)}</span>
-            <span class="chart-count">${r.weight}%</span>
-            <span style="font-family:'JetBrains Mono',monospace;font-size:11px;">${escapeHtml(r.start)}</span>
-            <span style="font-family:'JetBrains Mono',monospace;font-size:11px;">${escapeHtml(r.end)}</span>
-            <div class="chart-bar-track"><div class="chart-bar-fill" style="width:${Math.min(100,Math.max(0,r.weight))}%"></div></div>
-          </div>`).join('')}
+      <div class="chart-title">وضعیت برنامه هر قرارداد</div>
+      <div style="min-width:900px;">
+        ${filtered.map(p=>`<div style="padding:10px 6px;border-bottom:1px solid var(--line);">
+          <div style="display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;">
+            <div><b>${escapeHtml(p.name)}</b>${p.itemCode?' <span class="mini-badge">'+escapeHtml(p.itemCode)+'</span>':''}</div>
+            <div style="font-size:11px;">شروع ${formatJalaliDate(p.baseStart)} — پایان ${formatJalaliDate(p.deadlineDate)}${p.revisedDueDate?' <span style="color:var(--amber);">(جبرانی)</span>':''}</div>
+          </div>
+          <div style="margin-top:7px;">${planStatusHtml(p)}</div>
+        </div>`).join('') || '<div class="empty">قراردادی با این جستجو پیدا نشد.</div>'}
       </div>
-    </div>
-    <div style="display:flex;gap:8px;margin-top:12px;">
-      <button class="field-save" style="flex:1;" onclick="saveAdminPlan()">${adminPlanData?'به‌روزرسانی برنامه':'ذخیره برنامه'}</button>
-      <button class="field-save" style="flex:1;background:var(--panel);" onclick="loadAdminPlan()">بارگذاری برنامه ذخیره‌شده</button>
-    </div>
-    <div class="viewer-report-note" style="margin-top:10px;">وزن‌ها قابل ویرایش نیستند و از درصددهی فعلی سیستم خوانده می‌شوند. هیچ تغییری در اطلاعات قرارداد ایجاد نمی‌شود.</div>`;
+    </div>`;
+}
+function onAdminPlanSearch(v){ adminPlanSearchQuery=v; renderAdminPlans(); }
+function toggleAdminPlanParallel(){ adminPlanParallelMode=!adminPlanParallelMode; renderAdminPlans(); }
+function getPlanExportRows(){
+  const q=adminPlanSearchQuery.trim().toLowerCase();
+  return schedulePlans().filter(p=>!q || (p.name||'').toLowerCase().includes(q) || (p.itemCode||'').toLowerCase().includes(q));
+}
+function exportPlansExcel(){
+  const plans=getPlanExportRows();
+  if(!plans.length){ alert('قراردادی برای خروجی پیدا نشد.'); return; }
+  const rows=[];
+  plans.forEach(p=>p.stages.forEach(s=>rows.push({
+    'قرارداد':p.name,'کد قلم':p.itemCode,'تاریخ قرارداد':p.contractDate,'سررسید اصلی':p.dueDate||'—','سررسید مبنا':p.deadline,
+    'مرحله':s.name,'وزن (%)':s.weight,'شروع برنامه':formatJalaliDate(s.start),'پایان برنامه':formatJalaliDate(s.end),
+    'منبع':s.resource?s.resource.label:'بدون محدودیت','پیشرفت برنامه‌ای (%)':p.plannedPercent,'پیشرفت واقعی (%)':p.actualPercent,
+    'انحراف (%)':p.deviation,'تاخیر (روز)':p.delayDays,'وضعیت':p.onTime?'به‌موقع':'تاخیر'
+  })));
+  const wb=XLSX.utils.book_new(); wb.Workbook={Views:[{RTL:true}]};
+  const ws=XLSX.utils.json_to_sheet(rows); ws['!cols']=[{wch:24},{wch:14},{wch:14},{wch:14},{wch:14},{wch:28},{wch:10},{wch:14},{wch:14},{wch:24},{wch:16},{wch:16},{wch:12},{wch:12},{wch:14}];
+  XLSX.utils.book_append_sheet(wb,ws,'برنامه قراردادها');
+  const parallel=[]; plans.forEach(p=>p.stages.filter(s=>s.resource).forEach(s=>parallel.push({'قرارداد':p.name,'مرحله':s.name,'منبع':s.resource.label,'شروع':formatJalaliDate(s.start),'پایان':formatJalaliDate(s.end),'تعداد اکیپ':s.resource.capacity}))); 
+  XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(parallel),'موازی کاری');
+  XLSX.writeFile(wb,'برنامه-قراردادها.xlsx');
+}
+async function exportPlansPDF(){
+  const plans=getPlanExportRows();
+  if(!plans.length){ alert('قراردادی برای خروجی پیدا نشد.'); return; }
+  if(!window.html2canvas || !window.jspdf){ alert('کتابخانه خروجی PDF در دسترس نیست.'); return; }
+  const holder=document.createElement('div');
+  holder.style.cssText="position:fixed;left:-100000px;top:0;width:1100px;background:#fff;color:#111;padding:30px;direction:rtl;font-family:'Vazirmatn',Tahoma,Arial,sans-serif;font-weight:400;";
+  holder.innerHTML=`<div style="font-size:22px;font-weight:900;margin-bottom:8px;">برنامه قراردادها — افراچوب</div>
+    <div style="font-size:12px;margin-bottom:18px;">تاریخ گزارش: ${todayJalaliLabel()} — سررسید جبرانی در صورت وجود، مبنا قرار گرفته است.</div>
+    <table style="width:100%;border-collapse:collapse;font-size:11px;">
+      <thead><tr>${['قرارداد','سررسید مبنا','برنامه','واقعی','انحراف','تاخیر','وضعیت'].map(h=>`<th style="border:1px solid #999;padding:7px;background:#eee;text-align:right;">${h}</th>`).join('')}</tr></thead>
+      <tbody>${plans.map(p=>`<tr><td style="border:1px solid #bbb;padding:7px;">${escapeHtml(p.name)}</td><td style="border:1px solid #bbb;padding:7px;">${formatJalaliDate(p.deadlineDate)}</td><td style="border:1px solid #bbb;padding:7px;">${p.plannedPercent}٪</td><td style="border:1px solid #bbb;padding:7px;">${p.actualPercent}٪</td><td style="border:1px solid #bbb;padding:7px;">${p.deviation>0?'+':''}${p.deviation}٪</td><td style="border:1px solid #bbb;padding:7px;">${p.delayDays} روز</td><td style="border:1px solid #bbb;padding:7px;">${p.onTime?'به‌موقع':'تاخیر'}</td></tr>`).join('')}</tbody>
+    </table><div style="font-size:15px;font-weight:900;margin:22px 0 8px;">گانت موازی‌کاری</div>${renderPlanGantt(plans,true)}`;
+  document.body.appendChild(holder);
+  try{
+    if(document.fonts && document.fonts.ready) await document.fonts.ready;
+    const canvas=await html2canvas(holder,{scale:2,backgroundColor:'#fff',useCORS:true});
+    const {jsPDF}=window.jspdf; const pdf=new jsPDF('landscape','mm','a4');
+    addCanvasToPdfPages(pdf, canvas, 8);
+    pdf.save('برنامه-قراردادها.pdf');
+  }catch(e){ alert('خطا در ساخت PDF: '+(e.message||e)); } finally { holder.remove(); }
 }
 
 function renderAdminContracts(){
@@ -1270,6 +1416,26 @@ function getExportContracts(){
     });
   }
   return list;
+}
+
+/* ---------- PDF helper: برش واقعی هر صفحه برای جلوگیری از تکرار/به‌هم‌ریختگی ---------- */
+function addCanvasToPdfPages(pdf, canvas, marginMm=8){
+  const pageW = pdf.internal.pageSize.getWidth();
+  const pageH = pdf.internal.pageSize.getHeight();
+  const imgW = pageW - marginMm*2;
+  const pxPerMm = canvas.width / imgW;
+  const sliceH = Math.max(1, Math.floor((pageH - marginMm*2) * pxPerMm));
+  let srcY = 0, first = true;
+  while(srcY < canvas.height){
+    const h = Math.min(sliceH, canvas.height - srcY);
+    const slice = document.createElement('canvas');
+    slice.width = canvas.width; slice.height = h;
+    slice.getContext('2d').drawImage(canvas, 0, srcY, canvas.width, h, 0, 0, canvas.width, h);
+    if(!first) pdf.addPage();
+    const imgH = h / pxPerMm;
+    pdf.addImage(slice.toDataURL('image/png'), 'PNG', marginMm, marginMm, imgW, imgH, undefined, 'FAST');
+    srcY += h; first = false;
+  }
 }
 
 /* ---------- خروجی اکسل و PDF ---------- */
@@ -1358,7 +1524,7 @@ async function exportPDF(){
   const btn = document.getElementById('exportPdfBtn');
   if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
   const holder = document.createElement('div');
-  holder.style.cssText = 'position:fixed; top:0; left:-99999px; width:820px; background:#ffffff; color:#1a1a1a; font-family:Vazirmatn,sans-serif; direction:rtl; padding:28px;';
+  holder.style.cssText = "position:fixed; top:0; left:-99999px; width:820px; background:#ffffff; color:#1a1a1a; font-family:'Vazirmatn',Tahoma,Arial,sans-serif; direction:rtl; padding:28px; font-weight:400;";
   const stats = computeDashboardStats();
   const rows = exportRows();
   const kpi = (label, val) => `<div style="border:1px solid #ddd; border-radius:8px; padding:12px; text-align:center;">
@@ -1402,22 +1568,11 @@ async function exportPDF(){
   `;
   document.body.appendChild(holder);
   try{
+    if(document.fonts && document.fonts.ready) await document.fonts.ready;
     const canvas = await html2canvas(holder, { scale:2, backgroundColor:'#ffffff', useCORS:true });
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF('p', 'pt', 'a4');
-    const pageW = pdf.internal.pageSize.getWidth();
-    const pageH = pdf.internal.pageSize.getHeight();
-    const imgW = pageW;
-    const imgH = canvas.height * (imgW / canvas.width);
-    let remaining = imgH, position = 0, first = true;
-    const imgData = canvas.toDataURL('image/jpeg', 0.92);
-    while(remaining > 0){
-      if(!first) pdf.addPage();
-      pdf.addImage(imgData, 'JPEG', 0, position, imgW, imgH);
-      remaining -= pageH;
-      position -= pageH;
-      first = false;
-    }
+    addCanvasToPdfPages(pdf, canvas, 8);
     pdf.save(reportFileName('pdf'));
   }catch(err){
     alert('خطا در ساخت فایل PDF: ' + err.message);
@@ -1500,7 +1655,7 @@ async function exportPDFViewer(){
   const btn = document.getElementById('exportPdfBtn');
   if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
   const holder = document.createElement('div');
-  holder.style.cssText = 'position:fixed; top:0; left:-99999px; width:820px; background:#ffffff; color:#1a1a1a; font-family:Vazirmatn,sans-serif; direction:rtl; padding:28px;';
+  holder.style.cssText = "position:fixed; top:0; left:-99999px; width:820px; background:#ffffff; color:#1a1a1a; font-family:'Vazirmatn',Tahoma,Arial,sans-serif; direction:rtl; padding:28px; font-weight:400;";
   const s = computeViewerStats();
   const rows = viewerExportRows();
   const kpi = (label, val) => `<div style="border:1px solid #ddd; border-radius:8px; padding:12px; text-align:center;">
@@ -1542,22 +1697,11 @@ async function exportPDFViewer(){
   `;
   document.body.appendChild(holder);
   try{
+    if(document.fonts && document.fonts.ready) await document.fonts.ready;
     const canvas = await html2canvas(holder, { scale:2, backgroundColor:'#ffffff', useCORS:true });
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF('p', 'pt', 'a4');
-    const pageW = pdf.internal.pageSize.getWidth();
-    const pageH = pdf.internal.pageSize.getHeight();
-    const imgW = pageW;
-    const imgH = canvas.height * (imgW / canvas.width);
-    let remaining = imgH, position = 0, first = true;
-    const imgData = canvas.toDataURL('image/jpeg', 0.92);
-    while(remaining > 0){
-      if(!first) pdf.addPage();
-      pdf.addImage(imgData, 'JPEG', 0, position, imgW, imgH);
-      remaining -= pageH;
-      position -= pageH;
-      first = false;
-    }
+    addCanvasToPdfPages(pdf, canvas, 8);
     pdf.save(reportFileName('pdf'));
   }catch(err){
     alert('خطا در ساخت فایل PDF: ' + err.message);
