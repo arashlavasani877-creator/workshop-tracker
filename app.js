@@ -1078,6 +1078,7 @@ function renderAdmin(el){
       <button class="btn-primary" onclick="openAddModal()">+ قرارداد جدید</button>
       <button class="btn-secondary" onclick="openNotifications()">🔔 هشدارها ${alertCount ? '('+alertCount+')' : ''}</button>
     </div>
+    <div class="toolbar"><button id="mgmtSummaryBtn" class="btn-primary" onclick="exportManagementSummaryPdf()">📱 خلاصه مدیریتی (اشتراک‌گذاری)</button></div>
     <div class="toolbar"><button id="installBtn" class="btn-secondary" onclick="installApp()">نصب اپلیکیشن روی گوشی</button></div>
     <div class="tabs">
       <button class="${adminTab==='dashboard'?'active':''}" onclick="switchAdminTab('dashboard')">داشبورد</button>
@@ -1596,6 +1597,222 @@ async function renderPaginatedReportPdf({ reportTitle, extraHeaderHtml, headers,
     pdf.save(filename);
   } finally {
     document.body.removeChild(holder);
+  }
+}
+
+/* ========================================================================
+   V12: «خلاصه مدیریتی» — گزارش دو صفحه‌ای فشرده و بصری برای اشتراک‌گذاری با مدیران
+   (نمای گانتی سرعت پیشرفت هر قرارداد نسبت به برنامه + لیست بحرانی‌ها +
+   لیست جدای «در انتظار تحویل‌دهی به مالک» که هرگز بحرانی محسوب نمی‌شود)
+   خروجی نهایی PDF است و در انتها با Web Share API پیشنهاد اشتراک‌گذاری
+   (از جمله واتس‌اپ) به کاربر داده می‌شود. اگر مرورگر پشتیبانی نکند، فایل
+   دانلود می‌شود تا کاربر خودش دستی ارسال کند. ========================== */
+function truncateText(s, n){
+  s = s || '';
+  return s.length > n ? s.slice(0, n-1) + '…' : s;
+}
+// درصدی که «طبق برنامه‌ی زمانی» انتظار می‌رفت تا امروز پیش رفته باشیم (بر مبنای فاصله‌ی تاریخ ثبت تا سررسید)
+function expectedPercent(c){
+  if(!c.dueDate || !c.createdAt) return null;
+  const due = jalaliStrToDate(c.revisedDueDate || c.dueDate);
+  if(!due) return null;
+  const start = new Date(c.createdAt);
+  const totalDays = daysBetween(start, due);
+  if(totalDays <= 0) return null;
+  const elapsed = daysBetween(start, todayMid());
+  return Math.max(0, Math.min(100, Math.round((elapsed/totalDays)*100)));
+}
+const MGMT_STATUS_COLOR = { late:'#dc2626', warn:'#d97706', ok:'#0f766e', waiting:'#2563eb' };
+// وضعیت هر قرارداد برای گزارش مدیریتی: اولویت با عقب‌افتادگی سررسید، بعد نزدیک سررسید،
+// بعد «در انتظار تحویل‌دهی» (که هرگز بحرانی حساب نمی‌شود)، در غیر این‌صورت عقب/جلوی برنامه بر مبنای سرعت پیشرفت
+function mgmtRowStatus(c){
+  const displayIdx = getDisplayStageIndex(c);
+  if(displayIdx === STAGES.length-2) return { label:'در انتظار تحویل‌دهی به مالک', cls:'waiting' };
+  const ts = adminTimeStatus(c);
+  if(ts.cls === 'late') return { label:'بحرانی — ' + ts.label, cls:'late' };
+  if(ts.cls === 'near') return { label:'نزدیک سررسید', cls:'warn' };
+  const sch = scheduleText(c);
+  if(sch.indexOf('عقب') === 0) return { label: sch, cls:'warn' };
+  return { label: sch || 'مطابق برنامه', cls:'ok' };
+}
+function ganttRowHtml(c){
+  const st = mgmtRowStatus(c);
+  const color = MGMT_STATUS_COLOR[st.cls] || '#6b7280';
+  const actual = overallPercent(c);
+  const exp = expectedPercent(c);
+  return `
+    <div style="display:flex; align-items:center; gap:7px; margin-bottom:4px;">
+      <div style="width:130px; font-size:9px; color:#222; flex-shrink:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(truncateText(c.name||'—', 20))}</div>
+      <div style="flex:1; position:relative; background:#eee; border-radius:4px; height:11px;">
+        <div style="width:${actual}%; background:${color}; height:100%; border-radius:4px;"></div>
+        ${exp!=null ? `<div style="position:absolute; top:-2px; bottom:-2px; left:${exp}%; width:2px; background:#111;"></div>` : ''}
+      </div>
+      <div style="width:28px; text-align:left; font-size:8.5px; color:#333; flex-shrink:0;">${actual}٪</div>
+      <div style="width:112px; font-size:8px; color:${color}; font-weight:700; flex-shrink:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(st.label)}</div>
+    </div>`;
+}
+async function exportManagementSummaryPdf(){
+  if(contracts.length === 0){ alert('هنوز قراردادی ثبت نشده است.'); return; }
+  const btn = document.getElementById('mgmtSummaryBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت گزارش...'; }
+  try{
+    try{
+      await Promise.all([
+        document.fonts.load('900 20px Vazirmatn'),
+        document.fonts.load('800 12px Vazirmatn'),
+        document.fonts.load('700 10px Vazirmatn'),
+        document.fonts.load('400 9px Vazirmatn')
+      ].map(p => p.catch(()=>{})));
+      await document.fonts.ready;
+    }catch(e){}
+
+    const active = contracts.filter(c => !isCompleted(c));
+    const closedCount = contracts.length - active.length;
+    const criticalList = active.filter(c => mgmtRowStatus(c).cls === 'late');
+    const nearList = active.filter(c => mgmtRowStatus(c).cls === 'warn' && adminTimeStatus(c).cls === 'near');
+    const waitingDeliveryList = active.filter(c => getDisplayStageIndex(c) === STAGES.length-2);
+    const onScheduleCount = active.filter(c => mgmtRowStatus(c).cls === 'ok').length;
+    const avgProgress = active.length ? Math.round(active.reduce((s,c)=>s+overallPercent(c),0)/active.length) : 0;
+
+    // ترتیب گزارش گانتی: بحرانی‌ها اول، بعد نزدیک/عقب از برنامه، بعد مطابق برنامه، در انتها در انتظار تحویل
+    const order = { late:0, warn:1, ok:2, waiting:3 };
+    const ganttList = active.slice().sort((a,b) => order[mgmtRowStatus(a).cls]-order[mgmtRowStatus(b).cls]);
+    const GANTT_CAP = 18;
+    const ganttShown = ganttList.slice(0, GANTT_CAP);
+    const ganttExtra = ganttList.length - ganttShown.length;
+
+    const kpi = (label, val, color) => `<div style="border:1px solid #ddd; border-radius:8px; padding:9px 6px; text-align:center;">
+        <div style="font-size:17px; font-weight:900; ${color?('color:'+color+';'):''}">${val}</div>
+        <div style="font-size:9px; color:#666; margin-top:3px;">${label}</div>
+      </div>`;
+
+    const insight = `از ${active.length} قرارداد فعال، ${criticalList.length} مورد بحرانی (عقب‌افتاده از سررسید)، ${onScheduleCount} مورد مطابق یا جلوتر از برنامه، و ${waitingDeliveryList.length} مورد فقط در انتظار تحویل‌دهی به مالک هستند.`;
+
+    const stageCounts = STAGES.map((s,i) => contracts.filter(c => getDisplayStageIndex(c) === i).length);
+    const stageMax = Math.max(1, ...stageCounts);
+    const stageChartHtml = STAGES.map((s,i) => `
+      <div style="display:flex; align-items:center; gap:7px; margin-bottom:5px;">
+        <div style="width:118px; font-size:8.5px; color:#333; flex-shrink:0;">${escapeHtml(s.name)}</div>
+        <div style="flex:1; background:#eee; border-radius:4px; height:11px;"><div style="width:${(stageCounts[i]/stageMax*100)}%; background:#0f766e; height:100%; border-radius:4px;"></div></div>
+        <div style="width:18px; text-align:left; font-size:8.5px; color:#333;">${stageCounts[i]}</div>
+      </div>`).join('');
+
+    // ---------------- صفحه‌ی اول: خلاصه‌ی وضعیت + نمای گانتی سرعت پیشرفت همه‌ی قراردادهای فعال ----------------
+    const page1Html = `
+      <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #222; padding-bottom:10px; margin-bottom:10px;">
+        <div style="font-size:19px; font-weight:900;">خلاصه مدیریتی — وضعیت قراردادها</div>
+        <div style="font-size:11px; color:#555;">${todayJalaliLabel()}</div>
+      </div>
+      <div style="display:grid; grid-template-columns:repeat(5,1fr); gap:7px; margin-bottom:12px;">
+        ${kpi('کل قراردادها', contracts.length)}
+        ${kpi('بحرانی', criticalList.length, '#dc2626')}
+        ${kpi('نزدیک سررسید', nearList.length, '#d97706')}
+        ${kpi('در انتظار تحویل', waitingDeliveryList.length, '#2563eb')}
+        ${kpi('میانگین پیشرفت', avgProgress+'٪')}
+      </div>
+      <div style="background:#f6f6f4; border:1px solid #e2e2de; border-radius:8px; padding:9px 12px; font-size:10.5px; color:#333; margin-bottom:14px; line-height:1.8;">📌 ${escapeHtml(insight)}</div>
+      <div style="font-size:11.5px; font-weight:800; margin-bottom:8px;">پراکندگی قراردادها بر اساس مرحله</div>
+      <div style="margin-bottom:16px;">${stageChartHtml}</div>
+      <div style="font-size:11.5px; font-weight:800; margin-bottom:2px;">نمای کلی پیشرفت نسبت به برنامه‌ی زمانی (خط تیره = پیشرفت مورد انتظار طبق سررسید)</div>
+      <div style="font-size:8.5px; color:#777; margin-bottom:8px;">مرتب‌شده بر اساس اولویت: بحرانی ← نزدیک/عقب از برنامه ← مطابق برنامه ← در انتظار تحویل‌دهی</div>
+      <div>${ganttShown.map(ganttRowHtml).join('')}</div>
+      ${ganttExtra > 0 ? `<div style="font-size:9px; color:#777; margin-top:6px;">+ ${ganttExtra} قرارداد دیگر (جزئیات کامل در خروجی PDF/اکسل اصلی)</div>` : ''}
+    `;
+
+    // ---------------- صفحه‌ی دوم: لیست بحرانی‌ها + لیست جدای «در انتظار تحویل‌دهی به مالک» ----------------
+    const CRIT_CAP = 12, WAIT_CAP = 12;
+    const critSorted = criticalList.slice().sort((a,b) => (dueStatus(a).daysLeft??0) - (dueStatus(b).daysLeft??0));
+    const critShown = critSorted.slice(0, CRIT_CAP);
+    const critExtra = critSorted.length - critShown.length;
+    const waitShown = waitingDeliveryList.slice(0, WAIT_CAP);
+    const waitExtra = waitingDeliveryList.length - waitShown.length;
+
+    const critTableHtml = critShown.length ? `
+      <table style="width:100%; border-collapse:collapse; font-size:9.5px; margin-bottom:6px;">
+        <thead><tr style="background:#dc2626; color:#fff;">
+          ${['نام قرارداد','کد قلم','پیشرفت','سررسید فعال','وضعیت'].map(h=>`<th style="padding:5px 7px; text-align:right; border:1px solid #b91c1c;">${h}</th>`).join('')}
+        </tr></thead>
+        <tbody>
+          ${critShown.map((c,i) => `<tr style="background:${i%2?'#fef2f2':'#fff'};">
+            <td style="padding:5px 7px; border:1px solid #f3d0d0;">${escapeHtml(c.name||'—')}</td>
+            <td style="padding:5px 7px; border:1px solid #f3d0d0;">${escapeHtml(c.itemCode||'—')}</td>
+            <td style="padding:5px 7px; border:1px solid #f3d0d0;">${overallPercent(c)}٪</td>
+            <td style="padding:5px 7px; border:1px solid #f3d0d0;">${escapeHtml(c.revisedDueDate || c.dueDate || '—')}</td>
+            <td style="padding:5px 7px; border:1px solid #f3d0d0; color:#dc2626; font-weight:700;">${escapeHtml(dueStatus(c).label)}</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>` : `<div style="font-size:10px; color:#0f766e; margin-bottom:10px;">✅ در حال حاضر هیچ قرارداد بحرانی‌ای وجود ندارد.</div>`;
+
+    const waitTableHtml = waitShown.length ? `
+      <table style="width:100%; border-collapse:collapse; font-size:9.5px; margin-bottom:6px;">
+        <thead><tr style="background:#2563eb; color:#fff;">
+          ${['نام قرارداد','کد قلم','پیشرفت'].map(h=>`<th style="padding:5px 7px; text-align:right; border:1px solid #1d4ed8;">${h}</th>`).join('')}
+        </tr></thead>
+        <tbody>
+          ${waitShown.map((c,i) => `<tr style="background:${i%2?'#eff6ff':'#fff'};">
+            <td style="padding:5px 7px; border:1px solid #cfe0fb;">${escapeHtml(c.name||'—')}</td>
+            <td style="padding:5px 7px; border:1px solid #cfe0fb;">${escapeHtml(c.itemCode||'—')}</td>
+            <td style="padding:5px 7px; border:1px solid #cfe0fb;">${overallPercent(c)}٪</td>
+          </tr>`).join('')}
+        </tbody>
+      </table>` : `<div style="font-size:10px; color:#777; margin-bottom:10px;">موردی در این وضعیت نیست.</div>`;
+
+    const page2Html = `
+      <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1.5px solid #222; padding-bottom:8px; margin-bottom:12px;">
+        <div style="font-size:14px; font-weight:800;">خلاصه مدیریتی — جزئیات موارد نیازمند پیگیری</div>
+        <div style="font-size:9.5px; color:#666;">صفحه ۲</div>
+      </div>
+      <div style="font-size:11.5px; font-weight:800; margin-bottom:8px; color:#dc2626;">🔴 قراردادهای بحرانی (عقب‌افتاده از سررسید) ${criticalList.length ? '— '+criticalList.length+' مورد' : ''}</div>
+      ${critTableHtml}
+      ${critExtra > 0 ? `<div style="font-size:9px; color:#777; margin-bottom:14px;">+ ${critExtra} مورد بحرانی دیگر</div>` : '<div style="margin-bottom:14px;"></div>'}
+      <div style="font-size:11.5px; font-weight:800; margin-bottom:8px; color:#2563eb;">📦 در انتظار تحویل‌دهی به مالک ${waitingDeliveryList.length ? '— '+waitingDeliveryList.length+' مورد' : ''} <span style="font-size:8.5px; color:#777; font-weight:400;">(این‌ها بحرانی محسوب نمی‌شوند)</span></div>
+      ${waitTableHtml}
+      ${waitExtra > 0 ? `<div style="font-size:9px; color:#777;">+ ${waitExtra} مورد دیگر</div>` : ''}
+      <div style="margin-top:24px; padding-top:10px; border-top:1px solid #ddd; font-size:8.5px; color:#999;">گزارش خودکار افراچوب — ${todayJalaliLabel()} — برای جزئیات کامل هر قرارداد از پنل «مدیریت قراردادها» استفاده کنید.</div>
+    `;
+
+    const holder = document.createElement('div');
+    holder.style.cssText = 'position:fixed; top:0; left:-99999px; width:820px; background:#ffffff; color:#1a1a1a; font-family:Vazirmatn,sans-serif; direction:rtl; padding:26px; box-sizing:border-box;';
+    document.body.appendChild(holder);
+    let pdf;
+    try{
+      const { jsPDF } = window.jspdf;
+      pdf = new jsPDF('p', 'pt', 'a4');
+      const pageW = pdf.internal.pageSize.getWidth();
+      holder.innerHTML = page1Html;
+      const canvas1 = await html2canvas(holder, { scale:2, backgroundColor:'#ffffff', useCORS:true });
+      pdf.addImage(canvas1.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 18, pageW, canvas1.height*(pageW/canvas1.width));
+      pdf.addPage();
+      holder.innerHTML = page2Html;
+      const canvas2 = await html2canvas(holder, { scale:2, backgroundColor:'#ffffff', useCORS:true });
+      pdf.addImage(canvas2.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 18, pageW, canvas2.height*(pageW/canvas2.width));
+    } finally {
+      document.body.removeChild(holder);
+    }
+
+    const filename = `خلاصه مدیریتی - ${todayJalaliFileLabel()}.pdf`;
+    const blob = pdf.output('blob');
+
+    // پیشنهاد اشتراک‌گذاری مستقیم (شامل واتس‌اپ) از طریق Web Share API؛ در صورت عدم پشتیبانی مرورگر، فایل دانلود می‌شود
+    let shared = false;
+    try{
+      const file = new File([blob], filename, { type:'application/pdf' });
+      if(navigator.canShare && navigator.canShare({ files:[file] })){
+        await navigator.share({ files:[file], title:'خلاصه مدیریتی افراچوب', text:'خلاصه وضعیت قراردادها' });
+        shared = true;
+      }
+    }catch(shareErr){
+      // اگر کاربر خودش اشتراک‌گذاری را لغو کند، خطا می‌گیریم؛ در این حالت دیگر دانلود اجباری نکنیم
+      if(shareErr && shareErr.name === 'AbortError') shared = true;
+    }
+    if(!shared){
+      pdf.save(filename);
+      alert('مرورگر شما امکان اشتراک‌گذاری مستقیم (واتس‌اپ و…) را ندارد؛ فایل PDF دانلود شد و می‌توانید خودتان از همان‌جا ارسال کنید.');
+    }
+  }catch(err){
+    alert('خطا در ساخت گزارش: ' + err.message);
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '📱 خلاصه مدیریتی (اشتراک‌گذاری)'; }
   }
 }
 
