@@ -261,7 +261,7 @@ function isPanelWaiting(c){
 /* ---------- کامنت‌ها — مدیر پروژه فقط می‌بیند و کامنت می‌گذارد، مدیر و سرپرست هم می‌بینند و می‌توانند اقدام کنند ---------- */
 async function addComment(id, inputElId){
   if(!db || !currentUser) return;
-  if(myRole === 'afrachoobSupervisor') return; // V10: سرپرست افراچوب اجازه‌ی کامنت‌گذاری ندارد
+  if(myRole === 'afrachoobSupervisor' || myRole === 'supervisor') return; // V11: سرپرست نصب و سرپرست افراچوب اجازه‌ی کامنت‌گذاری ندارند
   const input = document.getElementById(inputElId);
   const text = input ? input.value.trim() : '';
   if(!text) return;
@@ -1427,12 +1427,11 @@ function exportRows(){
     'نام قرارداد': c.name || '',
     'کد قلم': c.itemCode || '',
     'تاریخ قرارداد': c.contractDate || '—',
-    'مرحله فعلی': STAGES[getDisplayStageIndex(c)].name,
-    'درصد پیشرفت کل': overallPercent(c) + '%',
     'سررسید اصلی': c.dueDate || '—',
     'سررسید جبرانی': c.revisedDueDate || '—',
+    'مرحله فعلی': STAGES[getDisplayStageIndex(c)].name,
+    'درصد پیشرفت کل': overallPercent(c) + '%',
     'وضعیت زمانی': isCompleted(c) ? 'خاتمه‌یافته' : adminTimeStatus(c).label,
-    'روز از آخرین آپدیت': daysSinceUpdate(c),
     'وضعیت': isCompleted(c) ? 'خاتمه‌یافته' : 'فعال'
   }));
 }
@@ -1485,7 +1484,7 @@ async function exportExcel(){
 
     const rows = exportRows();
     const wsList = XLSX.utils.json_to_sheet(rows);
-    wsList['!cols'] = [{wch:22},{wch:14},{wch:14},{wch:22},{wch:14},{wch:14},{wch:14},{wch:20},{wch:16},{wch:14}];
+    wsList['!cols'] = [{wch:22},{wch:14},{wch:14},{wch:14},{wch:14},{wch:22},{wch:14},{wch:20},{wch:14}];
 
     const wb = XLSX.utils.book_new();
     wb.Workbook = { Views: [{ RTL: true }] };
@@ -1499,6 +1498,107 @@ async function exportExcel(){
   }
 }
 
+/* ---------- V11: ساخت PDF چندصفحه‌ای با تیتر تکرارشونده در هر صفحه — بدون بریدن وسط ردیف جدول ----------
+   قبلاً کل جدول یک عکس بود و برای صفحه‌ی بعد فقط جابجا می‌شد؛ همین باعث می‌شد
+   ته صفحه‌ی اول وسط یک ردیف بریده بشه و صفحه‌های بعدی اصلاً تیتر/هدر نداشته باشن.
+   الان هر صفحه جدا و دقیقاً بر اساس ارتفاع واقعی ردیف‌ها رندر و عکس‌برداری می‌شود. */
+async function renderPaginatedReportPdf({ reportTitle, extraHeaderHtml, headers, rows, filename }){
+  // اطمینان از لود کامل فونت فارسی قبل از عکس‌برداری (علت اصلی خراب دیده شدن فونت در PDF)
+  try{
+    await Promise.all([
+      document.fonts.load('900 20px Vazirmatn'),
+      document.fonts.load('800 13px Vazirmatn'),
+      document.fonts.load('700 12px Vazirmatn'),
+      document.fonts.load('500 11px Vazirmatn'),
+      document.fonts.load('400 10.5px Vazirmatn')
+    ].map(p => p.catch(()=>{})));
+    await document.fonts.ready;
+  }catch(e){}
+
+  const { jsPDF } = window.jspdf;
+  const pdf = new jsPDF('p', 'pt', 'a4');
+  const pageW = pdf.internal.pageSize.getWidth();
+  const pageH = pdf.internal.pageSize.getHeight();
+  const MARGIN_TOP = 22, MARGIN_BOTTOM = 22;
+  const availPt = pageH - MARGIN_TOP - MARGIN_BOTTOM;
+
+  const bigHeaderHtml = `
+    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #222; padding-bottom:12px; margin-bottom:8px;">
+      <div style="font-size:20px; font-weight:900;">${escapeHtml(reportTitle)}</div>
+      <div style="font-size:12px; color:#555;">${todayJalaliLabel()}</div>
+    </div>
+    <div style="font-size:11px; color:#666; margin-bottom:16px;">دامنه‌ی خروجی: ${escapeHtml(exportScopeLabel())}</div>
+    ${extraHeaderHtml || ''}
+  `;
+  const smallHeaderHtml = (pageNo) => `
+    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1.5px solid #222; padding-bottom:8px; margin-bottom:10px;">
+      <div style="font-size:13px; font-weight:800;">${escapeHtml(reportTitle)} — ادامه</div>
+      <div style="font-size:10px; color:#666;">صفحه ${pageNo}</div>
+    </div>`;
+
+  const theadHtml = `<thead><tr style="background:#222; color:#fff;">${headers.map(h=>`<th style="padding:6px 8px; text-align:right; border:1px solid #333;">${escapeHtml(h)}</th>`).join('')}</tr></thead>`;
+  const rowHtml = (r) => `<tr style="background:${r.__i%2?'#f5f5f5':'#fff'};">${r.vals.map(v=>`<td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(v==null?'':String(v))}</td>`).join('')}</tr>`;
+  const dataRows = rows.map((vals,i) => ({ vals, __i:i }));
+
+  const holder = document.createElement('div');
+  holder.style.cssText = 'position:fixed; top:0; left:-99999px; width:820px; background:#ffffff; color:#1a1a1a; font-family:Vazirmatn,sans-serif; direction:rtl; padding:28px; box-sizing:border-box;';
+  document.body.appendChild(holder);
+
+  try{
+    // اندازه‌گیری ارتفاع واقعی هدر بزرگ، هدر کوچک، سرستون جدول، و تک‌تک ردیف‌ها (بدون عکس‌برداری، فقط DOM)
+    holder.innerHTML = bigHeaderHtml;
+    const bigHeaderPx = holder.getBoundingClientRect().height;
+    holder.innerHTML = smallHeaderHtml(2);
+    const smallHeaderPx = holder.getBoundingClientRect().height;
+    holder.innerHTML = `<table style="width:100%; border-collapse:collapse; font-size:10.5px;">${theadHtml}<tbody>${dataRows.map(rowHtml).join('')}</tbody></table>`;
+    const table = holder.querySelector('table');
+    const theadPx = table.querySelector('thead').getBoundingClientRect().height;
+    const trEls = Array.from(table.querySelectorAll('tbody tr'));
+    const rowHeightsPx = trEls.map(tr => tr.getBoundingClientRect().height);
+
+    const cssWidth = holder.offsetWidth;
+    const ptPerPx = pageW / cssWidth;
+    const availPx = availPt / ptPerPx;
+
+    // تقسیم ردیف‌ها به صفحات — بر اساس ارتفاع واقعی، بدون بریدن وسط ردیف
+    const pages = [];
+    let idx = 0, isFirst = true;
+    while(idx < dataRows.length){
+      const headPx = isFirst ? bigHeaderPx : smallHeaderPx;
+      const budget = availPx - headPx - theadPx;
+      let used = 0, count = 0;
+      while(idx+count < dataRows.length){
+        const h = rowHeightsPx[idx+count];
+        if(count > 0 && used + h > budget) break;
+        used += h; count++;
+      }
+      if(count === 0) count = 1;
+      pages.push({ start: idx, count, isFirst });
+      idx += count;
+      isFirst = false;
+    }
+    if(!pages.length) pages.push({ start:0, count:0, isFirst:true });
+
+    for(let p=0; p<pages.length; p++){
+      const { start, count, isFirst: pf } = pages[p];
+      const chunk = dataRows.slice(start, start+count);
+      holder.innerHTML = `
+        ${pf ? bigHeaderHtml : smallHeaderHtml(p+1)}
+        <table style="width:100%; border-collapse:collapse; font-size:10.5px;">${theadHtml}<tbody>${chunk.map(rowHtml).join('')}</tbody></table>
+      `;
+      const canvas = await html2canvas(holder, { scale:2, backgroundColor:'#ffffff', useCORS:true });
+      const imgData = canvas.toDataURL('image/jpeg', 0.92);
+      const imgW = pageW;
+      const imgH = canvas.height * (imgW / canvas.width);
+      if(p > 0) pdf.addPage();
+      pdf.addImage(imgData, 'JPEG', 0, MARGIN_TOP, imgW, imgH);
+    }
+    pdf.save(filename);
+  } finally {
+    document.body.removeChild(holder);
+  }
+}
+
 async function exportPDF(){
   if(getExportContracts().length === 0){
     alert('با این فیلترها هیچ قراردادی پیدا نشد. فیلترها را بررسی کنید.');
@@ -1506,72 +1606,37 @@ async function exportPDF(){
   }
   const btn = document.getElementById('exportPdfBtn');
   if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
-  const holder = document.createElement('div');
-  holder.style.cssText = 'position:fixed; top:0; left:-99999px; width:820px; background:#ffffff; color:#1a1a1a; font-family:Vazirmatn,sans-serif; direction:rtl; padding:28px;';
-  const stats = computeDashboardStats();
-  const rows = exportRows();
-  const kpi = (label, val) => `<div style="border:1px solid #ddd; border-radius:8px; padding:12px; text-align:center;">
-      <div style="font-size:20px; font-weight:900;">${val}</div>
-      <div style="font-size:11px; color:#666; margin-top:4px;">${label}</div>
-    </div>`;
-  holder.innerHTML = `
-    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #222; padding-bottom:12px; margin-bottom:8px;">
-      <div style="font-size:20px; font-weight:900;">گزارش افراچوب — PMO</div>
-      <div style="font-size:12px; color:#555;">${todayJalaliLabel()}</div>
-    </div>
-    <div style="font-size:11px; color:#666; margin-bottom:16px;">دامنه‌ی خروجی: ${escapeHtml(exportScopeLabel())}</div>
-    <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:20px;">
-      ${kpi('کل قراردادها', stats.totalAll)}
-      ${kpi('خاتمه‌ها', stats.closedCount)}
-      ${kpi('عقب‌افتاده', stats.delayed)}
-      ${kpi('نزدیک سررسید', stats.nearDue)}
-      ${kpi('بروزرسانی نشده', stats.notUpdated)}
-      ${kpi('در انتظار تحویل به مالک', stats.waitingDelivery)}
-    </div>
-    <table style="width:100%; border-collapse:collapse; font-size:10.5px;">
-      <thead>
-        <tr style="background:#222; color:#fff;">
-          ${['نام قرارداد','کد قلم','تاریخ قرارداد','مرحله فعلی','پیشرفت','سررسید','وضعیت زمانی','روز بدون آپدیت','وضعیت'].map(h=>`<th style="padding:6px 8px; text-align:right; border:1px solid #333;">${h}</th>`).join('')}
-        </tr>
-      </thead>
-      <tbody>
-        ${rows.map((r,i) => `<tr style="background:${i%2?'#f5f5f5':'#fff'};">
-          <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['نام قرارداد'])}</td>
-          <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['کد قلم'])}</td>
-          <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['تاریخ قرارداد'])}</td>
-          <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['مرحله فعلی'])}</td>
-          <td style="padding:6px 8px; border:1px solid #ddd;">${r['درصد پیشرفت کل']}</td>
-          <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['سررسید اصلی'])}</td>
-          <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['وضعیت زمانی'])}</td>
-          <td style="padding:6px 8px; border:1px solid #ddd;">${r['روز از آخرین آپدیت']}</td>
-          <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['وضعیت'])}</td>
-        </tr>`).join('')}
-      </tbody>
-    </table>
-  `;
-  document.body.appendChild(holder);
   try{
-    const canvas = await html2canvas(holder, { scale:2, backgroundColor:'#ffffff', useCORS:true });
-    const { jsPDF } = window.jspdf;
-    const pdf = new jsPDF('p', 'pt', 'a4');
-    const pageW = pdf.internal.pageSize.getWidth();
-    const pageH = pdf.internal.pageSize.getHeight();
-    const imgW = pageW;
-    const imgH = canvas.height * (imgW / canvas.width);
-    let remaining = imgH, position = 0, first = true;
-    const imgData = canvas.toDataURL('image/jpeg', 0.92);
-    while(remaining > 0){
-      if(!first) pdf.addPage();
-      pdf.addImage(imgData, 'JPEG', 0, position, imgW, imgH);
-      remaining -= pageH;
-      position -= pageH;
-      first = false;
-    }
-    pdf.save(reportFileName('pdf'));
+    const stats = computeDashboardStats();
+    const rows = exportRows();
+    const kpi = (label, val) => `<div style="border:1px solid #ddd; border-radius:8px; padding:12px; text-align:center;">
+        <div style="font-size:20px; font-weight:900;">${val}</div>
+        <div style="font-size:11px; color:#666; margin-top:4px;">${label}</div>
+      </div>`;
+    const extraHeaderHtml = `
+      <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:20px;">
+        ${kpi('کل قراردادها', stats.totalAll)}
+        ${kpi('خاتمه‌ها', stats.closedCount)}
+        ${kpi('عقب‌افتاده', stats.delayed)}
+        ${kpi('نزدیک سررسید', stats.nearDue)}
+        ${kpi('بروزرسانی نشده', stats.notUpdated)}
+        ${kpi('در انتظار تحویل به مالک', stats.waitingDelivery)}
+      </div>`;
+    const headers = ['نام قرارداد','کد قلم','تاریخ قرارداد','سررسید اصلی','سررسید جبرانی','مرحله فعلی','پیشرفت','وضعیت زمانی','وضعیت'];
+    const tableRows = rows.map(r => [
+      r['نام قرارداد'], r['کد قلم'], r['تاریخ قرارداد'], r['سررسید اصلی'], r['سررسید جبرانی'],
+      r['مرحله فعلی'], r['درصد پیشرفت کل'], r['وضعیت زمانی'], r['وضعیت']
+    ]);
+    await renderPaginatedReportPdf({
+      reportTitle: 'گزارش افراچوب — PMO',
+      extraHeaderHtml,
+      headers,
+      rows: tableRows,
+      filename: reportFileName('pdf')
+    });
   }catch(err){
     alert('خطا در ساخت فایل PDF: ' + err.message);
   }finally{
-    document.body.removeChild(holder);
     if(btn){ btn.disabled = false; btn.textContent = '📄 خروجی PDF'; }
   }
 }
@@ -1581,6 +1646,9 @@ function viewerExportRows(){
   return getExportContracts().map(c => ({
     'نام قرارداد': c.name || '',
     'کد قلم': c.itemCode || '',
+    'تاریخ قرارداد': c.contractDate || '—',
+    'سررسید اصلی': c.dueDate || '—',
+    'سررسید جبرانی': c.revisedDueDate || '—',
     'مرحله فعلی': STAGES[getDisplayStageIndex(c)].name,
     'پیشرفت': overallPercent(c) + '%',
     'وضعیت': isCompleted(c) ? 'خاتمه‌یافته' : viewerCriticalStatus(c).label
@@ -1628,7 +1696,7 @@ async function exportExcelViewer(){
 
     const rows = viewerExportRows();
     const wsList = XLSX.utils.json_to_sheet(rows);
-    wsList['!cols'] = [{wch:24},{wch:14},{wch:24},{wch:10},{wch:26}];
+    wsList['!cols'] = [{wch:24},{wch:14},{wch:14},{wch:14},{wch:14},{wch:22},{wch:10},{wch:26}];
 
     const wb = XLSX.utils.book_new();
     wb.Workbook = { Views: [{ RTL: true }] };
@@ -1648,70 +1716,39 @@ async function exportPDFViewer(){
   }
   const btn = document.getElementById('exportPdfBtn');
   if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
-  const holder = document.createElement('div');
-  holder.style.cssText = 'position:fixed; top:0; left:-99999px; width:820px; background:#ffffff; color:#1a1a1a; font-family:Vazirmatn,sans-serif; direction:rtl; padding:28px;';
-  const s = computeViewerStats();
-  const rows = viewerExportRows();
-  const kpi = (label, val) => `<div style="border:1px solid #ddd; border-radius:8px; padding:12px; text-align:center;">
-      <div style="font-size:20px; font-weight:900;">${val}</div>
-      <div style="font-size:11px; color:#666; margin-top:4px;">${label}</div>
-    </div>`;
-  holder.innerHTML = `
-    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #222; padding-bottom:12px; margin-bottom:8px;">
-      <div style="font-size:20px; font-weight:900;">گزارش افراچوب — مدیر پروژه</div>
-      <div style="font-size:12px; color:#555;">${todayJalaliLabel()}</div>
-    </div>
-    <div style="font-size:11px; color:#666; margin-bottom:16px;">دامنه‌ی خروجی: ${escapeHtml(exportScopeLabel())}</div>
-    <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:20px;">
-      ${kpi('کل قراردادها', contracts.length)}
-      ${kpi('خاتمه نیافته', s.active.length)}
-      ${kpi('خاتمه‌یافته', s.completed.length)}
-      ${kpi('بحرانی', s.criticalList.length)}
-      ${kpi('نزدیک سررسید', s.nearList.length)}
-      ${kpi('منتظر نصب صفحه', s.panelWaitList.length)}
-    </div>
-    <div style="font-size:13px; font-weight:800; margin-bottom:10px;">پراکندگی قراردادها بر اساس مرحله</div>
-    <div style="margin-bottom:22px;">${viewerChartRowsForPdf()}</div>
-    <table style="width:100%; border-collapse:collapse; font-size:10.5px;">
-      <thead>
-        <tr style="background:#222; color:#fff;">
-          ${['نام قرارداد','کد قلم','مرحله فعلی','پیشرفت','وضعیت'].map(h=>`<th style="padding:6px 8px; text-align:right; border:1px solid #333;">${h}</th>`).join('')}
-        </tr>
-      </thead>
-      <tbody>
-        ${rows.map((r,i) => `<tr style="background:${i%2?'#f5f5f5':'#fff'};">
-          <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['نام قرارداد'])}</td>
-          <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['کد قلم'])}</td>
-          <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['مرحله فعلی'])}</td>
-          <td style="padding:6px 8px; border:1px solid #ddd;">${r['پیشرفت']}</td>
-          <td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(r['وضعیت'])}</td>
-        </tr>`).join('')}
-      </tbody>
-    </table>
-  `;
-  document.body.appendChild(holder);
   try{
-    const canvas = await html2canvas(holder, { scale:2, backgroundColor:'#ffffff', useCORS:true });
-    const { jsPDF } = window.jspdf;
-    const pdf = new jsPDF('p', 'pt', 'a4');
-    const pageW = pdf.internal.pageSize.getWidth();
-    const pageH = pdf.internal.pageSize.getHeight();
-    const imgW = pageW;
-    const imgH = canvas.height * (imgW / canvas.width);
-    let remaining = imgH, position = 0, first = true;
-    const imgData = canvas.toDataURL('image/jpeg', 0.92);
-    while(remaining > 0){
-      if(!first) pdf.addPage();
-      pdf.addImage(imgData, 'JPEG', 0, position, imgW, imgH);
-      remaining -= pageH;
-      position -= pageH;
-      first = false;
-    }
-    pdf.save(reportFileName('pdf'));
+    const s = computeViewerStats();
+    const rows = viewerExportRows();
+    const kpi = (label, val) => `<div style="border:1px solid #ddd; border-radius:8px; padding:12px; text-align:center;">
+        <div style="font-size:20px; font-weight:900;">${val}</div>
+        <div style="font-size:11px; color:#666; margin-top:4px;">${label}</div>
+      </div>`;
+    const extraHeaderHtml = `
+      <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:20px;">
+        ${kpi('کل قراردادها', contracts.length)}
+        ${kpi('خاتمه نیافته', s.active.length)}
+        ${kpi('خاتمه‌یافته', s.completed.length)}
+        ${kpi('بحرانی', s.criticalList.length)}
+        ${kpi('نزدیک سررسید', s.nearList.length)}
+        ${kpi('منتظر نصب صفحه', s.panelWaitList.length)}
+      </div>
+      <div style="font-size:13px; font-weight:800; margin-bottom:10px;">پراکندگی قراردادها بر اساس مرحله</div>
+      <div style="margin-bottom:22px;">${viewerChartRowsForPdf()}</div>`;
+    const headers = ['نام قرارداد','کد قلم','تاریخ قرارداد','سررسید اصلی','سررسید جبرانی','مرحله فعلی','پیشرفت','وضعیت'];
+    const tableRows = rows.map(r => [
+      r['نام قرارداد'], r['کد قلم'], r['تاریخ قرارداد'], r['سررسید اصلی'], r['سررسید جبرانی'],
+      r['مرحله فعلی'], r['پیشرفت'], r['وضعیت']
+    ]);
+    await renderPaginatedReportPdf({
+      reportTitle: 'گزارش افراچوب — مدیر پروژه',
+      extraHeaderHtml,
+      headers,
+      rows: tableRows,
+      filename: reportFileName('pdf')
+    });
   }catch(err){
     alert('خطا در ساخت فایل PDF: ' + err.message);
   }finally{
-    document.body.removeChild(holder);
     if(btn){ btn.disabled = false; btn.textContent = '📄 خروجی PDF (شامل نمودار)'; }
   }
 }
@@ -1933,7 +1970,7 @@ function renderSupervisorRow(c){
   const done = isCompleted(c);
   const due = dueStatus(c);
   const badges = (c.itemCode ? `<span class="mini-badge">کد قلم: ${escapeHtml(c.itemCode)}</span>` : '')
-    + (myRole !== 'afrachoobSupervisor' && (c.comments||[]).length ? `<span class="mini-badge">💬 ${c.comments.length}</span>` : '');
+    + (myRole !== 'afrachoobSupervisor' && myRole !== 'supervisor' && (c.comments||[]).length ? `<span class="mini-badge">💬 ${c.comments.length}</span>` : '');
   return `
     <div class="card" style="cursor:pointer;" onclick="openContractDetail('${c.id}', false)">
       <div class="card-head">
@@ -1961,7 +1998,7 @@ function renderCard(c, isAdmin, forceOpen){
 
   const badges = [];
   if(c.itemCode) badges.push('<span class="mini-badge">کد قلم: ' + escapeHtml(c.itemCode) + '</span>');
-  if(myRole !== 'afrachoobSupervisor' && (c.comments||[]).length) badges.push('<span class="mini-badge">💬 ' + c.comments.length + '</span>');
+  if(myRole !== 'afrachoobSupervisor' && myRole !== 'supervisor' && (c.comments||[]).length) badges.push('<span class="mini-badge">💬 ' + c.comments.length + '</span>');
 
   const timelineHtml = STAGES.map((st,i) => {
     const s = status[i] || {};
@@ -2020,7 +2057,7 @@ function renderCard(c, isAdmin, forceOpen){
   // V10: تاریخچه برای سرپرست نصب و سرپرست افراچوب اصلاً نمایش داده نمی‌شود (فقط مدیر می‌بیند)
   const showHistory = (myRole !== 'supervisor' && myRole !== 'afrachoobSupervisor');
   // V10: سرپرست افراچوب اجازه‌ی کامنت‌گذاری/دیدن کامنت‌های قرارداد را ندارد
-  const showComments = (myRole !== 'afrachoobSupervisor');
+  const showComments = (myRole !== 'afrachoobSupervisor' && myRole !== 'supervisor');
 
   const dueFieldHtml = isAdmin ? `
     <div class="field-row">
@@ -2033,7 +2070,14 @@ function renderCard(c, isAdmin, forceOpen){
       <span style="font-family:'JetBrains Mono',monospace; color:var(--ink-soft);">${escapeHtml(c.dueDate || 'ثبت نشده')}</span>
     </div>`;
 
-  const revDueFieldHtml = `
+  // V11: پنل سرپرست نصب — سررسید جبرانی فقط وقتی از قبل ثبت شده باشد نمایش داده می‌شود (فقط‌خواندنی)، وگرنه اصلاً نشان داده نمی‌شود
+  const revDueFieldHtml = (myRole === 'supervisor')
+    ? (c.revisedDueDate ? `
+    <div class="field-row">
+      <label>سررسید جبرانی:</label>
+      <span style="font-family:'JetBrains Mono',monospace; color:var(--ink-soft);">${escapeHtml(c.revisedDueDate)}</span>
+    </div>` : '')
+    : `
     <div class="field-row">
       <label>سررسید جبرانی:</label>
       <input type="text" id="revdue_${c.id}" placeholder="1405/06/20" value="${escapeHtml(c.revisedDueDate||'')}">
