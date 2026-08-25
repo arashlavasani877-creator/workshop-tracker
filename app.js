@@ -51,6 +51,13 @@ let exportDateTo = '';
 let logDateFrom = '';
 let logDateTo = '';
 let splashHidden = false;
+/* ---------- V10: پنل «سرپرست افراچوب» — کاملاً جدا از متغیرهای بالا ---------- */
+let afrTab = 'dashboard';     // 'dashboard' | 'contracts' | 'warnings' | 'closed' | 'pmoComments'
+let afrSearchQuery = '';
+let afrDashSection = null;    // null | 'critical' | 'waitingdelivery' | 'panelwait'
+let afrDashSearch = '';
+let afrFilterStage = 'all';
+let afrFilterStatus = 'all';
 
 function toggleTheme(){
   const isLight = document.documentElement.getAttribute('data-theme') === 'light';
@@ -183,12 +190,18 @@ function adminTimeStatus(c){
   if(dl <= ADMIN_NEAR_DUE_DAYS) return { cls:'near', label: dl + ' روز تا سررسید', daysLeft: dl };
   return { cls:'ontime', label: dl + ' روز تا سررسید', daysLeft: dl };
 }
+function isWarnEligible(c){
+  return !isCompleted(c) && getDisplayStageIndex(c) !== STAGES.length-2;
+}
 function adminAlerts(){
   const list = [];
   contracts.filter(c => !isCompleted(c)).forEach(c => {
-    const ts = adminTimeStatus(c);
-    if(ts.cls === 'late') list.push({ type:'late', c, label:'عقب‌افتاده — ' + ts.label });
-    else if(ts.cls === 'near') list.push({ type:'near', c, label:'نزدیک سررسید — ' + ts.label });
+    // هشدار سررسید: یکسان با renderWarningsHtml — قراردادهای «در انتظار تحویل‌دهی به مالک» اینجا نمی‌آیند (V10)
+    if(isWarnEligible(c)){
+      const st = dueStatus(c);
+      if(st.cls === 'late') list.push({ type:'late', c, label:'عقب‌افتاده — ' + st.label });
+      else if(st.cls === 'warn') list.push({ type:'near', c, label:'نزدیک سررسید — ' + st.label });
+    }
     if(isNotUpdated(c)){
       const label = overallPercent(c) === 0 ? 'هنوز شروع نشده (۰٪)' : (daysSinceUpdate(c) + ' روز بروزرسانی نشده');
       list.push({ type:'stale', c, label });
@@ -248,6 +261,7 @@ function isPanelWaiting(c){
 /* ---------- کامنت‌ها — مدیر پروژه فقط می‌بیند و کامنت می‌گذارد، مدیر و سرپرست هم می‌بینند و می‌توانند اقدام کنند ---------- */
 async function addComment(id, inputElId){
   if(!db || !currentUser) return;
+  if(myRole === 'afrachoobSupervisor') return; // V10: سرپرست افراچوب اجازه‌ی کامنت‌گذاری ندارد
   const input = document.getElementById(inputElId);
   const text = input ? input.value.trim() : '';
   if(!text) return;
@@ -538,7 +552,7 @@ function fmtLastSeen(ts){
 
 function ensureDataSubscriptions(){
   if(dataSubscribed) return;
-  if(myRole !== 'admin' && myRole !== 'supervisor' && myRole !== 'viewer') return;
+  if(myRole !== 'admin' && myRole !== 'supervisor' && myRole !== 'viewer' && myRole !== 'afrachoobSupervisor') return;
   dataSubscribed = true;
   db.collection('contracts').orderBy('createdAt','desc').onSnapshot((snap) => {
     contracts = snap.docs.map(d => ({ id:d.id, ...d.data() }));
@@ -669,6 +683,7 @@ function renderApp(){
   if(myRole === 'admin'){ renderAdmin(el); return; }
   if(myRole === 'supervisor'){ renderSupervisor(el); return; }
   if(myRole === 'viewer'){ renderViewer(el); return; }
+  if(myRole === 'afrachoobSupervisor'){ renderAfrachoobSupervisor(el); return; }
 
   el.innerHTML = `<div class="center-screen">
     <span class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">در حال بارگذاری…</span></span>
@@ -678,12 +693,13 @@ function renderApp(){
 }
 
 function roleFa(r){
-  return { admin:'مدیر', supervisor:'سرپرست نصب', viewer:'مدیر پروژه', pending:'در انتظار تایید', blocked:'مسدود' }[r] || r;
+  return { admin:'مدیر', supervisor:'سرپرست نصب', viewer:'مدیر پروژه', afrachoobSupervisor:'سرپرست افراچوب', pending:'در انتظار تایید', blocked:'مسدود' }[r] || r;
 }
 
 /* ---------- Shared: warnings list ---------- */
 function renderWarningsHtml(){
   const nearing = contracts
+    .filter(isWarnEligible)
     .map(c => ({ c, st: dueStatus(c) }))
     .filter(x => x.st.cls === 'warn' || x.st.cls === 'late')
     .sort((a,b) => (a.st.daysLeft ?? 999) - (b.st.daysLeft ?? 999));
@@ -742,6 +758,139 @@ function renderSupervisorList(){
   const cntEl = document.getElementById('supCount');
   if(cntEl) cntEl.textContent = contracts.filter(predicate).length + ' مورد';
   renderList(false, predicate);
+}
+
+/* ---------- Afrachoob Supervisor (سرپرست افراچوب) — V10 ----------
+   دقیقاً مثل پنل «سرپرست نصب» (همون دسترسی ویرایش کامل روی قراردادها) به‌علاوه‌ی یک تب «داشبورد»
+   با چارت و سه دکمه‌ی بحرانی/در انتظار تحویل‌دهی/منتظر نصب صفحه — با همون منطق مدیر پروژه و مدیر.
+   کامنت‌گذاری روی قرارداد و تاریخچه برای این نقش غیرفعال است. */
+function renderAfrachoobSupervisor(el){
+  const closedCount = contracts.filter(isCompleted).length;
+  const pmoUnseen = pmoUnseenCount();
+  el.innerHTML = `
+    <div class="toolbar"><button id="installBtn" class="btn-secondary" onclick="installApp()">نصب اپلیکیشن روی گوشی</button></div>
+    <div class="tabs">
+      <button class="${afrTab==='dashboard'?'active':''}" onclick="switchAfrTab('dashboard')">داشبورد</button>
+      <button class="${afrTab==='contracts'?'active':''}" onclick="switchAfrTab('contracts')">قراردادها</button>
+      <button class="${afrTab==='closed'?'active':''}" onclick="switchAfrTab('closed')">خاتمه‌ها ${closedCount?('('+closedCount+')'):''}</button>
+    </div>
+    <div class="tabs" style="margin-top:8px;">
+      <button class="${afrTab==='warnings'?'active':''}" onclick="switchAfrTab('warnings')">هشدار سررسید</button>
+      <button class="${afrTab==='pmoComments'?'active':''}" onclick="switchAfrTab('pmoComments')">💬 کامنت‌های مدیر پروژه ${pmoUnseen?('('+pmoUnseen+')'):''}</button>
+    </div>
+    <div id="afrBody"></div>
+    <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
+  `;
+  const installBtn = document.getElementById('installBtn');
+  if(installBtn) installBtn.style.display = window.__deferredPrompt ? 'block' : 'none';
+  const body = document.getElementById('afrBody');
+  if(afrTab === 'dashboard'){
+    renderAfrDashboard(body);
+  } else if(afrTab === 'contracts'){
+    body.innerHTML = `
+      <div class="section-title" style="margin-top:14px;">قراردادها <span class="cnt" id="afrCount"></span></div>
+      <input type="text" id="afrSearch" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(afrSearchQuery)}" class="auth-input" style="max-width:none;width:100%;margin-bottom:10px;" oninput="onAfrSearch(this.value)">
+      <div style="display:flex; gap:8px; margin-bottom:14px;">
+        <select id="afrStageFilter" class="admin-select" onchange="onAfrStageFilter(this.value)">
+          <option value="all">همه مراحل</option>
+          ${STAGES.map((s,i) => `<option value="${i}" ${afrFilterStage===String(i)?'selected':''}>${s.name}</option>`).join('')}
+        </select>
+        <select id="afrStatusFilter" class="admin-select" onchange="onAfrStatusFilter(this.value)">
+          <option value="all">همه وضعیت‌ها</option>
+          <option value="late" ${afrFilterStatus==='late'?'selected':''}>عقب‌افتاده</option>
+          <option value="near" ${afrFilterStatus==='near'?'selected':''}>نزدیک سررسید</option>
+          <option value="stale" ${afrFilterStatus==='stale'?'selected':''}>بروزرسانی نشده</option>
+          <option value="closed" ${afrFilterStatus==='closed'?'selected':''}>خاتمه‌یافته</option>
+        </select>
+      </div>
+      <div id="list"></div>`;
+    renderAfrList();
+  } else if(afrTab === 'warnings'){
+    body.innerHTML = renderWarningsHtml();
+  } else if(afrTab === 'pmoComments'){
+    body.innerHTML = renderPmoCommentsHtml();
+    renderPmoCommentsList();
+  } else {
+    body.innerHTML = `<div class="section-title" style="margin-top:14px;">خاتمه‌ها <span class="cnt">${closedCount} مورد</span></div><div id="list"></div>`;
+    renderList(false, isCompleted);
+  }
+}
+function switchAfrTab(t){ afrTab = t; renderApp(); }
+function onAfrSearch(v){ afrSearchQuery = v; renderAfrList(); }
+function onAfrStageFilter(v){ afrFilterStage = v; renderAfrList(); }
+function onAfrStatusFilter(v){ afrFilterStatus = v; renderAfrList(); }
+function renderAfrList(){
+  const q = afrSearchQuery.trim().toLowerCase();
+  const predicate = c => {
+    if(q && !((c.name||'').toLowerCase().includes(q) || (c.itemCode||'').toLowerCase().includes(q))) return false;
+    if(afrFilterStage !== 'all' && getDisplayStageIndex(c) !== parseInt(afrFilterStage,10)) return false;
+    if(afrFilterStatus === 'closed') return isCompleted(c);
+    if(afrFilterStatus !== 'all'){
+      if(isCompleted(c)) return false;
+      return afrFilterStatus === 'stale' ? isNotUpdated(c) : adminTimeStatus(c).cls === afrFilterStatus;
+    }
+    return true;
+  };
+  const cntEl = document.getElementById('afrCount');
+  if(cntEl) cntEl.textContent = contracts.filter(predicate).length + ' مورد';
+  renderList(false, predicate);
+}
+
+function renderAfrDashboard(body){
+  const vs = computeViewerStats();
+  body.innerHTML = `
+    <div class="kpi-grid" style="margin-top:14px;">
+      <div class="kpi-card"><div class="kpi-num">${contracts.length}</div><div class="kpi-label">کل قراردادها</div></div>
+      <div class="kpi-card"><div class="kpi-num">${vs.active.length}</div><div class="kpi-label">خاتمه نیافته</div></div>
+      <div class="kpi-card"><div class="kpi-num">${vs.completed.length}</div><div class="kpi-label">خاتمه‌یافته</div></div>
+      <div class="kpi-card kpi-red"><div class="kpi-num">${vs.criticalList.length}</div><div class="kpi-label">بحرانی</div></div>
+      <div class="kpi-card kpi-amber"><div class="kpi-num">${vs.nearList.length}</div><div class="kpi-label">نزدیک سررسید</div></div>
+      <div class="kpi-card kpi-blue"><div class="kpi-num">${vs.avgProgress}٪</div><div class="kpi-label">میانگین پیشرفت</div></div>
+    </div>
+    ${renderStageChartHtml()}
+    <div class="viewer-quicklinks" style="margin-top:18px;">
+      <button class="${afrDashSection==='critical'?'active':''}" onclick="switchAfrDashSection('critical')">🔴 بحرانی ${vs.criticalList.length?('('+vs.criticalList.length+')'):''}</button>
+      <button class="${afrDashSection==='waitingdelivery'?'active':''}" onclick="switchAfrDashSection('waitingdelivery')">📦 در انتظار تحویل‌دهی به مالک ${vs.waitingDeliveryList.length?('('+vs.waitingDeliveryList.length+')'):''}</button>
+      <button class="${afrDashSection==='panelwait'?'active':''}" onclick="switchAfrDashSection('panelwait')">🛠 منتظر نصب صفحه کابینت ${vs.panelWaitList.length?('('+vs.panelWaitList.length+')'):''}</button>
+    </div>
+    <div id="afrDashSectionBody"></div>
+  `;
+  renderAfrDashSectionBody();
+}
+function switchAfrDashSection(sec){
+  afrDashSection = (afrDashSection === sec) ? null : sec;
+  afrDashSearch = '';
+  renderApp();
+}
+function afrDashSectionContracts(){
+  const vs = computeViewerStats();
+  if(afrDashSection === 'critical') return vs.criticalList;
+  if(afrDashSection === 'waitingdelivery') return vs.waitingDeliveryList;
+  if(afrDashSection === 'panelwait') return vs.panelWaitList;
+  return [];
+}
+function onAfrDashSearch(v){ afrDashSearch = v; renderAfrDashSectionList(); }
+function renderAfrDashSectionBody(){
+  const wrap = document.getElementById('afrDashSectionBody');
+  if(!wrap) return;
+  if(!afrDashSection){ wrap.innerHTML = ''; return; }
+  const titles = { critical:'قراردادهای بحرانی', waitingdelivery:'در انتظار تحویل‌دهی به مالک', panelwait:'منتظر نصب صفحه کابینت' };
+  wrap.innerHTML = `
+    <div class="section-title" style="margin-top:16px;">${titles[afrDashSection]} <span class="cnt" id="afrDashCount"></span></div>
+    <input type="text" id="afrDashSearchInput" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(afrDashSearch)}" class="auth-input" style="max-width:none;width:100%;margin-bottom:10px;" oninput="onAfrDashSearch(this.value)">
+    <div id="afrDashList"></div>`;
+  renderAfrDashSectionList();
+}
+function renderAfrDashSectionList(){
+  const el = document.getElementById('afrDashList');
+  if(!el) return;
+  const q = afrDashSearch.trim().toLowerCase();
+  let items = afrDashSectionContracts();
+  if(q) items = items.filter(c => (c.name||'').toLowerCase().includes(q) || (c.itemCode||'').toLowerCase().includes(q));
+  const cntEl = document.getElementById('afrDashCount');
+  if(cntEl) cntEl.textContent = items.length + ' مورد';
+  if(!items.length){ el.innerHTML = '<div class="empty">موردی یافت نشد.</div>'; return; }
+  el.innerHTML = items.map(c => renderSupervisorRow(c)).join('');
 }
 
 /* ---------- Viewer role — "مدیر پروژه": پنل کاملاً جدا، فقط گزارش + کامنت، بدون هیچ ویرایشی روی قراردادها ---------- */
@@ -1690,7 +1839,7 @@ function renderAdminUsers(){
     if(u.role === 'pending'){
       actions = `<button class="btn-approve" onclick="openApproveModal('${u.id}','${escapeHtml(u.name||'')}')">تایید و تعیین سمت</button>
                  <button class="btn-block" onclick="setUserRole('${u.id}','blocked')">رد</button>`;
-    } else if(u.role === 'supervisor' || u.role === 'viewer'){
+    } else if(u.role === 'supervisor' || u.role === 'viewer' || u.role === 'afrachoobSupervisor'){
       actions = `<button class="btn-revoke" onclick="setUserRole('${u.id}','pending')">لغو دسترسی</button>
                  <button class="btn-block" onclick="setUserRole('${u.id}','blocked')">مسدود کن</button>`;
     } else if(u.role === 'blocked'){
@@ -1784,7 +1933,7 @@ function renderSupervisorRow(c){
   const done = isCompleted(c);
   const due = dueStatus(c);
   const badges = (c.itemCode ? `<span class="mini-badge">کد قلم: ${escapeHtml(c.itemCode)}</span>` : '')
-    + ((c.comments||[]).length ? `<span class="mini-badge">💬 ${c.comments.length}</span>` : '');
+    + (myRole !== 'afrachoobSupervisor' && (c.comments||[]).length ? `<span class="mini-badge">💬 ${c.comments.length}</span>` : '');
   return `
     <div class="card" style="cursor:pointer;" onclick="openContractDetail('${c.id}', false)">
       <div class="card-head">
@@ -1812,7 +1961,7 @@ function renderCard(c, isAdmin, forceOpen){
 
   const badges = [];
   if(c.itemCode) badges.push('<span class="mini-badge">کد قلم: ' + escapeHtml(c.itemCode) + '</span>');
-  if((c.comments||[]).length) badges.push('<span class="mini-badge">💬 ' + c.comments.length + '</span>');
+  if(myRole !== 'afrachoobSupervisor' && (c.comments||[]).length) badges.push('<span class="mini-badge">💬 ' + c.comments.length + '</span>');
 
   const timelineHtml = STAGES.map((st,i) => {
     const s = status[i] || {};
@@ -1868,6 +2017,10 @@ function renderCard(c, isAdmin, forceOpen){
   const histHtml = history.slice().reverse().slice(0,30).map(h =>
     `<div class="hist-item"><span>${escapeHtml(h.label)}</span><span class="hist-time">${fmtTime(h.time)}${h.by ? ' — '+authorLabel(h) : ''}</span></div>`
   ).join('') || '<div class="hist-item"><span>—</span></div>';
+  // V10: تاریخچه برای سرپرست نصب و سرپرست افراچوب اصلاً نمایش داده نمی‌شود (فقط مدیر می‌بیند)
+  const showHistory = (myRole !== 'supervisor' && myRole !== 'afrachoobSupervisor');
+  // V10: سرپرست افراچوب اجازه‌ی کامنت‌گذاری/دیدن کامنت‌های قرارداد را ندارد
+  const showComments = (myRole !== 'afrachoobSupervisor');
 
   const dueFieldHtml = isAdmin ? `
     <div class="field-row">
@@ -1939,12 +2092,13 @@ function renderCard(c, isAdmin, forceOpen){
         ${contractDateFieldHtml}
         ${descFieldHtml}
         <div class="timeline">${timelineHtml}</div>
+        ${showHistory ? `
         <div class="hist-title" style="cursor:pointer; display:flex; justify-content:space-between; align-items:center;">
           <span onclick="event.stopPropagation(); toggleHistory('${c.id}')">تاریخچه ${hOpen ? '▲' : '▼'}</span>
           ${isAdmin ? `<button onclick="event.stopPropagation(); clearHistory('${c.id}')" style="border:none;background:none;color:var(--red);font-size:10.5px;cursor:pointer;font-family:'Vazirmatn';text-decoration:underline;">پاک‌کردن تاریخچه</button>` : ''}
         </div>
-        ${hOpen ? histHtml : ''}
-        ${renderCommentsHtml(c, isAdmin ? 'a' : 's')}
+        ${hOpen ? histHtml : ''}` : ''}
+        ${showComments ? renderCommentsHtml(c, isAdmin ? 'a' : 's') : ''}
         ${isAdmin ? `<div class="del-row"><button onclick="event.stopPropagation(); deleteContract('${c.id}')">حذف قرارداد</button></div>` : ''}
       </div>
     </div>`;
