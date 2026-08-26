@@ -840,11 +840,11 @@ function renderAfrDashboard(body){
   const vs = computeViewerStats();
   body.innerHTML = `
     <div class="kpi-grid" style="margin-top:14px;">
-      <div class="kpi-card"><div class="kpi-num">${contracts.length}</div><div class="kpi-label">کل قراردادها</div></div>
-      <div class="kpi-card"><div class="kpi-num">${vs.active.length}</div><div class="kpi-label">خاتمه نیافته</div></div>
-      <div class="kpi-card"><div class="kpi-num">${vs.completed.length}</div><div class="kpi-label">خاتمه‌یافته</div></div>
-      <div class="kpi-card kpi-red"><div class="kpi-num">${vs.criticalList.length}</div><div class="kpi-label">بحرانی</div></div>
-      <div class="kpi-card kpi-amber"><div class="kpi-num">${vs.nearList.length}</div><div class="kpi-label">نزدیک سررسید</div></div>
+      <div class="kpi-card" style="cursor:pointer;" onclick="switchAfrDashSection('all')"><div class="kpi-num">${contracts.length}</div><div class="kpi-label">کل قراردادها</div></div>
+      <div class="kpi-card" style="cursor:pointer;" onclick="switchAfrDashSection('active')"><div class="kpi-num">${vs.active.length}</div><div class="kpi-label">خاتمه نیافته</div></div>
+      <div class="kpi-card" style="cursor:pointer;" onclick="switchAfrDashSection('closed')"><div class="kpi-num">${vs.completed.length}</div><div class="kpi-label">خاتمه‌یافته</div></div>
+      <div class="kpi-card kpi-red" style="cursor:pointer;" onclick="switchAfrDashSection('critical')"><div class="kpi-num">${vs.criticalList.length}</div><div class="kpi-label">بحرانی</div></div>
+      <div class="kpi-card kpi-blue" style="cursor:pointer;" onclick="switchAfrDashSection('waitingdelivery')"><div class="kpi-num">${vs.waitingDeliveryList.length}</div><div class="kpi-label">در انتظار تحویل‌دهی به مالک</div></div>
       <div class="kpi-card kpi-blue"><div class="kpi-num">${vs.avgProgress}٪</div><div class="kpi-label">میانگین پیشرفت</div></div>
     </div>
     ${renderStageChartHtml()}
@@ -867,6 +867,9 @@ function afrDashSectionContracts(){
   if(afrDashSection === 'critical') return vs.criticalList;
   if(afrDashSection === 'waitingdelivery') return vs.waitingDeliveryList;
   if(afrDashSection === 'panelwait') return vs.panelWaitList;
+  if(afrDashSection === 'active') return vs.active;
+  if(afrDashSection === 'closed') return vs.completed;
+  if(afrDashSection === 'all') return contracts.slice();
   return [];
 }
 function onAfrDashSearch(v){ afrDashSearch = v; renderAfrDashSectionList(); }
@@ -874,7 +877,7 @@ function renderAfrDashSectionBody(){
   const wrap = document.getElementById('afrDashSectionBody');
   if(!wrap) return;
   if(!afrDashSection){ wrap.innerHTML = ''; return; }
-  const titles = { critical:'قراردادهای بحرانی', waitingdelivery:'در انتظار تحویل‌دهی به مالک', panelwait:'منتظر نصب صفحه کابینت' };
+  const titles = { critical:'قراردادهای بحرانی', waitingdelivery:'در انتظار تحویل‌دهی به مالک', panelwait:'منتظر نصب صفحه کابینت', active:'قراردادهای خاتمه نیافته', closed:'قراردادهای خاتمه‌یافته', all:'همه قراردادها' };
   wrap.innerHTML = `
     <div class="section-title" style="margin-top:16px;">${titles[afrDashSection]} <span class="cnt" id="afrDashCount"></span></div>
     <input type="text" id="afrDashSearchInput" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(afrDashSearch)}" class="auth-input" style="max-width:none;width:100%;margin-bottom:10px;" oninput="onAfrDashSearch(this.value)">
@@ -919,11 +922,11 @@ function renderViewer(el){
     <div class="toolbar"><button id="installBtn" class="btn-secondary" onclick="installApp()">نصب اپلیکیشن روی گوشی</button></div>
 
     <div class="kpi-grid" style="margin-top:6px;">
-      <div class="kpi-card"><div class="kpi-num">${contracts.length}</div><div class="kpi-label">کل قراردادها</div></div>
-      <div class="kpi-card"><div class="kpi-num">${s.active.length}</div><div class="kpi-label">خاتمه نیافته</div></div>
-      <div class="kpi-card"><div class="kpi-num">${s.completed.length}</div><div class="kpi-label">خاتمه‌یافته</div></div>
-      <div class="kpi-card kpi-red"><div class="kpi-num">${s.criticalList.length}</div><div class="kpi-label">بحرانی</div></div>
-      <div class="kpi-card kpi-amber"><div class="kpi-num">${s.nearList.length}</div><div class="kpi-label">نزدیک سررسید</div></div>
+      <div class="kpi-card" style="cursor:pointer;" onclick="switchViewerSection('all')"><div class="kpi-num">${contracts.length}</div><div class="kpi-label">کل قراردادها</div></div>
+      <div class="kpi-card" style="cursor:pointer;" onclick="switchViewerSection('active')"><div class="kpi-num">${s.active.length}</div><div class="kpi-label">خاتمه نیافته</div></div>
+      <div class="kpi-card" style="cursor:pointer;" onclick="switchViewerSection('closed')"><div class="kpi-num">${s.completed.length}</div><div class="kpi-label">خاتمه‌یافته</div></div>
+      <div class="kpi-card kpi-red" style="cursor:pointer;" onclick="switchViewerSection('critical')"><div class="kpi-num">${s.criticalList.length}</div><div class="kpi-label">بحرانی</div></div>
+      <div class="kpi-card kpi-blue" style="cursor:pointer;" onclick="switchViewerSection('waitingdelivery')"><div class="kpi-num">${s.waitingDeliveryList.length}</div><div class="kpi-label">در انتظار تحویل‌دهی به مالک</div></div>
       <div class="kpi-card kpi-blue"><div class="kpi-num">${s.avgProgress}٪</div><div class="kpi-label">میانگین پیشرفت</div></div>
     </div>
 
@@ -973,11 +976,13 @@ function viewerSectionContracts(){
   if(viewerSection === 'critical') return s.criticalList;
   if(viewerSection === 'panelwait') return s.panelWaitList;
   if(viewerSection === 'waitingdelivery') return s.waitingDeliveryList;
+  if(viewerSection === 'active') return s.active;
+  if(viewerSection === 'closed') return s.completed;
   if(viewerSection === 'all') return contracts.slice();
   return [];
 }
 function viewerSectionTitle(){
-  return { critical:'قراردادهای بحرانی', panelwait:'منتظر نصب صفحه کابینت', waitingdelivery:'در انتظار تحویل‌دهی به مالک', all:'همه قراردادها' }[viewerSection] || '';
+  return { critical:'قراردادهای بحرانی', panelwait:'منتظر نصب صفحه کابینت', waitingdelivery:'در انتظار تحویل‌دهی به مالک', active:'قراردادهای خاتمه نیافته', closed:'قراردادهای خاتمه‌یافته', all:'همه قراردادها' }[viewerSection] || '';
 }
 function renderViewerSectionBody(){
   const body = document.getElementById('viewerSectionBody');
@@ -1148,12 +1153,11 @@ function renderAdminDashboard(){
 
   body.innerHTML = `
     <div class="kpi-grid">
-      <div class="kpi-card"><div class="kpi-num">${totalAll}</div><div class="kpi-label">کل قراردادها</div></div>
+      <div class="kpi-card" style="cursor:pointer;" onclick="openAllList()"><div class="kpi-num">${totalAll}</div><div class="kpi-label">کل قراردادها</div></div>
       <div class="kpi-card" style="cursor:pointer;" onclick="openClosedList()"><div class="kpi-num">${closedLen}</div><div class="kpi-label">خاتمه‌ها</div></div>
-      <div class="kpi-card kpi-red"><div class="kpi-num">${delayed}</div><div class="kpi-label">عقب‌افتاده</div></div>
-      <div class="kpi-card kpi-amber"><div class="kpi-num">${nearDue}</div><div class="kpi-label">نزدیک سررسید</div></div>
+      <div class="kpi-card kpi-red" style="cursor:pointer;" onclick="openDelayedList()"><div class="kpi-num">${delayed}</div><div class="kpi-label">عقب‌افتاده</div></div>
       <div class="kpi-card kpi-blue" style="cursor:pointer;" onclick="openNotUpdatedList()"><div class="kpi-num">${notUpdated}</div><div class="kpi-label">بروزرسانی نشده</div></div>
-      <div class="kpi-card"><div class="kpi-num">${vs.waitingDeliveryList.length}</div><div class="kpi-label">در انتظار تحویل‌دهی به مالک</div></div>
+      <div class="kpi-card" style="cursor:pointer;" onclick="openWaitingDeliveryList()"><div class="kpi-num">${vs.waitingDeliveryList.length}</div><div class="kpi-label">در انتظار تحویل‌دهی به مالک</div></div>
     </div>
     ${renderStageChartHtml()}
     <div class="viewer-quicklinks" style="margin-top:20px;">
@@ -1212,14 +1216,32 @@ function renderAdminDashSectionList(){
       </div>`;
   }).join('');
 }
+function openAllList(){
+  adminTab = 'contracts';
+  adminFilterStage = 'all';
+  adminFilterStatus = 'all';
+  renderApp();
+}
 function openClosedList(){
   adminTab = 'contracts';
   adminFilterStatus = 'closed';
   renderApp();
 }
+function openDelayedList(){
+  adminTab = 'contracts';
+  adminFilterStage = 'all';
+  adminFilterStatus = 'late';
+  renderApp();
+}
 function openNotUpdatedList(){
   adminTab = 'contracts';
   adminFilterStatus = 'stale';
+  renderApp();
+}
+function openWaitingDeliveryList(){
+  adminTab = 'contracts';
+  adminFilterStage = 'all';
+  adminFilterStatus = 'waiting';
   renderApp();
 }
 
@@ -1382,6 +1404,7 @@ function renderAdminContracts(){
         <option value="all">همه وضعیت‌ها</option>
         <option value="late" ${adminFilterStatus==='late'?'selected':''}>عقب‌افتاده</option>
         <option value="near" ${adminFilterStatus==='near'?'selected':''}>نزدیک سررسید</option>
+        <option value="waiting" ${adminFilterStatus==='waiting'?'selected':''}>در انتظار تحویل‌دهی به مالک</option>
         <option value="stale" ${adminFilterStatus==='stale'?'selected':''}>بروزرسانی نشده</option>
         <option value="closed" ${adminFilterStatus==='closed'?'selected':''}>خاتمه‌یافته</option>
       </select>
@@ -1979,6 +2002,8 @@ function renderMgmtList(){
   if(adminFilterStage !== 'all') items = items.filter(c => getDisplayStageIndex(c) === parseInt(adminFilterStage,10));
   if(adminFilterStatus === 'closed'){
     items = items.filter(isCompleted);
+  } else if(adminFilterStatus === 'waiting'){
+    items = items.filter(c => !isCompleted(c) && getDisplayStageIndex(c) === STAGES.length-2);
   } else if(adminFilterStatus !== 'all'){
     items = items.filter(c => !isCompleted(c) && (adminFilterStatus === 'stale' ? isNotUpdated(c) : adminTimeStatus(c).cls === adminFilterStatus));
   }
