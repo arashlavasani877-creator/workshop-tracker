@@ -520,10 +520,20 @@ function initAuthAndData(){
    Firestore خودش مثل Realtime Database قابلیت onDisconnect نداره، بنابراین وضعیت
    حضور با یک "ضربان" (heartbeat) دوره‌ای پیاده شده: هر کاربر هر ۲۰ ثانیه که اپ
    براش باز و فعاله، فیلد lastSeen رو روی خودش (فقط خودش) آپدیت می‌کنه.
-   در پنل مدیر، اگه lastSeen یک کاربر کمتر از ۴۵ ثانیه پیش باشه «آنلاین» نشون داده
-   می‌شه، وگرنه «آخرین بازدید ... پیش». این باعث اختلال یا خروج کسی از پنلش نمی‌شه. */
+   در پنل مدیر، اگه lastSeen یک کاربر کمتر از ۶۰ ثانیه پیش باشه «آنلاین» نشون داده
+   می‌شه، وگرنه «آخرین بازدید ... پیش». این باعث اختلال یا خروج کسی از پنلش نمی‌شه.
+
+   نکته‌ی مهم (رفع باگ): «آنلاین بودن» و «چند دقیقه پیش» بر اساس Date.now() محاسبه
+   می‌شن، اما رندر فقط وقتی اتفاق می‌افته که یک onSnapshot جدید از Firestore برسه —
+   یعنی وقتی کاربری واقعاً آفلاین می‌شه و دیگه هیچ نوشتنی روی دیتابیس انجام نمی‌ده،
+   صفحه‌ی مدیر هیچ رویداد جدیدی دریافت نمی‌کنه و وضعیت قبلی («آنلاین») روی صفحه
+   یخ می‌زنه تا یه اتفاق نامرتبط دیگه رندر رو دوباره صدا بزنه. برای همین یک تایمر
+   نمایشی صرف (بدون هیچ خواندن/نوشتن جدیدی روی Firestore) اضافه شده که فقط تب
+   «کاربران» پنل مدیر رو هر چند ثانیه یک‌بار با همون دیتای موجود دوباره رندر می‌کنه
+   تا زمان‌ها و وضعیت آنلاین/آفلاین همیشه با ساعت واقعی هماهنگ بمونن. */
 const PRESENCE_INTERVAL_MS = 20000;
-const PRESENCE_ONLINE_THRESHOLD_MS = 45000;
+const PRESENCE_ONLINE_THRESHOLD_MS = 60000;
+const PRESENCE_UI_REFRESH_MS = 10000;
 function startPresenceHeartbeat(userRef){
   const beat = () => { userRef.update({ lastSeen: Date.now() }).catch(() => {}); };
   beat();
@@ -537,6 +547,13 @@ function startPresenceHeartbeat(userRef){
 function stopPresenceHeartbeat(){
   if(presenceInterval){ clearInterval(presenceInterval); presenceInterval = null; }
 }
+// تایمر نمایشی: هیچ درخواستی به Firestore نمی‌زنه، فقط با دیتای همین الانِ usersList
+// دوباره رندر می‌کنه تا «آنلاین/آخرین بازدید» با گذر زمان واقعی هماهنگ بمونه.
+setInterval(() => {
+  if(myRole === 'admin' && adminTab === 'users' && document.visibilityState === 'visible'){
+    renderApp();
+  }
+}, PRESENCE_UI_REFRESH_MS);
 function isUserOnline(u){
   return !!(u && u.lastSeen && (Date.now() - u.lastSeen) < PRESENCE_ONLINE_THRESHOLD_MS);
 }
