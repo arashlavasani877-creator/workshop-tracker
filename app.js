@@ -1126,7 +1126,8 @@ function computeDashboardStats(){
     delayed: active.filter(c => adminTimeStatus(c).cls === 'late').length,
     nearDue: active.filter(c => adminTimeStatus(c).cls === 'near').length,
     notUpdated: active.filter(isNotUpdated).length,
-    waitingDelivery: active.filter(c => getDisplayStageIndex(c) === STAGES.length-2).length
+    waitingDelivery: active.filter(c => getDisplayStageIndex(c) === STAGES.length-2).length,
+    avgProgress: active.length ? Math.round(active.reduce((s,c)=>s+overallPercent(c),0)/active.length) : 0
   };
 }
 
@@ -1158,6 +1159,7 @@ function renderAdminDashboard(){
       <div class="kpi-card kpi-red" style="cursor:pointer;" onclick="openDelayedList()"><div class="kpi-num">${delayed}</div><div class="kpi-label">عقب‌افتاده</div></div>
       <div class="kpi-card kpi-blue" style="cursor:pointer;" onclick="openNotUpdatedList()"><div class="kpi-num">${notUpdated}</div><div class="kpi-label">بروزرسانی نشده</div></div>
       <div class="kpi-card" style="cursor:pointer;" onclick="openWaitingDeliveryList()"><div class="kpi-num">${vs.waitingDeliveryList.length}</div><div class="kpi-label">در انتظار تحویل‌دهی به مالک</div></div>
+      <div class="kpi-card kpi-blue"><div class="kpi-num">${vs.avgProgress}٪</div><div class="kpi-label">میانگین پیشرفت</div></div>
     </div>
     ${renderStageChartHtml()}
     <div class="viewer-quicklinks" style="margin-top:20px;">
@@ -1499,9 +1501,9 @@ async function exportExcel(){
       ['کل قراردادها', stats.totalAll],
       ['خاتمه‌ها', stats.closedCount],
       ['عقب‌افتاده', stats.delayed],
-      ['نزدیک سررسید', stats.nearDue],
       ['بروزرسانی نشده', stats.notUpdated],
-      ['در انتظار تحویل‌دهی به مالک', stats.waitingDelivery]
+      ['در انتظار تحویل‌دهی به مالک', stats.waitingDelivery],
+      ['میانگین پیشرفت', stats.avgProgress + '٪']
     ];
     const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
     wsSummary['!cols'] = [{wch:30},{wch:24}];
@@ -1665,13 +1667,13 @@ function ganttRowHtml(c){
   const exp = expectedPercent(c);
   return `
     <div style="display:flex; align-items:center; gap:7px; margin-bottom:4px;">
-      <div style="width:130px; font-size:9px; color:#222; flex-shrink:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(truncateText(c.name||'—', 20))}</div>
+      <div style="width:150px; font-size:9px; color:#222; flex-shrink:0; white-space:nowrap; overflow:hidden;">${escapeHtml(truncateText(c.name||'—', 22))}</div>
       <div style="flex:1; position:relative; background:#eee; border-radius:4px; height:11px;">
         <div style="width:${actual}%; background:${color}; height:100%; border-radius:4px;"></div>
         ${exp!=null ? `<div style="position:absolute; top:-2px; bottom:-2px; left:${exp}%; width:2px; background:#111;"></div>` : ''}
       </div>
       <div style="width:28px; text-align:left; font-size:8.5px; color:#333; flex-shrink:0;">${actual}٪</div>
-      <div style="width:112px; font-size:8px; color:${color}; font-weight:700; flex-shrink:0; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(st.label)}</div>
+      <div style="width:130px; font-size:8px; color:${color}; font-weight:700; flex-shrink:0; white-space:nowrap; overflow:hidden;">${escapeHtml(st.label)}</div>
     </div>`;
 }
 async function exportManagementSummaryPdf(){
@@ -1692,17 +1694,14 @@ async function exportManagementSummaryPdf(){
     const active = contracts.filter(c => !isCompleted(c));
     const closedCount = contracts.length - active.length;
     const criticalList = active.filter(c => mgmtRowStatus(c).cls === 'late');
-    const nearList = active.filter(c => mgmtRowStatus(c).cls === 'warn' && adminTimeStatus(c).cls === 'near');
     const waitingDeliveryList = active.filter(c => getDisplayStageIndex(c) === STAGES.length-2);
     const onScheduleCount = active.filter(c => mgmtRowStatus(c).cls === 'ok').length;
+    const notUpdatedCount = active.filter(isNotUpdated).length;
     const avgProgress = active.length ? Math.round(active.reduce((s,c)=>s+overallPercent(c),0)/active.length) : 0;
 
     // ترتیب گزارش گانتی: بحرانی‌ها اول، بعد نزدیک/عقب از برنامه، بعد مطابق برنامه، در انتها در انتظار تحویل
     const order = { late:0, warn:1, ok:2, waiting:3 };
     const ganttList = active.slice().sort((a,b) => order[mgmtRowStatus(a).cls]-order[mgmtRowStatus(b).cls]);
-    const GANTT_CAP = 18;
-    const ganttShown = ganttList.slice(0, GANTT_CAP);
-    const ganttExtra = ganttList.length - ganttShown.length;
 
     const kpi = (label, val, color) => `<div style="border:1px solid #ddd; border-radius:8px; padding:9px 6px; text-align:center;">
         <div style="font-size:17px; font-weight:900; ${color?('color:'+color+';'):''}">${val}</div>
@@ -1720,95 +1719,150 @@ async function exportManagementSummaryPdf(){
         <div style="width:18px; text-align:left; font-size:8.5px; color:#333;">${stageCounts[i]}</div>
       </div>`).join('');
 
-    // ---------------- صفحه‌ی اول: خلاصه‌ی وضعیت + نمای گانتی سرعت پیشرفت همه‌ی قراردادهای فعال ----------------
-    const page1Html = `
-      <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #222; padding-bottom:10px; margin-bottom:10px;">
-        <div style="font-size:19px; font-weight:900;">خلاصه مدیریتی — وضعیت قراردادها</div>
-        <div style="font-size:11px; color:#555;">${todayJalaliLabel()}</div>
-      </div>
-      <div style="display:grid; grid-template-columns:repeat(5,1fr); gap:7px; margin-bottom:12px;">
+    // ردیف جدولی بدون تگ <table> (به‌عمد div-flex) — چون امکان جدا کردن ردیف‌به‌ردیف بین صفحات را ساده‌تر می‌کند
+    // و هیچ‌جا از text-overflow:ellipsis روی متن مخلوط فارسی/لاتین استفاده نمی‌شود (منبع باگ بهم‌ریختگی فونت در html2canvas)
+    const rowDiv = (cells, bg, extraStyle) => `
+      <div style="display:flex; align-items:center; gap:0; margin-bottom:2px; background:${bg}; border:1px solid #eee; border-radius:3px; ${extraStyle||''}">
+        ${cells.map(c => `<div style="${c.style} padding:5px 7px; overflow:hidden; white-space:nowrap;">${c.html}</div>`).join('')}
+      </div>`;
+    const critHeaderRow = rowDiv(
+      [
+        {style:'flex:1; font-weight:800; color:#fff;', html:'نام قرارداد'},
+        {style:'width:80px; font-weight:800; color:#fff;', html:'کد قلم'},
+        {style:'width:55px; font-weight:800; color:#fff;', html:'پیشرفت'},
+        {style:'width:90px; font-weight:800; color:#fff;', html:'سررسید فعال'},
+        {style:'width:140px; font-weight:800; color:#fff;', html:'وضعیت'}
+      ], '#dc2626', 'font-size:9px;'
+    );
+    const critRow = (c,i) => rowDiv(
+      [
+        {style:'flex:1; color:#222;', html:escapeHtml(truncateText(c.name||'—', 30))},
+        {style:'width:80px; color:#333;', html:escapeHtml(c.itemCode||'—')},
+        {style:'width:55px; color:#333;', html:overallPercent(c)+'٪'},
+        {style:'width:90px; color:#333;', html:escapeHtml(c.revisedDueDate || c.dueDate || '—')},
+        {style:'width:140px; color:#dc2626; font-weight:700;', html:escapeHtml(truncateText(dueStatus(c).label, 22))}
+      ], i%2?'#fef2f2':'#fff', 'font-size:9px;'
+    );
+    const waitHeaderRow = rowDiv(
+      [
+        {style:'flex:1; font-weight:800; color:#fff;', html:'نام قرارداد'},
+        {style:'width:80px; font-weight:800; color:#fff;', html:'کد قلم'},
+        {style:'width:60px; font-weight:800; color:#fff;', html:'پیشرفت'}
+      ], '#2563eb', 'font-size:9px;'
+    );
+    const waitRow = (c,i) => rowDiv(
+      [
+        {style:'flex:1; color:#222;', html:escapeHtml(truncateText(c.name||'—', 34))},
+        {style:'width:80px; color:#333;', html:escapeHtml(c.itemCode||'—')},
+        {style:'width:60px; color:#333;', html:overallPercent(c)+'٪'}
+      ], i%2?'#eff6ff':'#fff', 'font-size:9px;'
+    );
+
+    // ---------------- واحدهای اتمیک محتوا به ترتیب نمایش — هیچ‌کدام هرگز وسط صفحه بریده نمی‌شوند ----------------
+    const units = [];
+    units.push(`
+      <div style="display:grid; grid-template-columns:repeat(6,1fr); gap:7px; margin-bottom:12px;">
         ${kpi('کل قراردادها', contracts.length)}
+        ${kpi('خاتمه‌ها', closedCount)}
         ${kpi('بحرانی', criticalList.length, '#dc2626')}
-        ${kpi('نزدیک سررسید', nearList.length, '#d97706')}
+        ${kpi('بروزرسانی نشده', notUpdatedCount, '#2563eb')}
         ${kpi('در انتظار تحویل', waitingDeliveryList.length, '#2563eb')}
         ${kpi('میانگین پیشرفت', avgProgress+'٪')}
       </div>
       <div style="background:#f6f6f4; border:1px solid #e2e2de; border-radius:8px; padding:9px 12px; font-size:10.5px; color:#333; margin-bottom:14px; line-height:1.8;">📌 ${escapeHtml(insight)}</div>
       <div style="font-size:11.5px; font-weight:800; margin-bottom:8px;">پراکندگی قراردادها بر اساس مرحله</div>
-      <div style="margin-bottom:16px;">${stageChartHtml}</div>
-      <div style="font-size:11.5px; font-weight:800; margin-bottom:2px;">نمای کلی پیشرفت نسبت به برنامه‌ی زمانی (خط تیره = پیشرفت مورد انتظار طبق سررسید)</div>
-      <div style="font-size:8.5px; color:#777; margin-bottom:8px;">مرتب‌شده بر اساس اولویت: بحرانی ← نزدیک/عقب از برنامه ← مطابق برنامه ← در انتظار تحویل‌دهی</div>
-      <div>${ganttShown.map(ganttRowHtml).join('')}</div>
-      ${ganttExtra > 0 ? `<div style="font-size:9px; color:#777; margin-top:6px;">+ ${ganttExtra} قرارداد دیگر (جزئیات کامل در خروجی PDF/اکسل اصلی)</div>` : ''}
-    `;
+      <div>${stageChartHtml}</div>
+    `);
+    units.push(`
+      <div style="font-size:11.5px; font-weight:800; margin:16px 0 2px;">نمای کلی پیشرفت نسبت به برنامه‌ی زمانی (خط تیره = پیشرفت مورد انتظار طبق سررسید)</div>
+      <div style="font-size:8.5px; color:#777; margin-bottom:8px;">مرتب‌شده بر اساس اولویت: بحرانی ← نزدیک/عقب از برنامه ← مطابق برنامه ← در انتظار تحویل‌دهی</div>`);
+    ganttList.forEach(c => units.push(ganttRowHtml(c)));
 
-    // ---------------- صفحه‌ی دوم: لیست بحرانی‌ها + لیست جدای «در انتظار تحویل‌دهی به مالک» ----------------
-    const CRIT_CAP = 12, WAIT_CAP = 12;
-    const critSorted = criticalList.slice().sort((a,b) => (dueStatus(a).daysLeft??0) - (dueStatus(b).daysLeft??0));
-    const critShown = critSorted.slice(0, CRIT_CAP);
-    const critExtra = critSorted.length - critShown.length;
-    const waitShown = waitingDeliveryList.slice(0, WAIT_CAP);
-    const waitExtra = waitingDeliveryList.length - waitShown.length;
+    units.push(`<div style="font-size:11.5px; font-weight:800; margin:18px 0 8px; color:#dc2626;">🔴 قراردادهای بحرانی (عقب‌افتاده از سررسید) ${criticalList.length ? '— '+criticalList.length+' مورد' : ''}</div>`);
+    if(criticalList.length){
+      const critSorted = criticalList.slice().sort((a,b) => (dueStatus(a).daysLeft??0) - (dueStatus(b).daysLeft??0));
+      units.push(critHeaderRow);
+      critSorted.forEach((c,i) => units.push(critRow(c,i)));
+    } else {
+      units.push(`<div style="font-size:10px; color:#0f766e;">✅ در حال حاضر هیچ قرارداد بحرانی‌ای وجود ندارد.</div>`);
+    }
 
-    const critTableHtml = critShown.length ? `
-      <table style="width:100%; border-collapse:collapse; font-size:9.5px; margin-bottom:6px;">
-        <thead><tr style="background:#dc2626; color:#fff;">
-          ${['نام قرارداد','کد قلم','پیشرفت','سررسید فعال','وضعیت'].map(h=>`<th style="padding:5px 7px; text-align:right; border:1px solid #b91c1c;">${h}</th>`).join('')}
-        </tr></thead>
-        <tbody>
-          ${critShown.map((c,i) => `<tr style="background:${i%2?'#fef2f2':'#fff'};">
-            <td style="padding:5px 7px; border:1px solid #f3d0d0;">${escapeHtml(c.name||'—')}</td>
-            <td style="padding:5px 7px; border:1px solid #f3d0d0;">${escapeHtml(c.itemCode||'—')}</td>
-            <td style="padding:5px 7px; border:1px solid #f3d0d0;">${overallPercent(c)}٪</td>
-            <td style="padding:5px 7px; border:1px solid #f3d0d0;">${escapeHtml(c.revisedDueDate || c.dueDate || '—')}</td>
-            <td style="padding:5px 7px; border:1px solid #f3d0d0; color:#dc2626; font-weight:700;">${escapeHtml(dueStatus(c).label)}</td>
-          </tr>`).join('')}
-        </tbody>
-      </table>` : `<div style="font-size:10px; color:#0f766e; margin-bottom:10px;">✅ در حال حاضر هیچ قرارداد بحرانی‌ای وجود ندارد.</div>`;
+    units.push(`<div style="font-size:11.5px; font-weight:800; margin:18px 0 8px; color:#2563eb;">📦 در انتظار تحویل‌دهی به مالک ${waitingDeliveryList.length ? '— '+waitingDeliveryList.length+' مورد' : ''} <span style="font-size:8.5px; color:#777; font-weight:400;">(این‌ها بحرانی محسوب نمی‌شوند)</span></div>`);
+    if(waitingDeliveryList.length){
+      units.push(waitHeaderRow);
+      waitingDeliveryList.forEach((c,i) => units.push(waitRow(c,i)));
+    } else {
+      units.push(`<div style="font-size:10px; color:#777;">موردی در این وضعیت نیست.</div>`);
+    }
 
-    const waitTableHtml = waitShown.length ? `
-      <table style="width:100%; border-collapse:collapse; font-size:9.5px; margin-bottom:6px;">
-        <thead><tr style="background:#2563eb; color:#fff;">
-          ${['نام قرارداد','کد قلم','پیشرفت'].map(h=>`<th style="padding:5px 7px; text-align:right; border:1px solid #1d4ed8;">${h}</th>`).join('')}
-        </tr></thead>
-        <tbody>
-          ${waitShown.map((c,i) => `<tr style="background:${i%2?'#eff6ff':'#fff'};">
-            <td style="padding:5px 7px; border:1px solid #cfe0fb;">${escapeHtml(c.name||'—')}</td>
-            <td style="padding:5px 7px; border:1px solid #cfe0fb;">${escapeHtml(c.itemCode||'—')}</td>
-            <td style="padding:5px 7px; border:1px solid #cfe0fb;">${overallPercent(c)}٪</td>
-          </tr>`).join('')}
-        </tbody>
-      </table>` : `<div style="font-size:10px; color:#777; margin-bottom:10px;">موردی در این وضعیت نیست.</div>`;
+    units.push(`<div style="margin-top:18px; padding-top:10px; border-top:1px solid #ddd; font-size:8.5px; color:#999;">گزارش خودکار افراچوب — ${todayJalaliLabel()} — برای جزئیات کامل هر قرارداد از پنل «مدیریت قراردادها» استفاده کنید.</div>`);
 
-    const page2Html = `
-      <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1.5px solid #222; padding-bottom:8px; margin-bottom:12px;">
-        <div style="font-size:14px; font-weight:800;">خلاصه مدیریتی — جزئیات موارد نیازمند پیگیری</div>
-        <div style="font-size:9.5px; color:#666;">صفحه ۲</div>
-      </div>
-      <div style="font-size:11.5px; font-weight:800; margin-bottom:8px; color:#dc2626;">🔴 قراردادهای بحرانی (عقب‌افتاده از سررسید) ${criticalList.length ? '— '+criticalList.length+' مورد' : ''}</div>
-      ${critTableHtml}
-      ${critExtra > 0 ? `<div style="font-size:9px; color:#777; margin-bottom:14px;">+ ${critExtra} مورد بحرانی دیگر</div>` : '<div style="margin-bottom:14px;"></div>'}
-      <div style="font-size:11.5px; font-weight:800; margin-bottom:8px; color:#2563eb;">📦 در انتظار تحویل‌دهی به مالک ${waitingDeliveryList.length ? '— '+waitingDeliveryList.length+' مورد' : ''} <span style="font-size:8.5px; color:#777; font-weight:400;">(این‌ها بحرانی محسوب نمی‌شوند)</span></div>
-      ${waitTableHtml}
-      ${waitExtra > 0 ? `<div style="font-size:9px; color:#777;">+ ${waitExtra} مورد دیگر</div>` : ''}
-      <div style="margin-top:24px; padding-top:10px; border-top:1px solid #ddd; font-size:8.5px; color:#999;">گزارش خودکار افراچوب — ${todayJalaliLabel()} — برای جزئیات کامل هر قرارداد از پنل «مدیریت قراردادها» استفاده کنید.</div>
-    `;
+    // ---------------- صفحه‌بندی واقعی بر اساس ارتفاع دقیق هر واحد — بدون سقف تعداد، با استفاده‌ی کامل از فضای هر صفحه ----------------
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF('p', 'pt', 'a4');
+    const pageW = pdf.internal.pageSize.getWidth();
+    const pageH = pdf.internal.pageSize.getHeight();
+    const MARGIN_TOP = 16, MARGIN_BOTTOM = 16;
+    const availPt = pageH - MARGIN_TOP - MARGIN_BOTTOM;
+
+    const bigHeaderHtml = `
+      <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #222; padding-bottom:10px; margin-bottom:10px;">
+        <div style="font-size:19px; font-weight:900;">خلاصه مدیریتی — وضعیت قراردادها</div>
+        <div style="font-size:11px; color:#555;">${todayJalaliLabel()}</div>
+      </div>`;
+    const smallHeaderHtml = (pageNo) => `
+      <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1.5px solid #222; padding-bottom:8px; margin-bottom:10px;">
+        <div style="font-size:13px; font-weight:800;">خلاصه مدیریتی — ادامه</div>
+        <div style="font-size:10px; color:#666;">صفحه ${pageNo}</div>
+      </div>`;
 
     const holder = document.createElement('div');
     holder.style.cssText = 'position:fixed; top:0; left:-99999px; width:820px; background:#ffffff; color:#1a1a1a; font-family:Vazirmatn,sans-serif; direction:rtl; padding:26px; box-sizing:border-box;';
     document.body.appendChild(holder);
-    let pdf;
     try{
-      const { jsPDF } = window.jspdf;
-      pdf = new jsPDF('p', 'pt', 'a4');
-      const pageW = pdf.internal.pageSize.getWidth();
-      holder.innerHTML = page1Html;
-      const canvas1 = await html2canvas(holder, { scale:2, backgroundColor:'#ffffff', useCORS:true });
-      pdf.addImage(canvas1.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 18, pageW, canvas1.height*(pageW/canvas1.width));
-      pdf.addPage();
-      holder.innerHTML = page2Html;
-      const canvas2 = await html2canvas(holder, { scale:2, backgroundColor:'#ffffff', useCORS:true });
-      pdf.addImage(canvas2.toDataURL('image/jpeg', 0.92), 'JPEG', 0, 18, pageW, canvas2.height*(pageW/canvas2.width));
+      holder.innerHTML = bigHeaderHtml;
+      const bigHeaderPx = holder.getBoundingClientRect().height;
+      holder.innerHTML = smallHeaderHtml(2);
+      const smallHeaderPx = holder.getBoundingClientRect().height;
+
+      // اندازه‌گیری ارتفاع واقعی تک‌تک واحدها در یک reflow (بدون عکس‌برداری)
+      holder.innerHTML = units.map((u,i) => `<div data-u="${i}">${u}</div>`).join('');
+      const unitEls = Array.from(holder.querySelectorAll('[data-u]'));
+      const unitHeightsPx = unitEls.map(el => el.getBoundingClientRect().height);
+
+      const cssWidth = holder.offsetWidth;
+      const ptPerPx = pageW / cssWidth;
+      const availPx = availPt / ptPerPx;
+
+      const pages = [];
+      let idx = 0, isFirst = true;
+      while(idx < units.length){
+        const headPx = isFirst ? bigHeaderPx : smallHeaderPx;
+        const budget = availPx - headPx;
+        let used = 0, count = 0;
+        while(idx+count < units.length){
+          const h = unitHeightsPx[idx+count];
+          if(count > 0 && used + h > budget) break;
+          used += h; count++;
+        }
+        if(count === 0) count = 1;
+        pages.push({ start: idx, count, isFirst });
+        idx += count;
+        isFirst = false;
+      }
+      if(!pages.length) pages.push({ start:0, count:0, isFirst:true });
+
+      for(let p=0; p<pages.length; p++){
+        const { start, count, isFirst: pf } = pages[p];
+        const chunk = units.slice(start, start+count);
+        holder.innerHTML = `${pf ? bigHeaderHtml : smallHeaderHtml(p+1)}${chunk.join('')}`;
+        const canvas = await html2canvas(holder, { scale:2, backgroundColor:'#ffffff', useCORS:true });
+        const imgData = canvas.toDataURL('image/jpeg', 0.92);
+        const imgW = pageW;
+        const imgH = canvas.height * (imgW / canvas.width);
+        if(p > 0) pdf.addPage();
+        pdf.addImage(imgData, 'JPEG', 0, MARGIN_TOP, imgW, imgH);
+      }
     } finally {
       document.body.removeChild(holder);
     }
@@ -1858,9 +1912,9 @@ async function exportPDF(){
         ${kpi('کل قراردادها', stats.totalAll)}
         ${kpi('خاتمه‌ها', stats.closedCount)}
         ${kpi('عقب‌افتاده', stats.delayed)}
-        ${kpi('نزدیک سررسید', stats.nearDue)}
         ${kpi('بروزرسانی نشده', stats.notUpdated)}
         ${kpi('در انتظار تحویل به مالک', stats.waitingDelivery)}
+        ${kpi('میانگین پیشرفت', stats.avgProgress+'٪')}
       </div>`;
     const headers = ['نام قرارداد','کد قلم','تاریخ قرارداد','سررسید اصلی','سررسید جبرانی','مرحله فعلی','پیشرفت','وضعیت زمانی','وضعیت'];
     const tableRows = rows.map(r => [
@@ -1924,9 +1978,9 @@ async function exportExcelViewer(){
       ['خاتمه نیافته', s.active.length],
       ['خاتمه‌یافته', s.completed.length],
       ['بحرانی', s.criticalList.length],
-      ['نزدیک سررسید', s.nearList.length],
-      ['منتظر نصب صفحه کابینت', s.panelWaitList.length],
       ['در انتظار تحویل‌دهی به مالک', s.waitingDeliveryList.length],
+      ['منتظر نصب صفحه کابینت', s.panelWaitList.length],
+      ['میانگین پیشرفت', s.avgProgress + '٪'],
       [],
       ['پراکندگی بر اساس مرحله', '']
     ];
@@ -1969,9 +2023,10 @@ async function exportPDFViewer(){
         ${kpi('خاتمه نیافته', s.active.length)}
         ${kpi('خاتمه‌یافته', s.completed.length)}
         ${kpi('بحرانی', s.criticalList.length)}
-        ${kpi('نزدیک سررسید', s.nearList.length)}
-        ${kpi('منتظر نصب صفحه', s.panelWaitList.length)}
+        ${kpi('در انتظار تحویل‌دهی به مالک', s.waitingDeliveryList.length)}
+        ${kpi('میانگین پیشرفت', s.avgProgress+'٪')}
       </div>
+      <div style="font-size:9px; color:#777; margin-bottom:14px;">منتظر نصب صفحه کابینت: ${s.panelWaitList.length} مورد</div>
       <div style="font-size:13px; font-weight:800; margin-bottom:10px;">پراکندگی قراردادها بر اساس مرحله</div>
       <div style="margin-bottom:22px;">${viewerChartRowsForPdf()}</div>`;
     const headers = ['نام قرارداد','کد قلم','تاریخ قرارداد','سررسید اصلی','سررسید جبرانی','مرحله فعلی','پیشرفت','وضعیت'];
