@@ -26,7 +26,10 @@ service cloud.firestore {
                     && request.resource.data.role in ['pending', 'admin']
                     && (request.resource.data.role != 'admin'
                         || request.resource.data.email == 'arashlavasani891@gmail.com');
-      allow update: if isAdmin();
+      allow update: if isAdmin() || (
+                      isSignedIn() && request.auth.uid == userId &&
+                      request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastSeen'])
+                    );
       allow delete: if isAdmin();
     }
 

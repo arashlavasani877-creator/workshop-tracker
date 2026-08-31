@@ -33,6 +33,8 @@ let adminFilterStatus = 'all';
 let supervisorSearchQuery = '';
 let viewerOpenId = null;
 let viewerSearchQuery = '';
+let viewerFilterStage = 'all';
+let viewerFilterStatus = 'all';
 let viewerSection = null;     // null | 'critical' | 'panelwait' | 'waitingdelivery' | 'all' | 'contact'
 let viewerHistoryOpen = {};   // id -> bool — برای مدیر پروژه همیشه پیش‌فرض بسته
 let pmNotes = [];             // پیام‌های عمومی «ارتباط با کنترل پروژه» / «ارتباط با مدیر» — لیست ادغام‌شده‌ی نهایی
@@ -985,6 +987,8 @@ function renderViewer(el){
 function switchViewerSection(sec){
   viewerSection = (viewerSection === sec) ? null : sec;
   viewerSearchQuery = '';
+  viewerFilterStage = 'all';
+  viewerFilterStatus = 'all';
   renderApp();
 }
 function onViewerSearch(v){ viewerSearchQuery = v; renderViewerSectionList(); }
@@ -1017,18 +1021,46 @@ function renderViewerSectionBody(){
       </div>`;
     return;
   }
+  const filtersHtml = viewerSection === 'all' ? `
+    <div style="display:flex; gap:8px; margin-bottom:14px;">
+      <select id="viewerStageFilter" class="admin-select" onchange="onViewerStageFilter(this.value)">
+        <option value="all">همه مراحل</option>
+        ${STAGES.map((s,i) => `<option value="${i}" ${viewerFilterStage===String(i)?'selected':''}>${s.name}</option>`).join('')}
+      </select>
+      <select id="viewerStatusFilter" class="admin-select" onchange="onViewerStatusFilter(this.value)">
+        <option value="all">همه وضعیت‌ها</option>
+        <option value="late" ${viewerFilterStatus==='late'?'selected':''}>عقب‌افتاده</option>
+        <option value="near" ${viewerFilterStatus==='near'?'selected':''}>نزدیک سررسید</option>
+        <option value="waiting" ${viewerFilterStatus==='waiting'?'selected':''}>در انتظار تحویل‌دهی به مالک</option>
+        <option value="stale" ${viewerFilterStatus==='stale'?'selected':''}>بروزرسانی نشده</option>
+        <option value="closed" ${viewerFilterStatus==='closed'?'selected':''}>خاتمه‌یافته</option>
+      </select>
+    </div>` : '';
   body.innerHTML = `
     <div class="section-title" style="margin-top:18px;">${viewerSectionTitle()} <span class="cnt" id="viewerSecCount"></span></div>
     <input type="text" id="viewerSearch" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(viewerSearchQuery)}" class="auth-input" style="max-width:none;width:100%;margin-bottom:10px;" oninput="onViewerSearch(this.value)">
+    ${filtersHtml}
     <div id="viewerList"></div>`;
   renderViewerSectionList();
 }
+function onViewerStageFilter(v){ viewerFilterStage = v; renderViewerSectionList(); }
+function onViewerStatusFilter(v){ viewerFilterStatus = v; renderViewerSectionList(); }
 function renderViewerSectionList(){
   const el = document.getElementById('viewerList');
   if(!el) return;
   const q = viewerSearchQuery.trim().toLowerCase();
   let items = viewerSectionContracts();
   if(q) items = items.filter(c => (c.name||'').toLowerCase().includes(q) || (c.itemCode||'').toLowerCase().includes(q));
+  if(viewerSection === 'all'){
+    if(viewerFilterStage !== 'all') items = items.filter(c => getDisplayStageIndex(c) === parseInt(viewerFilterStage,10));
+    if(viewerFilterStatus === 'closed'){
+      items = items.filter(isCompleted);
+    } else if(viewerFilterStatus === 'waiting'){
+      items = items.filter(c => !isCompleted(c) && getDisplayStageIndex(c) === STAGES.length-2);
+    } else if(viewerFilterStatus !== 'all'){
+      items = items.filter(c => !isCompleted(c) && (viewerFilterStatus === 'stale' ? isNotUpdated(c) : adminTimeStatus(c).cls === viewerFilterStatus));
+    }
+  }
   items = items.slice().sort((a,b) => { const ac = isCompleted(a), bc = isCompleted(b); return ac===bc ? 0 : (ac?1:-1); });
   const cntEl = document.getElementById('viewerSecCount');
   if(cntEl) cntEl.textContent = items.length + ' مورد';
