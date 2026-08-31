@@ -192,14 +192,22 @@ function isNotUpdated(c){
   return overallPercent(c) === 0 || daysSinceUpdate(c) > NOT_UPDATED_DAYS;
 }
 function adminTimeStatus(c){
-  const activeDateStr = c.revisedDueDate || c.dueDate;
-  if(!activeDateStr) return { cls:'none', label:'بدون سررسید', daysLeft:null };
-  const d = jalaliStrToDate(activeDateStr);
+  if(!c.dueDate) return { cls:'none', label:'بدون سررسید', daysLeft:null };
+  const d = jalaliStrToDate(c.dueDate);
   if(!d) return { cls:'none', label:'تاریخ نامعتبر', daysLeft:null };
   const dl = daysBetween(todayMid(), d);
-  if(dl < 0) return { cls:'late', label: Math.abs(dl) + ' روز تأخیر', daysLeft: dl };
-  if(dl <= ADMIN_NEAR_DUE_DAYS) return { cls:'near', label: dl + ' روز تا سررسید', daysLeft: dl };
-  return { cls:'ontime', label: dl + ' روز تا سررسید', daysLeft: dl };
+  let cls, label;
+  if(dl < 0){ cls = 'late'; label = Math.abs(dl) + ' روز تأخیر نسبت به سررسید'; }
+  else if(dl <= ADMIN_NEAR_DUE_DAYS){ cls = 'near'; label = dl + ' روز تا سررسید'; }
+  else { cls = 'ontime'; label = dl + ' روز تا سررسید'; }
+  if(c.revisedDueDate){
+    const rd = jalaliStrToDate(c.revisedDueDate);
+    if(rd){
+      const rdl = daysBetween(todayMid(), rd);
+      label += ' | ' + (rdl < 0 ? (Math.abs(rdl) + ' روز تأخیر نسبت به سررسید جبرانی') : (rdl + ' روز تا سررسید جبرانی'));
+    }
+  }
+  return { cls, label, daysLeft: dl };
 }
 function isWarnEligible(c){
   return !isCompleted(c) && getDisplayStageIndex(c) !== STAGES.length-2;
@@ -223,15 +231,22 @@ function adminAlerts(){
   return list;
 }
 function dueStatus(c){
-  const activeDateStr = c.revisedDueDate || c.dueDate;
-  if(!activeDateStr) return { label: 'سررسید ثبت نشده', cls:'none', daysLeft:null };
-  const due = jalaliStrToDate(activeDateStr);
+  if(!c.dueDate) return { label: 'سررسید ثبت نشده', cls:'none', daysLeft:null };
+  const due = jalaliStrToDate(c.dueDate);
   if(!due) return { label: 'تاریخ نامعتبر', cls:'none', daysLeft:null };
   const dl = daysBetween(todayMid(), due);
-  const prefix = c.revisedDueDate ? '(جبرانی) ' : '';
-  if(dl < 0) return { label: prefix + Math.abs(dl) + ' روز از سررسید گذشته', cls:'late', daysLeft: dl };
-  if(dl <= WARN_DAYS) return { label: prefix + dl + ' روز تا سررسید', cls:'warn', daysLeft: dl };
-  return { label: prefix + dl + ' روز تا سررسید', cls:'ok', daysLeft: dl };
+  let cls, label;
+  if(dl < 0){ cls = 'late'; label = Math.abs(dl) + ' روز از سررسید گذشته'; }
+  else if(dl <= WARN_DAYS){ cls = 'warn'; label = dl + ' روز تا سررسید'; }
+  else { cls = 'ok'; label = dl + ' روز تا سررسید'; }
+  if(c.revisedDueDate){
+    const rd = jalaliStrToDate(c.revisedDueDate);
+    if(rd){
+      const rdl = daysBetween(todayMid(), rd);
+      label += ' | ' + (rdl < 0 ? (Math.abs(rdl) + ' روز از سررسید جبرانی گذشته') : (rdl + ' روز تا سررسید جبرانی'));
+    }
+  }
+  return { label, cls, daysLeft: dl };
 }
 function scheduleText(c){
   if(!c.dueDate || !c.createdAt) return '';
@@ -1796,19 +1811,19 @@ async function exportManagementSummaryPdf(){
     const critHeaderRow = rowDiv(
       [
         {style:'flex:1; font-weight:800; color:#fff;', html:'نام قرارداد'},
-        {style:'width:80px; font-weight:800; color:#fff;', html:'کد قلم'},
-        {style:'width:55px; font-weight:800; color:#fff;', html:'پیشرفت'},
-        {style:'width:90px; font-weight:800; color:#fff;', html:'سررسید فعال'},
-        {style:'width:140px; font-weight:800; color:#fff;', html:'وضعیت'}
+        {style:'width:70px; font-weight:800; color:#fff;', html:'کد قلم'},
+        {style:'width:50px; font-weight:800; color:#fff;', html:'پیشرفت'},
+        {style:'width:80px; font-weight:800; color:#fff;', html:'سررسید فعال'},
+        {style:'width:220px; font-weight:800; color:#fff;', html:'وضعیت'}
       ], '#dc2626', 'font-size:9px;'
     );
     const critRow = (c,i) => rowDiv(
       [
-        {style:'flex:1; color:#222;', html:escapeHtml(truncateText(c.name||'—', 30))},
-        {style:'width:80px; color:#333;', html:escapeHtml(c.itemCode||'—')},
-        {style:'width:55px; color:#333;', html:overallPercent(c)+'٪'},
-        {style:'width:90px; color:#333;', html:escapeHtml(c.revisedDueDate || c.dueDate || '—')},
-        {style:'width:140px; color:#dc2626; font-weight:700;', html:escapeHtml(truncateText(dueStatus(c).label, 22))}
+        {style:'flex:1; color:#222;', html:escapeHtml(truncateText(c.name||'—', 24))},
+        {style:'width:70px; color:#333;', html:escapeHtml(c.itemCode||'—')},
+        {style:'width:50px; color:#333;', html:overallPercent(c)+'٪'},
+        {style:'width:80px; color:#333;', html:escapeHtml(c.revisedDueDate || c.dueDate || '—')},
+        {style:'width:220px; color:#dc2626; font-weight:700;', html:escapeHtml(truncateText(dueStatus(c).label, 40))}
       ], i%2?'#fef2f2':'#fff', 'font-size:9px;'
     );
     const waitHeaderRow = rowDiv(
