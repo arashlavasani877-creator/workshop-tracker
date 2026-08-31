@@ -12,6 +12,7 @@ const STAGES = [
 ];
 const WARN_DAYS = 7; // آستانه‌ی هشدار سررسید در پنل سرپرست — دست‌نخورده (V8)
 const ADMIN_NEAR_DUE_DAYS = 3;  // آستانه‌ی جدید فقط برای داشبورد/هشدارهای مدیر (V9)
+const JALALI_MONTHS = ['فروردین','اردیبهشت','خرداد','تیر','مرداد','شهریور','مهر','آبان','آذر','دی','بهمن','اسفند'];
 
 let auth = null, db = null;
 let presenceInterval = null;
@@ -30,6 +31,8 @@ let authErrorMsg = '';
 let adminSearchQuery = '';
 let adminFilterStage = 'all';
 let adminFilterStatus = 'all';
+let adminFilterContractMonth = 'all';
+let adminFilterContractYear = '';
 let supervisorSearchQuery = '';
 let viewerOpenId = null;
 let viewerSearchQuery = '';
@@ -134,6 +137,12 @@ function jalaliStrToDate(str){
 }
 function todayMid(){ const d = new Date(); d.setHours(0,0,0,0); return d; }
 function daysBetween(a,b){ return Math.round((b-a)/86400000); }
+// برای مرتب‌سازی قراردادها بر اساس «تاریخ قرارداد»: جدیدترین بالا. قراردادهای بدون
+// تاریخ معتبر همیشه در انتهای لیست قرار می‌گیرند.
+function contractDateSortValue(c){
+  const d = jalaliStrToDate(c.contractDate);
+  return d ? d.getTime() : -Infinity;
+}
 
 /* ---------- Stage helpers ---------- */
 function getCurrentIndex(c){
@@ -575,6 +584,7 @@ function ensureDataSubscriptions(){
   dataSubscribed = true;
   db.collection('contracts').orderBy('createdAt','desc').onSnapshot((snap) => {
     contracts = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+    contracts.sort((a,b) => contractDateSortValue(b) - contractDateSortValue(a));
     setStatus('همگام — لحظه‌ای', true);
     renderApp();
   }, (err) => setStatus('خطا: ' + err.message, false));
@@ -1424,7 +1434,7 @@ function renderAdminPlanContent(c){
 function renderAdminContracts(){
   const body = document.getElementById('adminBody');
   body.innerHTML = `
-    <div class="section-title" style="margin-top:14px;">مدیریت قراردادها</div>
+    <div class="section-title" style="margin-top:14px;">مدیریت قراردادها <span class="cnt" id="mgmtCount"></span></div>
     <div class="export-filters">
       <div class="row1">
         <select id="exportScopeSelect" class="admin-select" onchange="onExportScopeChange(this.value)">
@@ -1460,6 +1470,13 @@ function renderAdminContracts(){
         <option value="closed" ${adminFilterStatus==='closed'?'selected':''}>خاتمه‌یافته</option>
       </select>
     </div>
+    <div style="display:flex; gap:8px; margin-bottom:14px;">
+      <select id="contractMonthFilter" class="admin-select" onchange="onContractMonthFilter(this.value)">
+        <option value="all">همه ماه‌ها</option>
+        ${JALALI_MONTHS.map((m,i) => `<option value="${i+1}" ${adminFilterContractMonth===String(i+1)?'selected':''}>${m}</option>`).join('')}
+      </select>
+      <input type="text" id="contractYearFilter" class="auth-input" style="max-width:130px;" placeholder="سال، مثلاً 1404" value="${escapeHtml(adminFilterContractYear)}" oninput="onContractYearFilter(this.value)">
+    </div>
     <div id="mgmtList"></div>
   `;
   renderMgmtList();
@@ -1467,6 +1484,8 @@ function renderAdminContracts(){
 function onAdminSearch(v){ adminSearchQuery = v; renderMgmtList(); }
 function onStageFilter(v){ adminFilterStage = v; renderMgmtList(); }
 function onStatusFilter(v){ adminFilterStatus = v; renderMgmtList(); }
+function onContractMonthFilter(v){ adminFilterContractMonth = v; renderMgmtList(); }
+function onContractYearFilter(v){ adminFilterContractYear = v; renderMgmtList(); }
 function onExportScopeChange(v){ exportScope = v; }
 function onExportDateFrom(v){ exportDateFrom = v; }
 function onExportDateTo(v){ exportDateTo = v; }
@@ -2111,6 +2130,21 @@ function renderMgmtList(){
   } else if(adminFilterStatus !== 'all'){
     items = items.filter(c => !isCompleted(c) && (adminFilterStatus === 'stale' ? isNotUpdated(c) : adminTimeStatus(c).cls === adminFilterStatus));
   }
+  if(adminFilterContractMonth !== 'all' || adminFilterContractYear.trim()){
+    const yearStr = adminFilterContractYear.trim();
+    const yearNum = parseInt(yearStr, 10);
+    const hasYear = yearStr !== '' && !isNaN(yearNum);
+    const monthNum = adminFilterContractMonth !== 'all' ? parseInt(adminFilterContractMonth, 10) : null;
+    items = items.filter(c => {
+      const p = parseJalaliStr(c.contractDate);
+      if(!p) return false;
+      if(hasYear && p[0] !== yearNum) return false;
+      if(monthNum && p[1] !== monthNum) return false;
+      return true;
+    });
+  }
+  const cntEl = document.getElementById('mgmtCount');
+  if(cntEl) cntEl.textContent = items.length + ' مورد';
   if(!items.length){ el.innerHTML = '<div class="empty">موردی یافت نشد.</div>'; return; }
   items.sort((a,b) => { const ac = isCompleted(a), bc = isCompleted(b); return ac===bc ? 0 : (ac?1:-1); });
   el.innerHTML = items.map(c => {
