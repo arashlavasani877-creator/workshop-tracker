@@ -49,7 +49,8 @@ let activityLog = [];
 let adminDashSection = null;  // null | 'critical' | 'waitingdelivery' | 'panelwait' — دکمه‌های داشبورد مدیر
 let adminDashSearch = '';
 let adminPlanContractId = '';
-let adminPlanData = null;
+let adminPlanSearchQuery = '';
+let adminPlanShowParallel = false;
 let exportScope = 'all';   // 'all' | 'active' | 'closed' | 'waiting'
 let exportDateFrom = '';
 let exportDateTo = '';
@@ -162,6 +163,18 @@ function isStageDone(status, i){
 const STAGE_WEIGHTS = [4.75, 4.75, 4.75, 38, 4.75, 38, 0, 5];
 // وزن‌ها: اندازه‌گیری۵٪، تایید طراحی۵٪، آنالیز۵٪، ساخت‌وبرش۴۰٪، ارسال بار۵٪، نصب۴۰٪ (جمعاً ۱۰۰ در مقیاس ۹۵٪)
 // تحویل‌دهی به مالک وزنی ندارد (صرفاً تاییدیه)، ۵٪ باقی‌مانده فقط با «خاتمه قرارداد» تکمیل می‌شود.
+// نرم‌های زمانی (روز) — میانگین وزنی (وزن=کل درآمد) قراردادهای گذشته، برای ساخت خودکار برنامه‌ی هر قرارداد
+const NORM_PRE_PRODUCTION_DAYS = 48;  // از تاریخ عقد قرارداد تا پایان آنالیز — پوشش سه مرحله‌ی اندازه‌گیری+تاییدطراحی+آنالیز
+const NORM_SAKHT_DAYS = 4.2;          // مرحله‌ی «ساخت و برش»
+const NORM_ARSAL_DAYS = 10.5;         // مرحله‌ی «ارسال بار به محل ساختمان»
+const NORM_NASB_DAYS = 14.2;          // مرحله‌ی «در حال نصب»
+function stageNormDays(stageIndex){
+  if(stageIndex === 0 || stageIndex === 1 || stageIndex === 2) return NORM_PRE_PRODUCTION_DAYS / 3;
+  if(stageIndex === 3) return NORM_SAKHT_DAYS;
+  if(stageIndex === 4) return NORM_ARSAL_DAYS;
+  if(stageIndex === 5) return NORM_NASB_DAYS;
+  return 0; // مرحله ۶ (در انتظار تحویل‌دهی) همیشه صفر روز؛ مرحله ۷ به‌عنوان جذب‌کننده‌ی باقیمانده جداگانه محاسبه می‌شود
+}
 function overallPercent(c){
   const status = c.status || {};
   let sum = 0;
@@ -1345,29 +1358,71 @@ function formatJalaliDate(d){
   return gregorianToJalali(d.getFullYear(), d.getMonth()+1, d.getDate());
 }
 function buildAdminPlan(c){
-  if(!c || !c.contractDate || !c.dueDate) return null;
-  const start = jalaliStrToDate(c.contractDate), end = jalaliStrToDate(c.dueDate);
-  if(!start || !end || end < start) return null;
-  const totalDays = daysBetween(start,end);
-  const totalWeight = STAGE_WEIGHTS.reduce((a,b)=>a+b,0);
-  let cursor = new Date(start);
-  const rows=[];
-  let cumulative = 0;
-  STAGES.forEach((st,i)=>{
+  if(!c || !c.contractDate) return null;
+  const isCompensatory = !!c.revisedDueDate;
+  const endStr = c.revisedDueDate || c.dueDate;
+  if(!endStr) return null;
+  const end = jalaliStrToDate(endStr);
+  if(!end) return null;
+
+  let startDate, stageIdxList;
+  if(isCompensatory){
+    // برنامه‌ی جبرانی: فقط مراحلی که هنوز انجام نشده، از امروز تا سررسید جبرانی
+    startDate = todayMid();
+    stageIdxList = STAGES.map((s,i)=>i).filter(i => !isStageDone(c.status||{}, i));
+    if(!stageIdxList.length) return null; // همه‌ی مراحل قبلاً انجام شده
+  } else {
+    startDate = jalaliStrToDate(c.contractDate);
+    if(!startDate) return null;
+    stageIdxList = STAGES.map((s,i)=>i);
+  }
+
+  const totalDays = Math.max(0, daysBetween(startDate, end));
+  const lastIdx = stageIdxList[stageIdxList.length-1];
+  let fixedTotal = 0;
+  const fixedDays = {};
+  stageIdxList.forEach(i => {
+    if(i === lastIdx) return; // آخرین مرحله‌ی باقی‌مانده، جذب‌کننده‌ی باقیمانده‌ی روزهاست
+    const d = stageNormDays(i);
+    fixedDays[i] = d;
+    fixedTotal += d;
+  });
+  const scale = (fixedTotal > totalDays && fixedTotal > 0) ? (totalDays / fixedTotal) : 1;
+
+  let cursor = new Date(startDate);
+  const rows = [];
+  stageIdxList.forEach(i => {
+    const st = STAGES[i];
     const weight = Number(STAGE_WEIGHTS[i] || 0);
     const plannedStart = new Date(cursor);
-    let plannedEnd = new Date(cursor);
-    if(weight > 0){
-      cumulative += weight;
-      const targetOffset = Math.round(totalDays * cumulative / totalWeight);
-      plannedEnd = new Date(start); plannedEnd.setDate(start.getDate() + targetOffset);
-      if(plannedEnd > end) plannedEnd = new Date(end);
-      cursor = new Date(plannedEnd);
+    let days;
+    if(i === lastIdx){
+      days = Math.max(0, daysBetween(cursor, end));
+    } else {
+      days = Math.round((fixedDays[i]||0) * scale);
     }
+    const plannedEnd = new Date(plannedStart);
+    plannedEnd.setDate(plannedEnd.getDate() + days);
+    cursor = new Date(plannedEnd);
     rows.push({ stageIndex:i, name:st.name, weight, start:formatJalaliDate(plannedStart), end:formatJalaliDate(plannedEnd) });
   });
-  rows[rows.length-1].end = c.dueDate;
-  return { contractId:c.id, contractDate:c.contractDate, dueDate:c.dueDate, weights:STAGE_WEIGHTS.slice(), stages:rows, generatedAt:Date.now() };
+  if(rows.length && end >= startDate) rows[rows.length-1].end = endStr;
+  return { contractId:c.id, contractDate:c.contractDate, dueDate:c.dueDate, revisedDueDate:c.revisedDueDate||null, isCompensatory, weights:STAGE_WEIGHTS.slice(), stages:rows, generatedAt:Date.now() };
+}
+function adminPlanSelectHtml(){
+  const q = adminPlanSearchQuery.trim().toLowerCase();
+  const filtered = q ? contracts.filter(x => (x.name||'').toLowerCase().includes(q) || (x.itemCode||'').toLowerCase().includes(q)) : contracts;
+  const activeId = adminPlanContractId;
+  return `
+    <select id="adminPlanContract" class="admin-select" onchange="selectAdminPlanContract(this.value)">
+      <option value="">انتخاب قرارداد...</option>
+      ${filtered.map(x=>`<option value="${escapeHtml(x.id)}" ${x.id===activeId?'selected':''}>${escapeHtml(x.name)}${x.itemCode?' — '+escapeHtml(x.itemCode):''}</option>`).join('')}
+    </select>`;
+}
+function onAdminPlanSearch(v){
+  adminPlanSearchQuery = v;
+  const wrap = document.getElementById('adminPlanSelectWrap');
+  if(wrap) wrap.innerHTML = adminPlanSelectHtml();
 }
 function renderAdminPlans(){
   const body=document.getElementById('adminBody');
@@ -1377,53 +1432,41 @@ function renderAdminPlans(){
   const c=contracts.find(x=>x.id===activeId);
   body.innerHTML=`
     <div class="section-title" style="margin-top:14px;">برنامه قراردادها</div>
-    <div class="viewer-report-note">برنامه از تاریخ قرارداد تا تاریخ سررسید محاسبه می‌شود و وزن مراحل دقیقاً از درصددهی فعلی سیستم استفاده می‌کند.</div>
+    <div class="viewer-report-note">برنامه بر اساس نرم‌های زمانی واقعی مراحل (میانگین وزنی قراردادهای گذشته بر اساس درآمد) محاسبه می‌شود. برای قراردادی که تاریخ سررسید جبرانی دارد، برنامه فقط برای مراحل باقی‌مانده از امروز تا سررسید جبرانی ساخته می‌شود و مراحل انجام‌شده در آن لحاظ نمی‌گردد.</div>
     <div class="export-filters">
       <div class="row1">
-        <select id="adminPlanContract" class="admin-select" onchange="selectAdminPlanContract(this.value)">
-          <option value="">انتخاب قرارداد...</option>
-          ${contracts.map(x=>`<option value="${escapeHtml(x.id)}" ${x.id===activeId?'selected':''}>${escapeHtml(x.name)}${x.itemCode?' — '+escapeHtml(x.itemCode):''}</option>`).join('')}
-        </select>
+        <input type="text" id="adminPlanSearch" class="auth-input" placeholder="جستجوی نام قرارداد یا کد قلم..." value="${escapeHtml(adminPlanSearchQuery)}" oninput="onAdminPlanSearch(this.value)" style="margin-bottom:8px;">
       </div>
+      <div class="row1" id="adminPlanSelectWrap">${adminPlanSelectHtml()}</div>
     </div>
-    <div id="adminPlanContent"></div>`;
+    <div id="adminPlanContent"></div>
+    <div style="margin-top:16px;">
+      <button class="field-save" style="width:100%;background:var(--panel);" onclick="toggleParallelWork()">🧩 کارهای موازی</button>
+    </div>
+    <div id="parallelWorkPanel" style="display:${adminPlanShowParallel?'block':'none'};margin-top:12px;"></div>`;
   renderAdminPlanContent(c);
+  if(adminPlanShowParallel) renderParallelWorkPanel();
 }
-function selectAdminPlanContract(id){ adminPlanContractId=id; adminPlanData=null; renderAdminPlanContent(contracts.find(x=>x.id===id)); }
-async function loadAdminPlan(){
-  if(!db || !adminPlanContractId) return;
-  try{
-    const snap=await db.collection('contractPlans').doc(adminPlanContractId).get();
-    adminPlanData=snap.exists ? snap.data() : null;
-    renderAdminPlanContent(contracts.find(x=>x.id===adminPlanContractId));
-  }catch(e){ alert('خطا در دریافت برنامه قرارداد.'); }
-}
-async function saveAdminPlan(){
-  if(myRole!=='admin' || !db || !adminPlanContractId) return;
-  const c=contracts.find(x=>x.id===adminPlanContractId);
-  const plan=buildAdminPlan(c);
-  if(!plan){ alert('برای این قرارداد، تاریخ قرارداد و تاریخ سررسید معتبر لازم است.'); return; }
-  try{
-    await db.collection('contractPlans').doc(c.id).set(plan);
-    adminPlanData=plan;
-    renderAdminPlanContent(c);
-    logActivity('ثبت برنامه قرارداد', c.id, c.name, 'برنامه بر اساس تاریخ قرارداد، سررسید و وزن‌های درصددهی فعلی محاسبه شد.');
-  }catch(e){ alert('خطا در ذخیره برنامه: '+(e.message||'دسترسی مجاز نیست')); }
-}
+function selectAdminPlanContract(id){ adminPlanContractId=id; renderAdminPlanContent(contracts.find(x=>x.id===id)); }
 function renderAdminPlanContent(c){
   const el=document.getElementById('adminPlanContent');
   if(!el) return;
   if(!c){ el.innerHTML='<div class="empty">قراردادی برای برنامه‌ریزی انتخاب نشده است.</div>'; return; }
-  const plan=adminPlanData || buildAdminPlan(c);
+  const plan=buildAdminPlan(c);
   if(!plan){
-    el.innerHTML=`<div class="empty">برای «${escapeHtml(c.name)}» تاریخ قرارداد یا تاریخ سررسید ثبت نشده/نامعتبر است. ابتدا تاریخ‌ها را در مدیریت قراردادها ثبت کنید.</div>`;
+    el.innerHTML = c.revisedDueDate
+      ? `<div class="empty">همه‌ی مراحل «${escapeHtml(c.name)}» قبلاً انجام شده یا سررسید جبرانی نامعتبر است.</div>`
+      : `<div class="empty">برای «${escapeHtml(c.name)}» تاریخ قرارداد یا تاریخ سررسید ثبت نشده/نامعتبر است. ابتدا تاریخ‌ها را در مدیریت قراردادها ثبت کنید.</div>`;
     return;
   }
-  const totalDays=Math.max(0,daysBetween(jalaliStrToDate(c.contractDate),jalaliStrToDate(c.dueDate)));
+  const startLabel = plan.isCompensatory ? formatJalaliDate(todayMid()) : c.contractDate;
+  const endLabel = plan.isCompensatory ? c.revisedDueDate : c.dueDate;
+  const totalDays = Math.max(0, daysBetween(jalaliStrToDate(startLabel), jalaliStrToDate(endLabel)));
   el.innerHTML=`
+    ${plan.isCompensatory ? `<div class="viewer-report-note" style="background:#fff7ed;border-color:#fdba74;color:#9a3412;margin-bottom:10px;">این برنامه‌ی جبرانی است — فقط مراحل باقی‌مانده (از امروز تا سررسید جبرانی) نشان داده می‌شود.</div>` : ''}
     <div class="kpi-grid" style="margin-top:14px;">
-      <div class="kpi-card"><div class="kpi-num" style="font-size:17px;">${escapeHtml(c.contractDate)}</div><div class="kpi-label">تاریخ شروع برنامه</div></div>
-      <div class="kpi-card"><div class="kpi-num" style="font-size:17px;">${escapeHtml(c.dueDate)}</div><div class="kpi-label">تاریخ پایان برنامه</div></div>
+      <div class="kpi-card"><div class="kpi-num" style="font-size:17px;">${escapeHtml(startLabel)}</div><div class="kpi-label">تاریخ شروع برنامه</div></div>
+      <div class="kpi-card"><div class="kpi-num" style="font-size:17px;">${escapeHtml(endLabel)}</div><div class="kpi-label">تاریخ پایان برنامه</div></div>
       <div class="kpi-card"><div class="kpi-num">${totalDays}</div><div class="kpi-label">روزهای برنامه</div></div>
     </div>
     <div class="chart-box" style="margin-top:14px;overflow:auto;">
@@ -1439,12 +1482,229 @@ function renderAdminPlanContent(c){
           </div>`).join('')}
       </div>
     </div>
-    <div style="display:flex;gap:8px;margin-top:12px;">
-      <button class="field-save" style="flex:1;" onclick="saveAdminPlan()">${adminPlanData?'به‌روزرسانی برنامه':'ذخیره برنامه'}</button>
-      <button class="field-save" style="flex:1;background:var(--panel);" onclick="loadAdminPlan()">بارگذاری برنامه ذخیره‌شده</button>
+    <label style="display:flex;align-items:center;gap:6px;margin-top:12px;font-size:11.5px;color:#555;">
+      <input type="checkbox" id="planIncludeParallel"> همراه با کارهای موازی این قرارداد در خروجی
+    </label>
+    <div style="display:flex;gap:8px;margin-top:8px;">
+      <button class="field-save" id="planExportPdfBtn" style="flex:1;" onclick="exportPlanPdf()">📄 خروجی PDF</button>
+      <button class="field-save" id="planExportExcelBtn" style="flex:1;background:var(--panel);" onclick="exportPlanExcel()">📊 خروجی اکسل</button>
     </div>
     <div class="viewer-report-note" style="margin-top:10px;">وزن‌ها قابل ویرایش نیستند و از درصددهی فعلی سیستم خوانده می‌شوند. هیچ تغییری در اطلاعات قرارداد ایجاد نمی‌شود.</div>`;
 }
+
+/* ---------- کارهای موازی: تشخیص همپوشانی زمانی مراحل بین قراردادهای فعال ---------- */
+function computeParallelGroups(){
+  const activeContracts = contracts.filter(c => !isCompleted(c));
+  const perStage = STAGES.map(() => []);
+  activeContracts.forEach(c => {
+    const plan = buildAdminPlan(c);
+    if(!plan) return;
+    plan.stages.forEach(r => {
+      const s = jalaliStrToDate(r.start), e = jalaliStrToDate(r.end);
+      if(!s || !e) return;
+      perStage[r.stageIndex].push({ c, start:s, end:e });
+    });
+  });
+  const groups = [];
+  perStage.forEach((items, stageIdx) => {
+    if(items.length < 2) return;
+    items.sort((a,b) => a.start - b.start);
+    let cluster = [items[0]], clusterEnd = items[0].end;
+    for(let k=1;k<items.length;k++){
+      const it = items[k];
+      if(it.start <= clusterEnd){
+        cluster.push(it);
+        if(it.end > clusterEnd) clusterEnd = it.end;
+      } else {
+        if(cluster.length >= 2) groups.push(finalizeParallelCluster(stageIdx, cluster));
+        cluster = [it]; clusterEnd = it.end;
+      }
+    }
+    if(cluster.length >= 2) groups.push(finalizeParallelCluster(stageIdx, cluster));
+  });
+  return groups;
+}
+function finalizeParallelCluster(stageIdx, cluster){
+  const start = new Date(Math.min(...cluster.map(x=>x.start.getTime())));
+  const end = new Date(Math.max(...cluster.map(x=>x.end.getTime())));
+  return {
+    stageIndex: stageIdx,
+    stageName: STAGES[stageIdx].name,
+    start: formatJalaliDate(start),
+    end: formatJalaliDate(end),
+    contracts: cluster.map(x => ({ id:x.c.id, name:x.c.name, itemCode:x.c.itemCode||'' }))
+  };
+}
+function renderParallelSummaryHtml(){
+  const groups = computeParallelGroups();
+  if(!groups.length) return '<div class="empty">در حال حاضر هیچ کار موازی‌ای بین قراردادهای فعال شناسایی نشد.</div>';
+  const byStage = {};
+  groups.forEach(g => { (byStage[g.stageIndex] = byStage[g.stageIndex]||[]).push(g); });
+  return Object.keys(byStage).sort((a,b)=>a-b).map(idx => `
+    <div style="margin-bottom:14px;">
+      <div style="font-weight:800; font-size:12px; margin-bottom:6px;">${escapeHtml(STAGES[idx].name)}</div>
+      ${byStage[idx].map(g => `
+        <div style="background:#f6f6f4; border:1px solid #e2e2de; border-radius:6px; padding:8px 10px; margin-bottom:6px; font-size:11px;">
+          <span style="font-family:'JetBrains Mono',monospace;">${escapeHtml(g.start)} تا ${escapeHtml(g.end)}</span>
+          — ${g.contracts.map(x=>escapeHtml(x.name)).join('، ')}
+        </div>`).join('')}
+    </div>`).join('');
+}
+function renderPlanGanttHtml(){
+  const withPlans = contracts.filter(c => !isCompleted(c)).map(c => ({ c, plan: buildAdminPlan(c) })).filter(x => x.plan);
+  if(!withPlans.length) return '<div class="empty">قراردادی با برنامه‌ی معتبر برای نمایش گانت وجود ندارد.</div>';
+  let minD = null, maxD = null;
+  withPlans.forEach(({plan}) => plan.stages.forEach(r => {
+    const s = jalaliStrToDate(r.start), e = jalaliStrToDate(r.end);
+    if(s && (!minD || s < minD)) minD = s;
+    if(e && (!maxD || e > maxD)) maxD = e;
+  }));
+  if(!minD || !maxD || maxD <= minD) return '<div class="empty">بازه‌ی زمانی معتبر برای گانت پیدا نشد.</div>';
+  const totalSpan = daysBetween(minD, maxD) || 1;
+  const STAGE_COLORS = ['#94a3b8','#60a5fa','#38bdf8','#f59e0b','#a78bfa','#ef4444','#22c55e','#0f766e'];
+  const rows = withPlans.map(({c, plan}) => {
+    const segs = plan.stages.map(r => {
+      const s = jalaliStrToDate(r.start), e = jalaliStrToDate(r.end);
+      if(!s || !e) return '';
+      const left = Math.max(0, daysBetween(minD, s)) / totalSpan * 100;
+      const width = Math.max(0.6, daysBetween(s, e)) / totalSpan * 100;
+      return `<div title="${escapeHtml(r.name)}: ${escapeHtml(r.start)} تا ${escapeHtml(r.end)}" style="position:absolute; right:${left}%; width:${width}%; top:1px; bottom:1px; background:${STAGE_COLORS[r.stageIndex]}; border-radius:2px;"></div>`;
+    }).join('');
+    return `
+      <div style="display:grid; grid-template-columns:150px 1fr; gap:8px; align-items:center; margin-bottom:5px;">
+        <div style="font-size:10.5px; color:#333; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" title="${escapeHtml(c.name)}">${escapeHtml(c.name)}</div>
+        <div style="position:relative; height:16px; background:#f1f1ef; border-radius:3px;">${segs}</div>
+      </div>`;
+  }).join('');
+  const legend = STAGES.map((s,i) => `<span style="display:inline-flex;align-items:center;gap:4px;margin-inline-end:10px;font-size:9.5px;color:#555;"><span style="width:9px;height:9px;background:${STAGE_COLORS[i]};border-radius:2px;display:inline-block;"></span>${escapeHtml(s.name)}</span>`).join('');
+  return `
+    <div style="margin-bottom:8px; font-size:10px; color:#777;">بازه‌ی نمایش: ${escapeHtml(formatJalaliDate(minD))} تا ${escapeHtml(formatJalaliDate(maxD))}</div>
+    <div style="margin-bottom:10px;">${legend}</div>
+    <div style="max-height:420px; overflow:auto;">${rows}</div>`;
+}
+function toggleParallelWork(){
+  adminPlanShowParallel = !adminPlanShowParallel;
+  const panel = document.getElementById('parallelWorkPanel');
+  if(!panel) return;
+  panel.style.display = adminPlanShowParallel ? 'block' : 'none';
+  if(adminPlanShowParallel) renderParallelWorkPanel();
+}
+function renderParallelWorkPanel(){
+  const panel = document.getElementById('parallelWorkPanel');
+  if(!panel) return;
+  panel.innerHTML = `
+    <div class="section-title" style="margin-top:0;">کارهای موازی (قراردادهای فعال)</div>
+    <div class="viewer-report-note">مراحلی که در چند قرارداد فعال به‌طور همزمان برنامه‌ریزی شده‌اند، اینجا گروه‌بندی شده‌اند.</div>
+    <div class="chart-box" style="margin-top:10px;overflow:auto;">
+      <div class="chart-title">نمای گانت مراحل قراردادهای فعال</div>
+      ${renderPlanGanttHtml()}
+    </div>
+    <div style="margin-top:14px;">${renderParallelSummaryHtml()}</div>
+    <div style="display:flex;gap:8px;margin-top:12px;">
+      <button class="field-save" id="parallelExportPdfBtn" style="flex:1;" onclick="exportParallelPdf()">📄 خروجی PDF کارهای موازی</button>
+      <button class="field-save" id="parallelExportExcelBtn" style="flex:1;background:var(--panel);" onclick="exportParallelExcel()">📊 خروجی اکسل کارهای موازی</button>
+    </div>`;
+}
+
+/* ---------- خروجی‌های PDF/اکسل برنامه‌ی تک‌قراردادی و کارهای موازی ---------- */
+async function exportPlanPdf(){
+  const c = contracts.find(x=>x.id===adminPlanContractId);
+  if(!c){ alert('ابتدا یک قرارداد را انتخاب کنید.'); return; }
+  const plan = buildAdminPlan(c);
+  if(!plan){ alert('برنامه‌ی معتبری برای این قرارداد وجود ندارد.'); return; }
+  const includeParallel = !!document.getElementById('planIncludeParallel')?.checked;
+  const btn = document.getElementById('planExportPdfBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
+  try{
+    const headers = ['مرحله','وزن','شروع','پایان'];
+    const tableRows = plan.stages.map(r => [r.name, r.weight+'%', r.start, r.end]);
+    let extraHeaderHtml = `<div style="font-size:11px;color:#666;margin-bottom:10px;">${plan.isCompensatory ? 'برنامه‌ی جبرانی — فقط مراحل باقی‌مانده، از امروز تا سررسید جبرانی' : 'برنامه‌ی اصلی — از تاریخ قرارداد تا سررسید'}</div>`;
+    if(includeParallel){
+      const related = computeParallelGroups().filter(g => g.contracts.some(x=>x.id===c.id));
+      extraHeaderHtml += `<div style="font-size:12px;font-weight:800;margin:14px 0 6px;">کارهای موازی مرتبط با این قرارداد</div>`;
+      extraHeaderHtml += related.length
+        ? related.map(g => `<div style="font-size:10.5px;color:#333;margin-bottom:4px;">${escapeHtml(g.stageName)}: ${escapeHtml(g.start)} تا ${escapeHtml(g.end)} — ${g.contracts.map(x=>escapeHtml(x.name)).join('، ')}</div>`).join('')
+        : `<div style="font-size:10.5px;color:#777;">کار موازی‌ای برای این قرارداد شناسایی نشد.</div>`;
+    }
+    await renderPaginatedReportPdf({
+      reportTitle: 'برنامه قرارداد — ' + c.name,
+      extraHeaderHtml,
+      headers,
+      rows: tableRows,
+      filename: `برنامه ${c.name} - ${todayJalaliFileLabel()}.pdf`
+    });
+  }catch(err){ alert('خطا در ساخت PDF: '+err.message); }
+  finally{ if(btn){ btn.disabled=false; btn.textContent='📄 خروجی PDF'; } }
+}
+async function exportPlanExcel(){
+  const c = contracts.find(x=>x.id===adminPlanContractId);
+  if(!c){ alert('ابتدا یک قرارداد را انتخاب کنید.'); return; }
+  const plan = buildAdminPlan(c);
+  if(!plan){ alert('برنامه‌ی معتبری برای این قرارداد وجود ندارد.'); return; }
+  const includeParallel = !!document.getElementById('planIncludeParallel')?.checked;
+  const btn = document.getElementById('planExportExcelBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
+  try{
+    const wb = XLSX.utils.book_new();
+    wb.Workbook = { Views: [{ RTL: true }] };
+    const summary = [
+      ['برنامه قرارداد', c.name],
+      ['نوع برنامه', plan.isCompensatory ? 'جبرانی (فقط مراحل باقی‌مانده)' : 'اصلی'],
+      ['تاریخ قرارداد', c.contractDate||'—'],
+      ['سررسید', c.dueDate||'—'],
+      ['سررسید جبرانی', c.revisedDueDate||'—']
+    ];
+    const wsSummary = XLSX.utils.aoa_to_sheet(summary);
+    wsSummary['!cols']=[{wch:22},{wch:30}];
+    XLSX.utils.book_append_sheet(wb, wsSummary, 'خلاصه');
+    const planRows = plan.stages.map(r => ({ 'مرحله':r.name, 'وزن':r.weight+'%', 'شروع':r.start, 'پایان':r.end }));
+    const wsPlan = XLSX.utils.json_to_sheet(planRows);
+    wsPlan['!cols']=[{wch:26},{wch:10},{wch:14},{wch:14}];
+    XLSX.utils.book_append_sheet(wb, wsPlan, 'برنامه');
+    if(includeParallel){
+      const related = computeParallelGroups().filter(g => g.contracts.some(x=>x.id===c.id));
+      const parRows = related.length ? related.map(g => ({ 'مرحله':g.stageName, 'شروع':g.start, 'پایان':g.end, 'قراردادهای هم‌زمان':g.contracts.map(x=>x.name).join('، ') })) : [{ 'مرحله':'—', 'شروع':'—', 'پایان':'—', 'قراردادهای هم‌زمان':'موردی یافت نشد' }];
+      const wsPar = XLSX.utils.json_to_sheet(parRows);
+      wsPar['!cols']=[{wch:22},{wch:14},{wch:14},{wch:44}];
+      XLSX.utils.book_append_sheet(wb, wsPar, 'کارهای موازی');
+    }
+    XLSX.writeFile(wb, `برنامه ${c.name} - ${todayJalaliFileLabel()}.xlsx`);
+  }catch(err){ alert('خطا در ساخت اکسل: '+err.message); }
+  finally{ if(btn){ btn.disabled=false; btn.textContent='📊 خروجی اکسل'; } }
+}
+async function exportParallelPdf(){
+  const groups = computeParallelGroups();
+  const btn = document.getElementById('parallelExportPdfBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
+  try{
+    const headers = ['مرحله','شروع','پایان','قراردادهای هم‌زمان'];
+    const tableRows = groups.length ? groups.map(g => [g.stageName, g.start, g.end, g.contracts.map(x=>x.name).join('، ')]) : [['—','—','—','کار موازی‌ای شناسایی نشد']];
+    await renderPaginatedReportPdf({
+      reportTitle: 'کارهای موازی — قراردادهای فعال',
+      extraHeaderHtml: '',
+      headers,
+      rows: tableRows,
+      filename: `کارهای موازی - ${todayJalaliFileLabel()}.pdf`
+    });
+  }catch(err){ alert('خطا در ساخت PDF: '+err.message); }
+  finally{ if(btn){ btn.disabled=false; btn.textContent='📄 خروجی PDF کارهای موازی'; } }
+}
+async function exportParallelExcel(){
+  const groups = computeParallelGroups();
+  const btn = document.getElementById('parallelExportExcelBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
+  try{
+    const rows = groups.length ? groups.map(g => ({ 'مرحله':g.stageName, 'شروع':g.start, 'پایان':g.end, 'قراردادهای هم‌زمان':g.contracts.map(x=>x.name).join('، ') })) : [{ 'مرحله':'—', 'شروع':'—', 'پایان':'—', 'قراردادهای هم‌زمان':'کار موازی‌ای شناسایی نشد' }];
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws['!cols']=[{wch:22},{wch:14},{wch:14},{wch:44}];
+    const wb = XLSX.utils.book_new();
+    wb.Workbook = { Views: [{ RTL: true }] };
+    XLSX.utils.book_append_sheet(wb, ws, 'کارهای موازی');
+    XLSX.writeFile(wb, `کارهای موازی - ${todayJalaliFileLabel()}.xlsx`);
+  }catch(err){ alert('خطا در ساخت اکسل: '+err.message); }
+  finally{ if(btn){ btn.disabled=false; btn.textContent='📊 خروجی اکسل کارهای موازی'; } }
+}
+
 
 function renderAdminContracts(){
   const body = document.getElementById('adminBody');
