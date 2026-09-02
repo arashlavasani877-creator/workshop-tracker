@@ -1406,7 +1406,8 @@ function computePlannedProgressPercent(plan){
 }
 function adminPlanSelectHtml(){
   const q = adminPlanSearchQuery.trim().toLowerCase();
-  const filtered = q ? contracts.filter(x => (x.name||'').toLowerCase().includes(q) || (x.itemCode||'').toLowerCase().includes(q)) : contracts;
+  const activeContracts = contracts.filter(x => !isCompleted(x));
+  const filtered = q ? activeContracts.filter(x => (x.name||'').toLowerCase().includes(q) || (x.itemCode||'').toLowerCase().includes(q)) : activeContracts;
   const activeId = adminPlanContractId;
   return `
     <select id="adminPlanContract" class="admin-select" onchange="selectAdminPlanContract(this.value)">
@@ -1422,12 +1423,15 @@ function onAdminPlanSearch(v){
 function renderAdminPlans(){
   const body=document.getElementById('adminBody');
   if(!body) return;
-  const activeId=adminPlanContractId || (contracts[0] && contracts[0].id) || '';
-  adminPlanContractId=activeId;
+  const activeContracts = contracts.filter(x => !isCompleted(x));
+  if(!adminPlanContractId || isCompleted(contracts.find(x=>x.id===adminPlanContractId) || {})){
+    adminPlanContractId = (activeContracts[0] && activeContracts[0].id) || '';
+  }
+  const activeId = adminPlanContractId;
   const c=contracts.find(x=>x.id===activeId);
   body.innerHTML=`
     <div class="section-title" style="margin-top:14px;">برنامه قراردادها</div>
-    <div class="viewer-report-note">برنامه از تاریخ قرارداد تا تاریخ سررسید محاسبه می‌شود و وزن مراحل دقیقاً از درصددهی فعلی سیستم استفاده می‌کند. برای قراردادی که تاریخ سررسید جبرانی دارد، برنامه فقط برای مراحل باقی‌مانده از امروز تا سررسید جبرانی ساخته می‌شود و مراحل انجام‌شده در آن لحاظ نمی‌گردد.</div>
+    <div class="viewer-report-note">برنامه از تاریخ قرارداد تا تاریخ سررسید محاسبه می‌شود و وزن مراحل دقیقاً از درصددهی فعلی سیستم استفاده می‌کند. برای قراردادی که تاریخ سررسید جبرانی دارد، برنامه فقط برای مراحل باقی‌مانده از امروز تا سررسید جبرانی ساخته می‌شود و مراحل انجام‌شده در آن لحاظ نمی‌گردد. قراردادهای خاتمه‌یافته در این لیست نمایش داده نمی‌شوند.</div>
     <div class="export-filters">
       <div class="row1">
         <input type="text" id="adminPlanSearch" class="auth-input" placeholder="جستجوی نام قرارداد یا کد قلم..." value="${escapeHtml(adminPlanSearchQuery)}" oninput="onAdminPlanSearch(this.value)" style="margin-bottom:8px;">
