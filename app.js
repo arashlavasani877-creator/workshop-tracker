@@ -298,7 +298,6 @@ function isPanelWaiting(c){
 /* ---------- کامنت‌ها — مدیر پروژه فقط می‌بیند و کامنت می‌گذارد، مدیر و سرپرست هم می‌بینند و می‌توانند اقدام کنند ---------- */
 async function addComment(id, inputElId){
   if(!db || !currentUser) return;
-  if(myRole === 'afrachoobSupervisor' || myRole === 'supervisor') return; // V11: سرپرست نصب و سرپرست افراچوب اجازه‌ی کامنت‌گذاری ندارند
   const input = document.getElementById(inputElId);
   const text = input ? input.value.trim() : '';
   if(!text) return;
@@ -378,6 +377,19 @@ function pmoUnseenCount(){
   return getAllPmoComments().filter(cm => (cm.time||0) > lastSeen).length;
 }
 function onPmoCommentsSearch(v){ pmoCommentsSearch = v; renderPmoCommentsList(); }
+// یک قرارداد «موضوع گفتگو با مدیر پروژه» محسوب می‌شود اگر حداقل یک کامنت از مدیر پروژه روی آن ثبت شده باشد؛
+// در این صورت کل مکالمه‌ی همان قرارداد (کامنت مدیر پروژه + همه‌ی پاسخ‌ها) با هم نمایش داده می‌شود.
+function getPmoThreads(){
+  const threads = [];
+  contracts.forEach(c => {
+    const cmts = c.comments || [];
+    if(!cmts.some(cm => cm.byRole === 'viewer')) return;
+    const sorted = cmts.slice().sort((a,b) => (a.time||0)-(b.time||0));
+    threads.push({ contractId: c.id, contractName: c.name, comments: sorted, lastTime: sorted[sorted.length-1].time || 0 });
+  });
+  threads.sort((a,b) => (b.lastTime||0)-(a.lastTime||0));
+  return threads;
+}
 function renderPmoCommentsHtml(){
   markPmoCommentsSeen();
   return `
@@ -388,20 +400,34 @@ function renderPmoCommentsHtml(){
 function renderPmoCommentsList(){
   const el = document.getElementById('pmoCmtList');
   if(!el) return;
-  let items = getAllPmoComments();
+  let items = getPmoThreads();
   const q = pmoCommentsSearch.trim().toLowerCase();
-  if(q) items = items.filter(cm => (cm.contractName||'').toLowerCase().includes(q) || (cm.text||'').toLowerCase().includes(q));
+  if(q) items = items.filter(t => (t.contractName||'').toLowerCase().includes(q) || t.comments.some(cm => (cm.text||'').toLowerCase().includes(q)));
   const cntEl = document.getElementById('pmoCmtCount');
   if(cntEl) cntEl.textContent = items.length + ' مورد';
   if(!items.length){ el.innerHTML = '<div class="empty">هنوز کامنتی از مدیر پروژه ثبت نشده.</div>'; return; }
-  el.innerHTML = items.map(cm => `
-      <div class="warn-item" style="cursor:pointer;" onclick="openContractDetail('${cm.contractId}', ${myRole==='admin'})">
-        <div>
-          <div class="warn-name">${escapeHtml(cm.contractName||'')}</div>
-          <div class="warn-sub">${escapeHtml(cm.text)}</div>
-        </div>
-        <span class="warn-tag" style="color:var(--ink-faint); background:var(--panel-2);">${fmtTime(new Date(cm.time).toISOString())}</span>
-      </div>`).join('');
+  const canReply = myRole === 'admin' || myRole === 'supervisor' || myRole === 'afrachoobSupervisor';
+  el.innerHTML = items.map(t => {
+    const inputId = 'pmoReply_' + t.contractId;
+    const threadHtml = t.comments.map(cm => `
+        <div class="comment-item${cm.byRole === 'viewer' ? ' pmo-comment' : ''}">
+          <div class="comment-top">
+            <span class="comment-by">${authorLabel(cm)}</span>
+            <span class="comment-time">${fmtTime(new Date(cm.time).toISOString())}</span>
+          </div>
+          <div class="comment-text">${escapeHtml(cm.text)}</div>
+        </div>`).join('');
+    return `
+      <div class="warn-item pmo-thread-item">
+        <div class="warn-name" style="cursor:pointer;" onclick="openContractDetail('${t.contractId}', ${myRole==='admin'})">${escapeHtml(t.contractName||'')}</div>
+        <div class="pmo-thread">${threadHtml}</div>
+        ${canReply ? `
+        <div class="comment-add-row" style="margin-top:10px;">
+          <input type="text" id="${inputId}" class="auth-input" style="max-width:none; flex:1;" placeholder="پاسخ خود را بنویسید...">
+          <button class="field-save" onclick="addComment('${t.contractId}', '${inputId}')">ثبت</button>
+        </div>` : ''}
+      </div>`;
+  }).join('');
 }
 
 /* ---------- ارتباط با کنترل پروژه / ارتباط با مدیر — پیام عمومی، مستقل از قرارداد خاص، دوطرفه با وضعیت «دیده شد» ---------- */
@@ -1500,7 +1526,7 @@ function renderAdminPlanContent(c){
       <div style="min-width:650px;">
         ${plan.stages.map((r,i)=>`
           <div class="chart-row" style="display:grid;grid-template-columns:190px 70px 120px 120px 1fr;gap:8px;align-items:center;">
-            <span class="chart-label">${escapeHtml(r.name)}</span>
+            <span class="chart-label" style="width:auto;">${escapeHtml(r.name)}</span>
             <span class="chart-count">${r.weight}%</span>
             <span style="font-family:'JetBrains Mono',monospace;font-size:11px;">${escapeHtml(r.start)}</span>
             <span style="font-family:'JetBrains Mono',monospace;font-size:11px;">${escapeHtml(r.end)}</span>
