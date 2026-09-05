@@ -377,6 +377,56 @@ function pmoUnseenCount(){
   return getAllPmoComments().filter(cm => (cm.time||0) > lastSeen).length;
 }
 function onPmoCommentsSearch(v){ pmoCommentsSearch = v; renderPmoCommentsList(); }
+/* ---------- کامنت‌های من — پنل مدیر پروژه: خلاصه‌ی تمام قراردادهایی که خودش روی آن‌ها کامنت گذاشته،
+   به‌همراه هر جوابی که مدیر/سرپرست/سرپرست افراچوب به آن داده‌اند. شمارنده‌ی نوتیف بر اساس جواب‌های ندیده. ---------- */
+function getMyCommentThreads(){
+  if(!currentUser) return [];
+  const threads = [];
+  contracts.forEach(c => {
+    const cmts = c.comments || [];
+    if(!cmts.some(cm => cm.by === currentUser.email)) return;
+    const sorted = cmts.slice().sort((a,b) => (a.time||0)-(b.time||0));
+    threads.push({ contractId: c.id, contractName: c.name, comments: sorted, lastTime: sorted[sorted.length-1].time || 0 });
+  });
+  threads.sort((a,b) => (b.lastTime||0)-(a.lastTime||0));
+  return threads;
+}
+function myCommentsSeenKey(){ return 'afrachoob-mycomments-seen-' + (currentUser ? currentUser.uid : 'x'); }
+function getMyCommentsLastSeen(){ try{ return parseInt(localStorage.getItem(myCommentsSeenKey())||'0',10); }catch(e){ return 0; } }
+function markMyCommentsSeen(){ try{ localStorage.setItem(myCommentsSeenKey(), String(Date.now())); }catch(e){} }
+function myCommentsUnseenCount(){
+  if(!currentUser) return 0;
+  const lastSeen = getMyCommentsLastSeen();
+  let n = 0;
+  getMyCommentThreads().forEach(t => {
+    t.comments.forEach(cm => { if(cm.by !== currentUser.email && (cm.time||0) > lastSeen) n++; });
+  });
+  return n;
+}
+function renderMyCommentsHtml(){
+  markMyCommentsSeen();
+  const threads = getMyCommentThreads();
+  if(!threads.length) return '<div class="empty" style="margin-top:14px;">شما هنوز روی هیچ قراردادی کامنتی ثبت نکرده‌اید.</div>';
+  return threads.map(t => {
+    const threadHtml = t.comments.map(cm => `
+        <div class="comment-item${cm.byRole === 'viewer' ? ' pmo-comment' : ''}">
+          <div class="comment-top">
+            <span class="comment-by">${authorLabel(cm)}</span>
+            <span class="comment-time">${fmtTime(new Date(cm.time).toISOString())}</span>
+          </div>
+          <div class="comment-text">${escapeHtml(cm.text)}</div>
+        </div>`).join('');
+    return `
+      <div class="warn-item pmo-thread-item">
+        <div class="warn-name" style="cursor:pointer;" onclick="openContractDetail('${t.contractId}', false)">${escapeHtml(t.contractName||'')}</div>
+        <div class="pmo-thread">${threadHtml}</div>
+        <div class="comment-add-row" style="margin-top:10px;">
+          <input type="text" id="myc_${t.contractId}" class="auth-input" style="max-width:none; flex:1;" placeholder="کامنت خود را بنویسید...">
+          <button class="field-save" onclick="addComment('${t.contractId}', 'myc_${t.contractId}')">ثبت</button>
+        </div>
+      </div>`;
+  }).join('');
+}
 // یک قرارداد «موضوع گفتگو با مدیر پروژه» محسوب می‌شود اگر حداقل یک کامنت از مدیر پروژه روی آن ثبت شده باشد؛
 // در این صورت کل مکالمه‌ی همان قرارداد (کامنت مدیر پروژه + همه‌ی پاسخ‌ها) با هم نمایش داده می‌شود.
 function getPmoThreads(){
@@ -1018,7 +1068,10 @@ function renderViewer(el){
       <button class="${viewerSection==='panelwait'?'active':''}" onclick="switchViewerSection('panelwait')">🛠 منتظر نصب صفحه کابینت ${s.panelWaitList.length?('('+s.panelWaitList.length+')'):''}</button>
       <button class="${viewerSection==='waitingdelivery'?'active':''}" onclick="switchViewerSection('waitingdelivery')">📦 در انتظار تحویل‌دهی به مالک ${s.waitingDeliveryList.length?('('+s.waitingDeliveryList.length+')'):''}</button>
       <button class="${viewerSection==='all'?'active':''}" onclick="switchViewerSection('all')">📋 همه قراردادها (${contracts.length})</button>
-      <button class="${viewerSection==='contact'?'active':''}" onclick="switchViewerSection('contact')">✉️ ارتباط با کنترل پروژه ${pmMessagesUnseenCountForViewer()?('('+pmMessagesUnseenCountForViewer()+')'):''}</button>
+      <div class="viewer-quicklinks-split">
+        <button class="${viewerSection==='contact'?'active':''}" onclick="switchViewerSection('contact')">✉️ ارتباط با کنترل پروژه ${pmMessagesUnseenCountForViewer()?('('+pmMessagesUnseenCountForViewer()+')'):''}</button>
+        <button class="${viewerSection==='mycomments'?'active':''}" onclick="switchViewerSection('mycomments')">💬 کامنت‌های من ${myCommentsUnseenCount()?('('+myCommentsUnseenCount()+')'):''}</button>
+      </div>
     </div>
 
     <div id="viewerSectionBody"></div>
@@ -1081,6 +1134,13 @@ function renderViewerSectionBody(){
         <input type="text" id="pmNoteInput" class="auth-input" style="max-width:none; flex:1;" placeholder="پیام خود را بنویسید...">
         <button class="field-save" onclick="sendPmNote()">ارسال</button>
       </div>`;
+    return;
+  }
+  if(viewerSection === 'mycomments'){
+    body.innerHTML = `
+      <div class="section-title" style="margin-top:18px;">💬 کامنت‌های من</div>
+      <div class="viewer-report-note">کامنت‌هایی که روی هر قرارداد گذاشته‌اید و جواب‌هایی که به آن‌ها داده شده، اینجا نمایش داده می‌شود.</div>
+      ${renderMyCommentsHtml()}`;
     return;
   }
   const filtersHtml = viewerSection === 'all' ? `
