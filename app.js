@@ -1487,28 +1487,28 @@ function renderAdminFinancial(){
 
   body.innerHTML = `
     <div class="section-title" style="margin-top:14px;">💰 گزارش مالی</div>
-    <div class="kpi-grid">
-      <div class="kpi-card kpi-blue"><div class="kpi-num" style="font-size:15px;">${formatToman(st.totalValue)}</div><div class="kpi-label">ارزش کل قراردادها (تومان)</div></div>
-      <div class="kpi-card"><div class="kpi-num" style="font-size:15px;">${formatToman(st.totalMaterial)}</div><div class="kpi-label">جمع قیمت جنس</div></div>
-      <div class="kpi-card"><div class="kpi-num" style="font-size:15px;">${formatToman(st.totalLabor)}</div><div class="kpi-label">جمع اجرت نصب</div></div>
-      <div class="kpi-card kpi-blue"><div class="kpi-num" style="font-size:15px;">${formatToman(st.avgValue)}</div><div class="kpi-label">میانگین ارزش هر قرارداد</div></div>
+    <div class="kpi-grid" style="grid-template-columns:repeat(2,1fr);">
+      <div class="kpi-card kpi-blue"><div class="kpi-num" style="font-size:13px; word-break:break-all; white-space:normal; line-height:1.3;">${formatToman(st.totalValue)}</div><div class="kpi-label">ارزش کل قراردادها (ریال)</div></div>
+      <div class="kpi-card kpi-blue"><div class="kpi-num" style="font-size:13px; word-break:break-all; white-space:normal; line-height:1.3;">${formatToman(st.avgValue)}</div><div class="kpi-label">میانگین ارزش هر قرارداد</div></div>
+      <div class="kpi-card"><div class="kpi-num" style="font-size:13px; word-break:break-all; white-space:normal; line-height:1.3;">${formatToman(st.totalMaterial)}</div><div class="kpi-label">جمع قیمت جنس</div></div>
+      <div class="kpi-card"><div class="kpi-num" style="font-size:13px; word-break:break-all; white-space:normal; line-height:1.3;">${formatToman(st.totalLabor)}</div><div class="kpi-label">جمع اجرت نصب</div></div>
+      <div class="kpi-card kpi-amber"><div class="kpi-num" style="font-size:13px; word-break:break-all; white-space:normal; line-height:1.3;">${formatToman(st.realizedValue)}</div><div class="kpi-label">ارزش تحقق‌یافته (بر اساس پیشرفت)</div></div>
       <div class="kpi-card"><div class="kpi-num">${st.withFinalCount} / ${st.totalCount}</div><div class="kpi-label">دارای فاکتور نهایی</div></div>
-      <div class="kpi-card kpi-amber"><div class="kpi-num" style="font-size:15px;">${formatToman(st.realizedValue)}</div><div class="kpi-label">ارزش تحقق‌یافته (بر اساس پیشرفت)</div></div>
     </div>
-    <div class="kpi-grid" style="margin-top:8px;">
-      <div class="kpi-card"><div class="kpi-num" style="font-size:15px;">${formatToman(st.activeValue)}</div><div class="kpi-label">ارزش قراردادهای باز</div></div>
-      <div class="kpi-card"><div class="kpi-num" style="font-size:15px;">${formatToman(st.closedValue)}</div><div class="kpi-label">ارزش قراردادهای خاتمه‌یافته</div></div>
-      <div class="kpi-card ${st.avgVariancePct>0?'kpi-red':''}"><div class="kpi-num">${st.varianceRows.length ? (st.avgVariancePct>0?'+':'')+st.avgVariancePct+'٪' : '—'}</div><div class="kpi-label">میانگین اختلاف فاکتور نهایی با اولیه</div></div>
+    <div class="kpi-grid" style="grid-template-columns:repeat(2,1fr); margin-top:8px;">
+      <div class="kpi-card"><div class="kpi-num" style="font-size:13px; word-break:break-all; white-space:normal; line-height:1.3;">${formatToman(st.activeValue)}</div><div class="kpi-label">ارزش قراردادهای باز</div></div>
+      <div class="kpi-card"><div class="kpi-num" style="font-size:13px; word-break:break-all; white-space:normal; line-height:1.3;">${formatToman(st.closedValue)}</div><div class="kpi-label">ارزش قراردادهای خاتمه‌یافته</div></div>
+      <div class="kpi-card ${st.avgVariancePct>0?'kpi-red':''}" style="grid-column:1 / -1;"><div class="kpi-num">${st.varianceRows.length ? (st.avgVariancePct>0?'+':'')+st.avgVariancePct+'٪' : '—'}</div><div class="kpi-label">میانگین اختلاف فاکتور نهایی با اولیه</div></div>
     </div>
 
     ${st.monthly.length ? `
     <div class="chart-box">
-      <div class="chart-title">ارزش قراردادها بر اساس ماه ثبت (تومان)</div>
+      <div class="chart-title">ارزش قراردادها بر اساس ماه ثبت (ریال)</div>
       ${st.monthly.map(m => `
         <div class="chart-row">
           <span class="chart-label">${m.label}</span>
           <div class="chart-bar-track"><div class="chart-bar-fill" style="width:${maxMonth ? Math.round(m.value/maxMonth*100) : 0}%"></div></div>
-          <span class="chart-count" style="width:auto; min-width:60px;">${formatToman(m.value)}</span>
+          <span class="chart-count" style="width:auto; max-width:92px; white-space:normal; word-break:break-all; text-align:left; font-size:10px; line-height:1.25;">${formatToman(m.value)}</span>
         </div>`).join('')}
     </div>` : ''}
 
@@ -1520,7 +1520,7 @@ function renderAdminFinancial(){
           <div class="warn-name">${escapeHtml(r.c.name)}</div>
           <div class="warn-sub">پیشرفت ${r.pct}٪ — ${r.fin.isFinal?'فاکتور نهایی':'فاکتور اولیه'}</div>
         </div>
-        <span class="warn-tag">${formatToman(r.fin.total)} ت</span>
+        <span class="warn-tag">${formatToman(r.fin.total)} ریال</span>
       </div>`).join('')}` : ''}
 
     ${st.varianceRows.length ? `
@@ -1566,7 +1566,7 @@ function renderAdminFinancialList(){
         <div class="warn-name">${escapeHtml(r.c.name)}</div>
         <div class="warn-sub">جنس: ${formatToman(r.fin.material)} — اجرت: ${formatToman(r.fin.labor)} ${r.fin.isFinal?'(نهایی)':'(اولیه)'}</div>
       </div>
-      <span class="warn-tag">${formatToman(r.fin.total)} ت</span>
+      <span class="warn-tag">${formatToman(r.fin.total)} ریال</span>
     </div>`).join('');
 }
 
@@ -2904,7 +2904,7 @@ function renderCard(c, isAdmin, forceOpen){
     <div class="admin-only-note">اگر فاکتور نهایی خالی بماند، همه‌ی محاسبات مالی بر اساس فاکتور اولیه انجام می‌شود؛ به‌محض تکمیل فاکتور نهایی، جایگزین آن می‌شود.</div>
     <div class="field-row">
       <label>مبلغ کل فعلی این قرارداد:</label>
-      <span style="font-family:'JetBrains Mono',monospace; color:var(--ink-soft);">${formatToman(finInfo.total)} تومان ${finInfo.total ? (finInfo.isFinal ? '(بر اساس فاکتور نهایی)' : '(بر اساس فاکتور اولیه)') : ''}</span>
+      <span style="font-family:'JetBrains Mono',monospace; color:var(--ink-soft);">${formatToman(finInfo.total)} ریال ${finInfo.total ? (finInfo.isFinal ? '(بر اساس فاکتور نهایی)' : '(بر اساس فاکتور اولیه)') : ''}</span>
     </div>` : '';
 
   const descFieldHtml = `
