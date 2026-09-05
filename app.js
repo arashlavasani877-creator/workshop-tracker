@@ -173,10 +173,21 @@ function overallPercent(c){
   return Math.round(sum);
 }
 function isCompleted(c){ return overallPercent(c) === 100; }
-// برای نمایش «مرحله فعلی»: اگر همه‌چیز جز «خاتمه قرارداد» تمام شده، همان «در انتظار تحویل‌دهی به مالک» نشان داده شود
+/* ---------- V13: «در انتظار نصب صفحه کابینت» ----------
+   این یک مرحله‌ی واقعی جدید در Firestore نیست (ساختار STAGES/status دست‌نخورده می‌ماند تا داده‌های
+   موجود خراب نشود)؛ صرفاً یک لایه‌ی نمایشی است: وقتی مرحله‌ی واقعی «در حال نصب» (ایندکس ۵) به سقف
+   ۸۰٪ برسد و صفحه کابینت هنوز نصب نشده باشد، در همه‌جا (لیست‌ها، فیلترها، چارت‌ها، خروجی‌های
+   PDF/اکسل) به‌جای «در حال نصب» به‌عنوان مرحله‌ی جداگانه‌ی «در انتظار نصب صفحه کابینت» نمایش داده می‌شود. */
+const DISPLAY_STAGES = [
+  'اندازه‌گیری', 'تایید طراحی', 'آنالیز', 'ساخت و برش', 'ارسال بار به محل ساختمان',
+  'در حال نصب', 'در انتظار نصب صفحه کابینت', 'در انتظار تحویل‌دهی به مالک', 'خاتمه قرارداد'
+];
+// برای نمایش «مرحله فعلی»: ایندکس داخل DISPLAY_STAGES (نه STAGES) را برمی‌گرداند — دامنه‌ی ۰ تا ۸
 function getDisplayStageIndex(c){
   const idx = getCurrentIndex(c);
-  if(idx === STAGES.length-1 && !isCompleted(c)) return STAGES.length-2;
+  if(idx === 5) return isPanelWaiting(c) ? 6 : 5;
+  if(idx === 6) return 7;
+  if(idx === 7) return isCompleted(c) ? 8 : 7;
   return idx;
 }
 
@@ -210,7 +221,7 @@ function adminTimeStatus(c){
   return { cls, label, daysLeft: dl };
 }
 function isWarnEligible(c){
-  return !isCompleted(c) && getDisplayStageIndex(c) !== STAGES.length-2;
+  return !isCompleted(c) && getDisplayStageIndex(c) !== DISPLAY_STAGES.length-2;
 }
 function adminAlerts(){
   const list = [];
@@ -269,7 +280,7 @@ function scheduleText(c){
 function viewerCriticalStatus(c){
   if(isCompleted(c)) return { critical:false, cls:'ok', label:'خاتمه‌یافته' };
   const displayIdx = getDisplayStageIndex(c);
-  if(displayIdx === STAGES.length-2){
+  if(displayIdx === DISPLAY_STAGES.length-2){
     return { critical:false, cls:'ok', label:'در انتظار تحویل‌دهی به مالک' };
   }
   const ts = adminTimeStatus(c);
@@ -753,7 +764,7 @@ function renderWarningsHtml(){
   return '<div class="section-title" style="margin-top:14px;">هشدار سررسید <span class="cnt">' + nearing.length + ' مورد</span></div>' +
     nearing.map(x => `
       <div class="warn-item ${x.st.cls==='warn'?'soon':''}">
-        <div><div class="warn-name">${escapeHtml(x.c.name)}</div><div class="warn-sub">مرحله فعلی: ${STAGES[getCurrentIndex(x.c)].name}</div></div>
+        <div><div class="warn-name">${escapeHtml(x.c.name)}</div><div class="warn-sub">مرحله فعلی: ${DISPLAY_STAGES[getDisplayStageIndex(x.c)]}</div></div>
         <span class="warn-tag ${x.st.cls==='late'?'red':'amber'}">${x.st.label}</span>
       </div>`).join('');
 }
@@ -837,7 +848,7 @@ function renderAfrachoobSupervisor(el){
       <div style="display:flex; gap:8px; margin-bottom:14px;">
         <select id="afrStageFilter" class="admin-select" onchange="onAfrStageFilter(this.value)">
           <option value="all">همه مراحل</option>
-          ${STAGES.map((s,i) => `<option value="${i}" ${afrFilterStage===String(i)?'selected':''}>${s.name}</option>`).join('')}
+          ${DISPLAY_STAGES.map((name,i) => `<option value="${i}" ${afrFilterStage===String(i)?'selected':''}>${name}</option>`).join('')}
         </select>
         <select id="afrStatusFilter" class="admin-select" onchange="onAfrStatusFilter(this.value)">
           <option value="all">همه وضعیت‌ها</option>
@@ -948,7 +959,7 @@ function computeViewerStats(){
   const criticalList = active.filter(c => viewerCriticalStatus(c).critical);
   const nearList = active.filter(c => viewerCriticalStatus(c).cls === 'warn');
   const panelWaitList = active.filter(isPanelWaiting);
-  const waitingDeliveryList = active.filter(c => getDisplayStageIndex(c) === STAGES.length-2);
+  const waitingDeliveryList = active.filter(c => getDisplayStageIndex(c) === DISPLAY_STAGES.length-2);
   return { active, completed, avgProgress, criticalList, nearList, panelWaitList, waitingDeliveryList };
 }
 
@@ -1050,7 +1061,7 @@ function renderViewerSectionBody(){
     <div style="display:flex; gap:8px; margin-bottom:14px;">
       <select id="viewerStageFilter" class="admin-select" onchange="onViewerStageFilter(this.value)">
         <option value="all">همه مراحل</option>
-        ${STAGES.map((s,i) => `<option value="${i}" ${viewerFilterStage===String(i)?'selected':''}>${s.name}</option>`).join('')}
+        ${DISPLAY_STAGES.map((name,i) => `<option value="${i}" ${viewerFilterStage===String(i)?'selected':''}>${name}</option>`).join('')}
       </select>
       <select id="viewerStatusFilter" class="admin-select" onchange="onViewerStatusFilter(this.value)">
         <option value="all">همه وضعیت‌ها</option>
@@ -1081,7 +1092,7 @@ function renderViewerSectionList(){
     if(viewerFilterStatus === 'closed'){
       items = items.filter(isCompleted);
     } else if(viewerFilterStatus === 'waiting'){
-      items = items.filter(c => !isCompleted(c) && getDisplayStageIndex(c) === STAGES.length-2);
+      items = items.filter(c => !isCompleted(c) && getDisplayStageIndex(c) === DISPLAY_STAGES.length-2);
     } else if(viewerFilterStatus !== 'all'){
       items = items.filter(c => !isCompleted(c) && (viewerFilterStatus === 'stale' ? isNotUpdated(c) : adminTimeStatus(c).cls === viewerFilterStatus));
     }
@@ -1105,14 +1116,14 @@ function renderViewerCard(c){
   const badges = [];
   if(c.itemCode) badges.push('<span class="mini-badge">کد قلم: ' + escapeHtml(c.itemCode) + '</span>');
   if(commentCount) badges.push('<span class="mini-badge">💬 ' + commentCount + '</span>');
-  if(panelWait) badges.push('<span class="mini-badge" style="color:var(--amber); border-color:var(--amber);">منتظر نصب صفحه</span>');
   const timelineHtml = STAGES.map((st,i) => {
     const s = (c.status||{})[i] || {};
     const stageDone = isStageDone(c.status||{}, i);
     const dotCls = stageDone ? 'done' : (i===curIdx?'active':'');
     const nameCls = stageDone ? 'done' : '';
+    const stName = (i===5 && panelWait) ? 'در انتظار نصب صفحه کابینت' : st.name;
     const extra = st.type==='progress' ? `<div class="tl-time">${s.percent||0}٪${s.predictedDate?' — پیش‌بینی: '+escapeHtml(s.predictedDate):''}</div>` : '';
-    return `<div class="tl-item"><div class="tl-dot ${dotCls}"></div><div class="tl-row"><span class="tl-name ${nameCls}">${st.name}</span></div>${s.doneAt?`<div class="tl-time">${fmtTime(s.doneAt)}</div>`:''}${extra}</div>`;
+    return `<div class="tl-item"><div class="tl-dot ${dotCls}"></div><div class="tl-row"><span class="tl-name ${nameCls}">${stName}</span></div>${s.doneAt?`<div class="tl-time">${fmtTime(s.doneAt)}</div>`:''}${extra}</div>`;
   }).join('');
   const history = c.history || [];
   const histHtml = history.slice().reverse().slice(0,20).map(h =>
@@ -1124,7 +1135,7 @@ function renderViewerCard(c){
       <div class="card-head" style="cursor:pointer;" onclick="toggleViewerCard('${c.id}')">
         <div class="card-title">
           <span class="card-name">${escapeHtml(c.name)}</span>
-          <span class="card-sub">مرحله: ${STAGES[displayIdx].name}${c.itemCode?' — کد قلم: '+escapeHtml(c.itemCode):''}</span>
+          <span class="card-sub">مرحله: ${DISPLAY_STAGES[displayIdx]}${c.itemCode?' — کد قلم: '+escapeHtml(c.itemCode):''}</span>
           <div class="card-badges">${badges.join('')}</div>
         </div>
         <span class="stage-pill" style="${done?'background:var(--green-dim);color:var(--green);':(vs.critical?'background:var(--red-dim);color:var(--red);':'')}">${done?'خاتمه‌یافته':pct+'٪'}</span>
@@ -1200,20 +1211,20 @@ function computeDashboardStats(){
     delayed: active.filter(c => adminTimeStatus(c).cls === 'late').length,
     nearDue: active.filter(c => adminTimeStatus(c).cls === 'near').length,
     notUpdated: active.filter(isNotUpdated).length,
-    waitingDelivery: active.filter(c => getDisplayStageIndex(c) === STAGES.length-2).length,
+    waitingDelivery: active.filter(c => getDisplayStageIndex(c) === DISPLAY_STAGES.length-2).length,
     avgProgress: active.length ? Math.round(active.reduce((s,c)=>s+overallPercent(c),0)/active.length) : 0
   };
 }
 
 function renderStageChartHtml(){
-  const counts = STAGES.map((s,i) => contracts.filter(c => getDisplayStageIndex(c) === i).length);
+  const counts = DISPLAY_STAGES.map((s,i) => contracts.filter(c => getDisplayStageIndex(c) === i).length);
   const max = Math.max(1, ...counts);
   return `
     <div class="chart-box">
       <div class="chart-title">پراکندگی قراردادها بر اساس مرحله</div>
-      ${STAGES.map((s,i) => `
+      ${DISPLAY_STAGES.map((name,i) => `
         <div class="chart-row">
-          <span class="chart-label">${s.name}</span>
+          <span class="chart-label">${name}</span>
           <div class="chart-bar-track"><div class="chart-bar-fill" style="width:${(counts[i]/max*100)}%"></div></div>
           <span class="chart-count">${counts[i]}</span>
         </div>`).join('')}
@@ -1286,7 +1297,7 @@ function renderAdminDashSectionList(){
       <div class="warn-item" style="cursor:pointer;" onclick="openContractDetail('${c.id}')">
         <div>
           <div class="warn-name">${escapeHtml(c.name)}</div>
-          <div class="warn-sub">مرحله: ${STAGES[idx].name} — پیشرفت ${pct}٪</div>
+          <div class="warn-sub">مرحله: ${DISPLAY_STAGES[idx]} — پیشرفت ${pct}٪</div>
         </div>
         <span class="warn-tag ${vsC.cls==='late'?'red':''}">${vsC.label}</span>
       </div>`;
@@ -1596,7 +1607,7 @@ function renderAdminContracts(){
     <div style="display:flex; gap:8px; margin-bottom:14px;">
       <select id="stageFilter" class="admin-select" onchange="onStageFilter(this.value)">
         <option value="all">همه مراحل</option>
-        ${STAGES.map((s,i) => `<option value="${i}" ${adminFilterStage===String(i)?'selected':''}>${s.name}</option>`).join('')}
+        ${DISPLAY_STAGES.map((name,i) => `<option value="${i}" ${adminFilterStage===String(i)?'selected':''}>${name}</option>`).join('')}
       </select>
       <select id="statusFilter" class="admin-select" onchange="onStatusFilter(this.value)">
         <option value="all">همه وضعیت‌ها</option>
@@ -1631,7 +1642,7 @@ function getExportContracts(){
   let list = contracts.slice();
   if(exportScope === 'active') list = list.filter(c => !isCompleted(c));
   else if(exportScope === 'closed') list = list.filter(isCompleted);
-  else if(exportScope === 'waiting') list = list.filter(c => !isCompleted(c) && getDisplayStageIndex(c) === STAGES.length-2);
+  else if(exportScope === 'waiting') list = list.filter(c => !isCompleted(c) && getDisplayStageIndex(c) === DISPLAY_STAGES.length-2);
 
   const fromStr = (exportDateFrom||'').trim();
   const toStr = (exportDateTo||'').trim();
@@ -1660,7 +1671,7 @@ function exportRows(){
     'تاریخ قرارداد': c.contractDate || '—',
     'سررسید اصلی': c.dueDate || '—',
     'سررسید جبرانی': c.revisedDueDate || '—',
-    'مرحله فعلی': STAGES[getDisplayStageIndex(c)].name,
+    'مرحله فعلی': DISPLAY_STAGES[getDisplayStageIndex(c)],
     'درصد پیشرفت کل': overallPercent(c) + '%',
     'وضعیت زمانی': isCompleted(c) ? 'خاتمه‌یافته' : adminTimeStatus(c).label,
     'وضعیت': isCompleted(c) ? 'خاتمه‌یافته' : 'فعال'
@@ -1857,7 +1868,7 @@ const MGMT_STATUS_COLOR = { late:'#dc2626', warn:'#d97706', ok:'#0f766e', waitin
 // بعد «در انتظار تحویل‌دهی» (که هرگز بحرانی حساب نمی‌شود)، در غیر این‌صورت عقب/جلوی برنامه بر مبنای سرعت پیشرفت
 function mgmtRowStatus(c){
   const displayIdx = getDisplayStageIndex(c);
-  if(displayIdx === STAGES.length-2) return { label:'در انتظار تحویل‌دهی به مالک', cls:'waiting' };
+  if(displayIdx === DISPLAY_STAGES.length-2) return { label:'در انتظار تحویل‌دهی به مالک', cls:'waiting' };
   const ts = adminTimeStatus(c);
   if(ts.cls === 'late') return { label:'بحرانی — ' + ts.label, cls:'late' };
   if(ts.cls === 'near') return { label:'نزدیک سررسید', cls:'warn' };
@@ -1899,7 +1910,7 @@ async function exportManagementSummaryPdf(){
     const active = contracts.filter(c => !isCompleted(c));
     const closedCount = contracts.length - active.length;
     const criticalList = active.filter(c => mgmtRowStatus(c).cls === 'late');
-    const waitingDeliveryList = active.filter(c => getDisplayStageIndex(c) === STAGES.length-2);
+    const waitingDeliveryList = active.filter(c => getDisplayStageIndex(c) === DISPLAY_STAGES.length-2);
     const onScheduleCount = active.filter(c => mgmtRowStatus(c).cls === 'ok').length;
     const notUpdatedCount = active.filter(isNotUpdated).length;
     const avgProgress = active.length ? Math.round(active.reduce((s,c)=>s+overallPercent(c),0)/active.length) : 0;
@@ -1915,11 +1926,11 @@ async function exportManagementSummaryPdf(){
 
     const insight = `از ${active.length} قرارداد فعال، ${criticalList.length} مورد بحرانی (عقب‌افتاده از سررسید)، ${onScheduleCount} مورد مطابق یا جلوتر از برنامه، و ${waitingDeliveryList.length} مورد فقط در انتظار تحویل‌دهی به مالک هستند.`;
 
-    const stageCounts = STAGES.map((s,i) => contracts.filter(c => getDisplayStageIndex(c) === i).length);
+    const stageCounts = DISPLAY_STAGES.map((s,i) => contracts.filter(c => getDisplayStageIndex(c) === i).length);
     const stageMax = Math.max(1, ...stageCounts);
-    const stageChartHtml = STAGES.map((s,i) => `
+    const stageChartHtml = DISPLAY_STAGES.map((name,i) => `
       <div style="display:flex; align-items:center; gap:7px; margin-bottom:5px;">
-        <div style="width:118px; font-size:8.5px; color:#333; flex-shrink:0;">${escapeHtml(s.name)}</div>
+        <div style="width:118px; font-size:8.5px; color:#333; flex-shrink:0;">${escapeHtml(name)}</div>
         <div style="flex:1; background:#eee; border-radius:4px; height:11px;"><div style="width:${(stageCounts[i]/stageMax*100)}%; background:#0f766e; height:100%; border-radius:4px;"></div></div>
         <div style="width:18px; text-align:left; font-size:8.5px; color:#333;">${stageCounts[i]}</div>
       </div>`).join('');
@@ -2156,17 +2167,17 @@ function viewerExportRows(){
     'تاریخ قرارداد': c.contractDate || '—',
     'سررسید اصلی': c.dueDate || '—',
     'سررسید جبرانی': c.revisedDueDate || '—',
-    'مرحله فعلی': STAGES[getDisplayStageIndex(c)].name,
+    'مرحله فعلی': DISPLAY_STAGES[getDisplayStageIndex(c)],
     'پیشرفت': overallPercent(c) + '%',
     'وضعیت': isCompleted(c) ? 'خاتمه‌یافته' : viewerCriticalStatus(c).label
   }));
 }
 function viewerChartRowsForPdf(){
-  const counts = STAGES.map((s,i) => contracts.filter(c => getDisplayStageIndex(c) === i).length);
+  const counts = DISPLAY_STAGES.map((s,i) => contracts.filter(c => getDisplayStageIndex(c) === i).length);
   const max = Math.max(1, ...counts);
-  return STAGES.map((s,i) => `
+  return DISPLAY_STAGES.map((name,i) => `
     <div style="display:flex; align-items:center; gap:8px; margin-bottom:7px;">
-      <div style="width:140px; font-size:10px; color:#333; flex-shrink:0;">${escapeHtml(s.name)}</div>
+      <div style="width:140px; font-size:10px; color:#333; flex-shrink:0;">${escapeHtml(name)}</div>
       <div style="flex:1; background:#eee; border-radius:4px; height:14px; overflow:hidden;">
         <div style="width:${(counts[i]/max*100)}%; background:#0f766e; height:100%;"></div>
       </div>
@@ -2271,7 +2282,7 @@ function renderMgmtList(){
   if(adminFilterStatus === 'closed'){
     items = items.filter(isCompleted);
   } else if(adminFilterStatus === 'waiting'){
-    items = items.filter(c => !isCompleted(c) && getDisplayStageIndex(c) === STAGES.length-2);
+    items = items.filter(c => !isCompleted(c) && getDisplayStageIndex(c) === DISPLAY_STAGES.length-2);
   } else if(adminFilterStatus !== 'all'){
     items = items.filter(c => !isCompleted(c) && (adminFilterStatus === 'stale' ? isNotUpdated(c) : adminTimeStatus(c).cls === adminFilterStatus));
   }
@@ -2303,7 +2314,7 @@ function renderMgmtList(){
         <div class="card-head">
           <div class="card-title">
             <span class="card-name">${escapeHtml(c.name)}</span>
-            <span class="card-sub">مرحله: ${STAGES[idx].name}${c.itemCode ? ' — کد قلم: '+escapeHtml(c.itemCode) : ''}</span>
+            <span class="card-sub">مرحله: ${DISPLAY_STAGES[idx]}${c.itemCode ? ' — کد قلم: '+escapeHtml(c.itemCode) : ''}</span>
           </div>
           <span class="stage-pill" style="${done?'background:var(--green-dim);color:var(--green);':''}">${done?'خاتمه‌یافته':pct+'٪'}</span>
         </div>
@@ -2501,7 +2512,7 @@ function renderSupervisorRow(c){
       <div class="card-head">
         <div class="card-title">
           <span class="card-name">${escapeHtml(c.name)}</span>
-          <span class="card-sub">مرحله: ${STAGES[displayIdx].name}</span>
+          <span class="card-sub">مرحله: ${DISPLAY_STAGES[displayIdx]}</span>
           <div class="card-badges">${badges}</div>
         </div>
         <span class="stage-pill" style="${done?'background:var(--green-dim);color:var(--green);':''}">${done?'خاتمه‌یافته':pct+'٪'}</span>
@@ -2568,7 +2579,7 @@ function renderCard(c, isAdmin, forceOpen){
     return `
       <div class="tl-item">
         <div class="tl-dot ${dotCls}"></div>
-        <div class="tl-row"><span class="tl-name ${nameCls}">${st.name}</span>${control}</div>
+        <div class="tl-row"><span class="tl-name ${nameCls}">${(i===5 && isPanelWaiting(c)) ? 'در انتظار نصب صفحه کابینت' : st.name}</span>${control}</div>
         ${s.doneAt ? `<div class="tl-time">${fmtTime(s.doneAt)}</div>` : ''}
         ${progBox}
       </div>`;
@@ -2642,7 +2653,7 @@ function renderCard(c, isAdmin, forceOpen){
       <div class="card-head" onclick="toggleCard('${c.id}')">
         <div class="card-title">
           <span class="card-name">${escapeHtml(c.name)}</span>
-          <span class="card-sub">مرحله فعلی: ${STAGES[displayIdx].name}</span>
+          <span class="card-sub">مرحله فعلی: ${DISPLAY_STAGES[displayIdx]}</span>
           <div class="card-badges">${badges.join('')}</div>
         </div>
         <span class="stage-pill" style="${done?'background:var(--green-dim);color:var(--green);':''}">${done?'خاتمه‌یافته':pct+'٪'}</span>

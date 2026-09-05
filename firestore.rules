@@ -11,13 +11,19 @@ service cloud.firestore {
     function isAdmin() {
       return isSignedIn() && myRole() == 'admin';
     }
-    // isEditor: کسانی که اجازه‌ی نوشتن/تغییر روی قراردادها دارند (مدیر + سرپرست نصب)
+    // isEditor: کسانی که اجازه‌ی نوشتن/تغییر روی قراردادها دارند (مدیر + سرپرست نصب + سرپرست افراچوب)
     function isEditor() {
-      return isSignedIn() && (myRole() == 'admin' || myRole() == 'supervisor');
+      return isSignedIn() && (myRole() == 'admin' || myRole() == 'supervisor' || myRole() == 'afrachoobSupervisor');
     }
     // isApproved: کسانی که فقط اجازه‌ی خواندن دارند هم شامل می‌شود (+ مدیر پروژه، نقش فقط‌گزارش)
     function isApproved() {
-      return isSignedIn() && (myRole() == 'admin' || myRole() == 'supervisor' || myRole() == 'viewer');
+      return isSignedIn() && (myRole() == 'admin' || myRole() == 'supervisor' || myRole() == 'viewer' || myRole() == 'afrachoobSupervisor');
+    }
+    // isCommentOnlyUpdate: مدیر پروژه اجازه ندارد هیچ فیلدی از قرارداد را تغییر دهد جز کامنت‌ها —
+    // این تابع فقط زمانی true است که در آپدیت، فقط و فقط فیلد comments تغییر کرده باشد (نه فیلد دیگری)
+    function isCommentOnlyUpdate() {
+      return isSignedIn() && myRole() == 'viewer'
+             && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['comments']);
     }
 
     match /users/{userId} {
@@ -39,12 +45,14 @@ service cloud.firestore {
       // نوشتن/ساخت/حذف: فقط مدیر و سرپرست — مدیر پروژه هرگز نمی‌تواند چیزی تغییر دهد
       allow create: if isAdmin();
       allow delete: if isAdmin();
-      allow update: if isEditor() && (
-                       isAdmin() ||
-                       (
-                         request.resource.data.get('dueDate', null) == resource.data.get('dueDate', null) &&
-                         request.resource.data.get('itemCode', null) == resource.data.get('itemCode', null) &&
-                         request.resource.data.get('contractDate', null) == resource.data.get('contractDate', null)
+      allow update: if isCommentOnlyUpdate() || (
+                       isEditor() && (
+                         isAdmin() ||
+                         (
+                           request.resource.data.get('dueDate', null) == resource.data.get('dueDate', null) &&
+                           request.resource.data.get('itemCode', null) == resource.data.get('itemCode', null) &&
+                           request.resource.data.get('contractDate', null) == resource.data.get('contractDate', null)
+                         )
                        )
                      );
     }
