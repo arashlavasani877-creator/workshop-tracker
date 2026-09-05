@@ -33,6 +33,7 @@ let adminFilterStage = 'all';
 let adminFilterStatus = 'all';
 let adminFilterContractMonth = 'all';
 let adminFilterContractYear = '';
+let adminFinancialSearch = ''; // جستجو در لیست «گزارش مالی» مدیر
 let supervisorSearchQuery = '';
 let viewerOpenId = null;
 let viewerSearchQuery = '';
@@ -173,6 +174,27 @@ function overallPercent(c){
   return Math.round(sum);
 }
 function isCompleted(c){ return overallPercent(c) === 100; }
+
+/* ---------- مالی (گزارش مالی مدیر): قیمت جنس + اجرت نصب + فاکتور نهایی اختیاری ----------
+   منطق: اگر فاکتور نهایی (جنس یا اجرت) ثبت شده باشد، همه‌ی محاسبات با فاکتور نهایی انجام می‌شود؛
+   در غیر این صورت فاکتور اولیه ملاک است. این بخش کاملاً مستقل است و به هیچ فیلد/تابع قبلی دست نمی‌زند. */
+function formatToman(n){
+  n = Math.round(Number(n) || 0);
+  return n.toLocaleString('en-US');
+}
+function getContractFinance(c){
+  const initMaterial = Number(c.materialPrice) || 0;
+  const initLabor = Number(c.laborPrice) || 0;
+  const finalMaterial = Number(c.finalMaterialPrice) || 0;
+  const finalLabor = Number(c.finalLaborPrice) || 0;
+  const hasFinal = finalMaterial > 0 || finalLabor > 0;
+  const material = hasFinal ? finalMaterial : initMaterial;
+  const labor = hasFinal ? finalLabor : initLabor;
+  return {
+    material, labor, total: material + labor, isFinal: hasFinal,
+    initMaterial, initLabor, initTotal: initMaterial + initLabor
+  };
+}
 /* ---------- V13: «در انتظار نصب صفحه کابینت» ----------
    این یک مرحله‌ی واقعی جدید در Firestore نیست (ساختار STAGES/status دست‌نخورده می‌ماند تا داده‌های
    موجود خراب نشود)؛ صرفاً یک لایه‌ی نمایشی است: وقتی مرحله‌ی واقعی «در حال نصب» (ایندکس ۵) به سقف
@@ -1255,6 +1277,7 @@ function renderAdmin(el){
       <button class="btn-secondary" onclick="openNotifications()">🔔 هشدارها ${alertCount ? '('+alertCount+')' : ''}</button>
     </div>
     <div class="toolbar"><button id="mgmtSummaryBtn" class="btn-primary" onclick="exportManagementSummaryPdf()">📱 خلاصه مدیریتی (اشتراک‌گذاری)</button></div>
+    <div class="toolbar"><button class="btn-primary" onclick="switchAdminTab('financial')">💰 گزارش مالی</button></div>
     <div class="toolbar"><button id="installBtn" class="btn-secondary" onclick="installApp()">نصب اپلیکیشن روی گوشی</button></div>
     <div class="tabs">
       <button class="${adminTab==='dashboard'?'active':''}" onclick="switchAdminTab('dashboard')">داشبورد</button>
@@ -1272,6 +1295,7 @@ function renderAdmin(el){
   `;
   document.getElementById('installBtn').style.display = window.__deferredPrompt ? 'block' : 'none';
   if(adminTab === 'dashboard') renderAdminDashboard();
+  else if(adminTab === 'financial') renderAdminFinancial();
   else if(adminTab === 'contracts') renderAdminContracts();
   else if(adminTab === 'plans') renderAdminPlans();
   else if(adminTab === 'log') renderAdminLog();
@@ -1416,6 +1440,134 @@ function openWaitingDeliveryList(){
   adminFilterStage = 'all';
   adminFilterStatus = 'waiting';
   renderApp();
+}
+
+/* ---------- Admin-only: گزارش مالی — تب کاملاً جدا، بدون هیچ تغییری در داشبورد اصلی ---------- */
+function computeFinancialStats(){
+  const rows = contracts.map(c => {
+    const fin = getContractFinance(c);
+    const pct = overallPercent(c);
+    return { c, fin, pct, realized: Math.round(fin.total * pct / 100) };
+  });
+  const totalValue = rows.reduce((s,r) => s + r.fin.total, 0);
+  const totalMaterial = rows.reduce((s,r) => s + r.fin.material, 0);
+  const totalLabor = rows.reduce((s,r) => s + r.fin.labor, 0);
+  const priced = rows.filter(r => r.fin.total > 0);
+  const avgValue = priced.length ? Math.round(totalValue / priced.length) : 0;
+  const withFinal = rows.filter(r => r.fin.isFinal);
+  const realizedValue = rows.reduce((s,r) => s + r.realized, 0);
+  const missing = rows.filter(r => r.fin.total === 0);
+  const activeValue = rows.filter(r => !isCompleted(r.c)).reduce((s,r) => s + r.fin.total, 0);
+  const closedValue = rows.filter(r => isCompleted(r.c)).reduce((s,r) => s + r.fin.total, 0);
+
+  const varianceRows = withFinal.filter(r => r.fin.initTotal > 0).map(r => ({
+    ...r, deltaPct: Math.round(((r.fin.total - r.fin.initTotal) / r.fin.initTotal) * 100)
+  }));
+  const avgVariancePct = varianceRows.length ? Math.round(varianceRows.reduce((s,r) => s + r.deltaPct, 0) / varianceRows.length) : 0;
+
+  const monthMap = {};
+  rows.forEach(r => {
+    const p = parseJalaliStr(r.c.contractDate);
+    if(!p || r.fin.total <= 0) return;
+    const key = p[0] + '/' + String(p[1]).padStart(2,'0');
+    monthMap[key] = (monthMap[key] || 0) + r.fin.total;
+  });
+  const monthly = Object.keys(monthMap).sort().map(k => ({ label: k, value: monthMap[k] }));
+
+  return { rows, totalValue, totalMaterial, totalLabor, avgValue, withFinalCount: withFinal.length,
+           totalCount: contracts.length, realizedValue, missing, varianceRows, avgVariancePct,
+           monthly, activeValue, closedValue };
+}
+
+function renderAdminFinancial(){
+  const body = document.getElementById('adminBody');
+  const st = computeFinancialStats();
+  const topList = st.rows.slice().filter(r => r.fin.total > 0).sort((a,b) => b.fin.total - a.fin.total).slice(0,5);
+  const maxMonth = st.monthly.length ? Math.max(...st.monthly.map(m => m.value)) : 0;
+
+  body.innerHTML = `
+    <div class="section-title" style="margin-top:14px;">💰 گزارش مالی</div>
+    <div class="kpi-grid">
+      <div class="kpi-card kpi-blue"><div class="kpi-num" style="font-size:15px;">${formatToman(st.totalValue)}</div><div class="kpi-label">ارزش کل قراردادها (تومان)</div></div>
+      <div class="kpi-card"><div class="kpi-num" style="font-size:15px;">${formatToman(st.totalMaterial)}</div><div class="kpi-label">جمع قیمت جنس</div></div>
+      <div class="kpi-card"><div class="kpi-num" style="font-size:15px;">${formatToman(st.totalLabor)}</div><div class="kpi-label">جمع اجرت نصب</div></div>
+      <div class="kpi-card kpi-blue"><div class="kpi-num" style="font-size:15px;">${formatToman(st.avgValue)}</div><div class="kpi-label">میانگین ارزش هر قرارداد</div></div>
+      <div class="kpi-card"><div class="kpi-num">${st.withFinalCount} / ${st.totalCount}</div><div class="kpi-label">دارای فاکتور نهایی</div></div>
+      <div class="kpi-card kpi-amber"><div class="kpi-num" style="font-size:15px;">${formatToman(st.realizedValue)}</div><div class="kpi-label">ارزش تحقق‌یافته (بر اساس پیشرفت)</div></div>
+    </div>
+    <div class="kpi-grid" style="margin-top:8px;">
+      <div class="kpi-card"><div class="kpi-num" style="font-size:15px;">${formatToman(st.activeValue)}</div><div class="kpi-label">ارزش قراردادهای باز</div></div>
+      <div class="kpi-card"><div class="kpi-num" style="font-size:15px;">${formatToman(st.closedValue)}</div><div class="kpi-label">ارزش قراردادهای خاتمه‌یافته</div></div>
+      <div class="kpi-card ${st.avgVariancePct>0?'kpi-red':''}"><div class="kpi-num">${st.varianceRows.length ? (st.avgVariancePct>0?'+':'')+st.avgVariancePct+'٪' : '—'}</div><div class="kpi-label">میانگین اختلاف فاکتور نهایی با اولیه</div></div>
+    </div>
+
+    ${st.monthly.length ? `
+    <div class="chart-box">
+      <div class="chart-title">ارزش قراردادها بر اساس ماه ثبت (تومان)</div>
+      ${st.monthly.map(m => `
+        <div class="chart-row">
+          <span class="chart-label">${m.label}</span>
+          <div class="chart-bar-track"><div class="chart-bar-fill" style="width:${maxMonth ? Math.round(m.value/maxMonth*100) : 0}%"></div></div>
+          <span class="chart-count" style="width:auto; min-width:60px;">${formatToman(m.value)}</span>
+        </div>`).join('')}
+    </div>` : ''}
+
+    ${topList.length ? `
+    <div class="section-title" style="margin-top:20px;">قراردادهای پرارزش</div>
+    ${topList.map(r => `
+      <div class="warn-item" style="cursor:pointer; border-inline-start-color:var(--teal);" onclick="openContractDetail('${r.c.id}')">
+        <div>
+          <div class="warn-name">${escapeHtml(r.c.name)}</div>
+          <div class="warn-sub">پیشرفت ${r.pct}٪ — ${r.fin.isFinal?'فاکتور نهایی':'فاکتور اولیه'}</div>
+        </div>
+        <span class="warn-tag">${formatToman(r.fin.total)} ت</span>
+      </div>`).join('')}` : ''}
+
+    ${st.varianceRows.length ? `
+    <div class="section-title" style="margin-top:20px;">اختلاف فاکتور نهایی با اولیه</div>
+    ${st.varianceRows.map(r => `
+      <div class="warn-item" style="cursor:pointer; ${r.deltaPct>0?'':'border-inline-start-color:var(--teal);'}" onclick="openContractDetail('${r.c.id}')">
+        <div>
+          <div class="warn-name">${escapeHtml(r.c.name)}</div>
+          <div class="warn-sub">اولیه: ${formatToman(r.fin.initTotal)} — نهایی: ${formatToman(r.fin.total)}</div>
+        </div>
+        <span class="warn-tag ${r.deltaPct>0?'red':''}">${r.deltaPct>0?'+':''}${r.deltaPct}٪</span>
+      </div>`).join('')}` : ''}
+
+    <div class="section-title" style="margin-top:20px;">همه قراردادهای قیمت‌گذاری‌شده <span class="cnt" id="finListCount"></span></div>
+    <input type="text" id="finSearchInput" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(adminFinancialSearch)}" class="auth-input" style="max-width:none;width:100%;margin-bottom:10px;" oninput="onAdminFinancialSearch(this.value)">
+    <div id="finList"></div>
+
+    ${st.missing.length ? `
+    <div class="section-title" style="margin-top:20px;">⚠️ قراردادهای بدون قیمت ثبت‌شده <span class="cnt">(${st.missing.length})</span></div>
+    ${st.missing.map(r => `
+      <div class="warn-item" style="cursor:pointer;" onclick="openContractDetail('${r.c.id}')">
+        <div class="warn-name">${escapeHtml(r.c.name)}</div>
+        <span class="warn-tag">ثبت نشده</span>
+      </div>`).join('')}` : ''}
+  `;
+  renderAdminFinancialList();
+}
+function onAdminFinancialSearch(v){ adminFinancialSearch = v; renderAdminFinancialList(); }
+function renderAdminFinancialList(){
+  const el = document.getElementById('finList');
+  if(!el) return;
+  const st = computeFinancialStats();
+  let rows = st.rows.filter(r => r.fin.total > 0);
+  const q = adminFinancialSearch.trim().toLowerCase();
+  if(q) rows = rows.filter(r => (r.c.name||'').toLowerCase().includes(q) || (r.c.itemCode||'').toLowerCase().includes(q));
+  rows.sort((a,b) => b.fin.total - a.fin.total);
+  const cnt = document.getElementById('finListCount');
+  if(cnt) cnt.textContent = rows.length + ' مورد';
+  if(!rows.length){ el.innerHTML = '<div class="empty">موردی یافت نشد.</div>'; return; }
+  el.innerHTML = rows.map(r => `
+    <div class="warn-item" style="cursor:pointer; border-inline-start-color:var(--teal);" onclick="openContractDetail('${r.c.id}')">
+      <div>
+        <div class="warn-name">${escapeHtml(r.c.name)}</div>
+        <div class="warn-sub">جنس: ${formatToman(r.fin.material)} — اجرت: ${formatToman(r.fin.labor)} ${r.fin.isFinal?'(نهایی)':'(اولیه)'}</div>
+      </div>
+      <span class="warn-tag">${formatToman(r.fin.total)} ت</span>
+    </div>`).join('');
 }
 
 
@@ -2727,6 +2879,32 @@ function renderCard(c, isAdmin, forceOpen){
       <button class="field-save" onclick="saveContractDate('${c.id}')">ثبت</button>
     </div>` : '';
 
+  const finInfo = getContractFinance(c);
+  const priceFieldHtml = isAdmin ? `
+    <div class="field-row">
+      <label>قیمت جنس (فاکتور اولیه):</label>
+      <input type="text" inputmode="numeric" id="matprice_${c.id}" placeholder="مثلاً 50000000" style="direction:ltr; text-align:left; font-family:'JetBrains Mono',monospace;" value="${c.materialPrice ? c.materialPrice : ''}">
+    </div>
+    <div class="field-row">
+      <label>قیمت اجرت نصب (فاکتور اولیه):</label>
+      <input type="text" inputmode="numeric" id="laborprice_${c.id}" placeholder="مثلاً 20000000" style="direction:ltr; text-align:left; font-family:'JetBrains Mono',monospace;" value="${c.laborPrice ? c.laborPrice : ''}">
+      <button class="field-save" onclick="saveInitialPrices('${c.id}')">ثبت</button>
+    </div>
+    <div class="field-row">
+      <label>فاکتور نهایی — جنس:</label>
+      <input type="text" inputmode="numeric" id="fmatprice_${c.id}" placeholder="در صورت وجود" style="direction:ltr; text-align:left; font-family:'JetBrains Mono',monospace;" value="${c.finalMaterialPrice ? c.finalMaterialPrice : ''}">
+    </div>
+    <div class="field-row">
+      <label>فاکتور نهایی — اجرت نصب:</label>
+      <input type="text" inputmode="numeric" id="flaborprice_${c.id}" placeholder="در صورت وجود" style="direction:ltr; text-align:left; font-family:'JetBrains Mono',monospace;" value="${c.finalLaborPrice ? c.finalLaborPrice : ''}">
+      <button class="field-save" onclick="saveFinalInvoice('${c.id}')">ثبت</button>
+    </div>
+    <div class="admin-only-note">اگر فاکتور نهایی خالی بماند، همه‌ی محاسبات مالی بر اساس فاکتور اولیه انجام می‌شود؛ به‌محض تکمیل فاکتور نهایی، جایگزین آن می‌شود.</div>
+    <div class="field-row">
+      <label>مبلغ کل فعلی این قرارداد:</label>
+      <span style="font-family:'JetBrains Mono',monospace; color:var(--ink-soft);">${formatToman(finInfo.total)} تومان ${finInfo.total ? (finInfo.isFinal ? '(بر اساس فاکتور نهایی)' : '(بر اساس فاکتور اولیه)') : ''}</span>
+    </div>` : '';
+
   const descFieldHtml = `
     <div class="field-row text">
       <label>توضیحات:</label>
@@ -2756,6 +2934,7 @@ function renderCard(c, isAdmin, forceOpen){
         ${revDueFieldHtml}
         ${itemCodeFieldHtml}
         ${contractDateFieldHtml}
+        ${priceFieldHtml}
         ${descFieldHtml}
         <div class="timeline">${timelineHtml}</div>
         ${showHistory ? `
@@ -2880,6 +3059,36 @@ async function saveContractDate(id){
   const history = (c.history||[]).concat([historyEntry('تاریخ قرارداد ثبت شد: '+val)]);
   await db.collection('contracts').doc(id).update({ contractDate: val, history });
   logActivity('ویرایش تاریخ قرارداد', id, c && c.name, 'تاریخ قرارداد: '+val);
+}
+async function saveInitialPrices(id){
+  if(!db) return;
+  const mRaw = document.getElementById(`matprice_${id}`).value.trim().replace(/,/g,'');
+  const lRaw = document.getElementById(`laborprice_${id}`).value.trim().replace(/,/g,'');
+  if(mRaw && isNaN(Number(mRaw))){ alert('قیمت جنس باید عدد باشد.'); return; }
+  if(lRaw && isNaN(Number(lRaw))){ alert('قیمت اجرت نصب باید عدد باشد.'); return; }
+  const materialPrice = mRaw ? Number(mRaw) : 0;
+  const laborPrice = lRaw ? Number(lRaw) : 0;
+  const c = contracts.find(x => x.id === id);
+  const label = 'فاکتور اولیه ثبت شد — جنس: ' + formatToman(materialPrice) + ' — اجرت: ' + formatToman(laborPrice);
+  const history = (c.history||[]).concat([historyEntry(label)]);
+  await db.collection('contracts').doc(id).update({ materialPrice, laborPrice, history });
+  logActivity('ویرایش فاکتور اولیه', id, c && c.name, label);
+}
+async function saveFinalInvoice(id){
+  if(!db) return;
+  const mRaw = document.getElementById(`fmatprice_${id}`).value.trim().replace(/,/g,'');
+  const lRaw = document.getElementById(`flaborprice_${id}`).value.trim().replace(/,/g,'');
+  if(mRaw && isNaN(Number(mRaw))){ alert('قیمت جنس فاکتور نهایی باید عدد باشد.'); return; }
+  if(lRaw && isNaN(Number(lRaw))){ alert('قیمت اجرت نصب فاکتور نهایی باید عدد باشد.'); return; }
+  const finalMaterialPrice = mRaw ? Number(mRaw) : 0;
+  const finalLaborPrice = lRaw ? Number(lRaw) : 0;
+  const c = contracts.find(x => x.id === id);
+  const label = (finalMaterialPrice || finalLaborPrice)
+    ? 'فاکتور نهایی ثبت شد — جنس: ' + formatToman(finalMaterialPrice) + ' — اجرت: ' + formatToman(finalLaborPrice)
+    : 'فاکتور نهایی حذف شد (محاسبات به فاکتور اولیه برگشت)';
+  const history = (c.history||[]).concat([historyEntry(label)]);
+  await db.collection('contracts').doc(id).update({ finalMaterialPrice, finalLaborPrice, history });
+  logActivity('ویرایش فاکتور نهایی', id, c && c.name, label);
 }
 async function saveDescription(id){
   if(!db) return;
