@@ -2884,6 +2884,7 @@ function renderCard(c, isAdmin, forceOpen){
     <div class="field-row">
       <label>قیمت جنس (فاکتور اولیه):</label>
       <input type="text" inputmode="numeric" id="matprice_${c.id}" placeholder="مثلاً 50000000" style="direction:ltr; text-align:left; font-family:'JetBrains Mono',monospace;" value="${c.materialPrice ? c.materialPrice : ''}">
+      <button class="field-save" onclick="saveInitialPrices('${c.id}')">ثبت</button>
     </div>
     <div class="field-row">
       <label>قیمت اجرت نصب (فاکتور اولیه):</label>
@@ -2893,6 +2894,7 @@ function renderCard(c, isAdmin, forceOpen){
     <div class="field-row">
       <label>فاکتور نهایی — جنس:</label>
       <input type="text" inputmode="numeric" id="fmatprice_${c.id}" placeholder="در صورت وجود" style="direction:ltr; text-align:left; font-family:'JetBrains Mono',monospace;" value="${c.finalMaterialPrice ? c.finalMaterialPrice : ''}">
+      <button class="field-save" onclick="saveFinalInvoice('${c.id}')">ثبت</button>
     </div>
     <div class="field-row">
       <label>فاکتور نهایی — اجرت نصب:</label>
