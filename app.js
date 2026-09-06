@@ -36,6 +36,7 @@ let adminFilterContractYear = '';
 let adminFinancialSearch = ''; // جستجو در لیست «گزارش مالی» مدیر
 let finSectionOpen = { top:false, variance:false, all:false }; // دکمه‌ای‌بودن بخش‌های گزارش مالی
 let finHiddenMonths = {}; // ماه‌هایی که کاربر از نمودار گزارش مالی مخفی کرده
+let finMonthFilterOpen = false; // باز/بسته بودن پنل فیلتر ماه‌های نمودار
 let supervisorSearchQuery = '';
 let viewerOpenId = null;
 let viewerSearchQuery = '';
@@ -1517,18 +1518,30 @@ function renderAdminFinancial(){
 
     ${st.monthly.length ? `
     <div class="chart-box">
-      <div class="chart-title">ارزش قراردادها بر اساس ماه ثبت (ریال)</div>
-      <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px;">
-        ${st.monthly.map(m => `
-          <button onclick="toggleFinMonth('${m.label}')" style="font-family:'JetBrains Mono',monospace; font-size:10.5px; padding:4px 8px; border-radius:8px; cursor:pointer; border:1px solid var(--line); background:${finHiddenMonths[m.label] ? 'transparent' : 'var(--teal)'}; color:${finHiddenMonths[m.label] ? 'var(--ink-faint)' : '#fff'}; text-decoration:${finHiddenMonths[m.label] ? 'line-through' : 'none'};">${m.label}</button>
-        `).join('')}
+      <div class="chart-title" style="display:flex; justify-content:space-between; align-items:center;">
+        <span>ارزش قراردادها بر اساس ماه ثبت (ریال)</span>
+        <span onclick="toggleFinMonthFilter()" style="cursor:pointer; font-size:10.5px; font-weight:500; color:var(--teal);">⚙️ فیلتر ماه‌ها ${finMonthFilterOpen ? '▲' : '▼'}</span>
       </div>
+      ${finMonthFilterOpen ? `
+      <div style="background:var(--panel-2); border:1px solid var(--line); border-radius:10px; padding:10px; margin-bottom:12px;">
+        <div style="display:flex; gap:8px; margin-bottom:10px;">
+          <button class="btn-secondary" style="font-size:10.5px; padding:6px 10px; flex:1;" onclick="finShowRecentMonths(6)">فقط ۶ ماه اخیر</button>
+          <button class="btn-secondary" style="font-size:10.5px; padding:6px 10px; flex:1;" onclick="finShowRecentMonths(0)">نمایش همه</button>
+        </div>
+        <div style="display:flex; flex-wrap:wrap; gap:6px;">
+          ${st.monthly.map(m => `
+            <label style="display:flex; align-items:center; gap:4px; font-family:'JetBrains Mono',monospace; font-size:10.5px; border:1px solid var(--line); border-radius:8px; padding:4px 8px; cursor:pointer;">
+              <input type="checkbox" ${finHiddenMonths[m.label] ? '' : 'checked'} onchange="toggleFinMonth('${m.label}')" style="margin:0;">
+              ${m.label}
+            </label>`).join('')}
+        </div>
+      </div>` : ''}
       ${visibleMonthly.length ? visibleMonthly.map(m => `
         <div class="chart-row">
           <span class="chart-label">${m.label}</span>
           <div class="chart-bar-track"><div class="chart-bar-fill" style="width:${maxMonth ? Math.round(m.value/maxMonth*100) : 0}%"></div></div>
           <span class="chart-count" style="width:auto; max-width:92px; white-space:normal; word-break:break-all; text-align:left; font-size:10px; line-height:1.25;">${formatToman(m.value)}</span>
-        </div>`).join('') : `<div class="empty">همه‌ی ماه‌ها مخفی شده‌اند — از دکمه‌های بالا برای نمایش دوباره استفاده کنید.</div>`}
+        </div>`).join('') : `<div class="empty">همه‌ی ماه‌ها مخفی شده‌اند — از «فیلتر ماه‌ها» برای نمایش دوباره استفاده کنید.</div>`}
     </div>` : ''}
 
     ${topList.length ? sectionHeader('top', 'قراردادهای پرارزش', topList.length) : ''}
@@ -1567,7 +1580,16 @@ function renderAdminFinancial(){
   if(finSectionOpen.all) renderAdminFinancialList();
 }
 function toggleFinSection(key){ finSectionOpen[key] = !finSectionOpen[key]; renderAdminFinancial(); }
+function toggleFinMonthFilter(){ finMonthFilterOpen = !finMonthFilterOpen; renderAdminFinancial(); }
 function toggleFinMonth(label){ finHiddenMonths[label] = !finHiddenMonths[label]; renderAdminFinancial(); }
+function finShowRecentMonths(n){
+  const st = computeFinancialStats();
+  finHiddenMonths = {};
+  if(n > 0 && st.monthly.length > n){
+    st.monthly.slice(0, st.monthly.length - n).forEach(m => { finHiddenMonths[m.label] = true; });
+  }
+  renderAdminFinancial();
+}
 function onAdminFinancialSearch(v){ adminFinancialSearch = v; renderAdminFinancialList(); }
 function renderAdminFinancialList(){
   const el = document.getElementById('finList');
