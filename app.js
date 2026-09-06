@@ -34,6 +34,8 @@ let adminFilterStatus = 'all';
 let adminFilterContractMonth = 'all';
 let adminFilterContractYear = '';
 let adminFinancialSearch = ''; // جستجو در لیست «گزارش مالی» مدیر
+let finSectionOpen = { top:false, variance:false, all:false }; // دکمه‌ای‌بودن بخش‌های گزارش مالی
+let finHiddenMonths = {}; // ماه‌هایی که کاربر از نمودار گزارش مالی مخفی کرده
 let supervisorSearchQuery = '';
 let viewerOpenId = null;
 let viewerSearchQuery = '';
@@ -1483,10 +1485,22 @@ function renderAdminFinancial(){
   const body = document.getElementById('adminBody');
   const st = computeFinancialStats();
   const topList = st.rows.slice().filter(r => r.fin.total > 0).sort((a,b) => b.fin.total - a.fin.total).slice(0,5);
-  const maxMonth = st.monthly.length ? Math.max(...st.monthly.map(m => m.value)) : 0;
+  const visibleMonthly = st.monthly.filter(m => !finHiddenMonths[m.label]);
+  const maxMonth = visibleMonthly.length ? Math.max(...visibleMonthly.map(m => m.value)) : 0;
+
+  const sectionHeader = (key, title, count) => `
+    <div class="section-title" style="margin-top:20px; cursor:pointer; justify-content:space-between;" onclick="toggleFinSection('${key}')">
+      <span>${title} <span class="cnt">(${count})</span></span>
+      <span>${finSectionOpen[key] ? '▲ بستن' : '▼ نمایش'}</span>
+    </div>`;
 
   body.innerHTML = `
     <div class="section-title" style="margin-top:14px;">💰 گزارش مالی</div>
+    <div class="toolbar" style="display:flex; gap:8px; flex-wrap:wrap;">
+      <button id="finExcelBtn" class="btn-secondary" onclick="exportFinancialExcel()">📊 خروجی اکسل</button>
+      <button id="finPdfBtn" class="btn-secondary" onclick="exportFinancialPdf()">🧾 خروجی PDF</button>
+    </div>
+
     <div class="kpi-grid" style="grid-template-columns:repeat(2,1fr);">
       <div class="kpi-card kpi-blue"><div class="kpi-num" style="font-size:13px; word-break:break-all; white-space:normal; line-height:1.3;">${formatToman(st.totalValue)}</div><div class="kpi-label">ارزش کل قراردادها (ریال)</div></div>
       <div class="kpi-card kpi-blue"><div class="kpi-num" style="font-size:13px; word-break:break-all; white-space:normal; line-height:1.3;">${formatToman(st.avgValue)}</div><div class="kpi-label">میانگین ارزش هر قرارداد</div></div>
@@ -1504,39 +1518,43 @@ function renderAdminFinancial(){
     ${st.monthly.length ? `
     <div class="chart-box">
       <div class="chart-title">ارزش قراردادها بر اساس ماه ثبت (ریال)</div>
-      ${st.monthly.map(m => `
+      <div style="display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px;">
+        ${st.monthly.map(m => `
+          <button onclick="toggleFinMonth('${m.label}')" style="font-family:'JetBrains Mono',monospace; font-size:10.5px; padding:4px 8px; border-radius:8px; cursor:pointer; border:1px solid var(--line); background:${finHiddenMonths[m.label] ? 'transparent' : 'var(--teal)'}; color:${finHiddenMonths[m.label] ? 'var(--ink-faint)' : '#fff'}; text-decoration:${finHiddenMonths[m.label] ? 'line-through' : 'none'};">${m.label}</button>
+        `).join('')}
+      </div>
+      ${visibleMonthly.length ? visibleMonthly.map(m => `
         <div class="chart-row">
           <span class="chart-label">${m.label}</span>
           <div class="chart-bar-track"><div class="chart-bar-fill" style="width:${maxMonth ? Math.round(m.value/maxMonth*100) : 0}%"></div></div>
           <span class="chart-count" style="width:auto; max-width:92px; white-space:normal; word-break:break-all; text-align:left; font-size:10px; line-height:1.25;">${formatToman(m.value)}</span>
-        </div>`).join('')}
+        </div>`).join('') : `<div class="empty">همه‌ی ماه‌ها مخفی شده‌اند — از دکمه‌های بالا برای نمایش دوباره استفاده کنید.</div>`}
     </div>` : ''}
 
-    ${topList.length ? `
-    <div class="section-title" style="margin-top:20px;">قراردادهای پرارزش</div>
-    ${topList.map(r => `
+    ${topList.length ? sectionHeader('top', 'قراردادهای پرارزش', topList.length) : ''}
+    ${(topList.length && finSectionOpen.top) ? topList.map(r => `
       <div class="warn-item" style="cursor:pointer; border-inline-start-color:var(--teal);" onclick="openContractDetail('${r.c.id}')">
         <div>
           <div class="warn-name">${escapeHtml(r.c.name)}</div>
           <div class="warn-sub">پیشرفت ${r.pct}٪ — ${r.fin.isFinal?'فاکتور نهایی':'فاکتور اولیه'}</div>
         </div>
         <span class="warn-tag">${formatToman(r.fin.total)} ریال</span>
-      </div>`).join('')}` : ''}
+      </div>`).join('') : ''}
 
-    ${st.varianceRows.length ? `
-    <div class="section-title" style="margin-top:20px;">اختلاف فاکتور نهایی با اولیه</div>
-    ${st.varianceRows.map(r => `
+    ${st.varianceRows.length ? sectionHeader('variance', 'اختلاف فاکتور نهایی با اولیه', st.varianceRows.length) : ''}
+    ${(st.varianceRows.length && finSectionOpen.variance) ? st.varianceRows.map(r => `
       <div class="warn-item" style="cursor:pointer; ${r.deltaPct>0?'':'border-inline-start-color:var(--teal);'}" onclick="openContractDetail('${r.c.id}')">
         <div>
           <div class="warn-name">${escapeHtml(r.c.name)}</div>
           <div class="warn-sub">اولیه: ${formatToman(r.fin.initTotal)} — نهایی: ${formatToman(r.fin.total)}</div>
         </div>
         <span class="warn-tag ${r.deltaPct>0?'red':''}">${r.deltaPct>0?'+':''}${r.deltaPct}٪</span>
-      </div>`).join('')}` : ''}
+      </div>`).join('') : ''}
 
-    <div class="section-title" style="margin-top:20px;">همه قراردادهای قیمت‌گذاری‌شده <span class="cnt" id="finListCount"></span></div>
-    <input type="text" id="finSearchInput" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(adminFinancialSearch)}" class="auth-input" style="max-width:none;width:100%;margin-bottom:10px;" oninput="onAdminFinancialSearch(this.value)">
-    <div id="finList"></div>
+    ${sectionHeader('all', 'همه قراردادهای قیمت‌گذاری‌شده', st.rows.filter(r=>r.fin.total>0).length)}
+    ${finSectionOpen.all ? `
+    <input type="text" id="finSearchInput" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(adminFinancialSearch)}" class="auth-input" style="max-width:none;width:100%;margin:10px 0;" oninput="onAdminFinancialSearch(this.value)">
+    <div id="finList"></div>` : ''}
 
     ${st.missing.length ? `
     <div class="section-title" style="margin-top:20px;">⚠️ قراردادهای بدون قیمت ثبت‌شده <span class="cnt">(${st.missing.length})</span></div>
@@ -1546,8 +1564,10 @@ function renderAdminFinancial(){
         <span class="warn-tag">ثبت نشده</span>
       </div>`).join('')}` : ''}
   `;
-  renderAdminFinancialList();
+  if(finSectionOpen.all) renderAdminFinancialList();
 }
+function toggleFinSection(key){ finSectionOpen[key] = !finSectionOpen[key]; renderAdminFinancial(); }
+function toggleFinMonth(label){ finHiddenMonths[label] = !finHiddenMonths[label]; renderAdminFinancial(); }
 function onAdminFinancialSearch(v){ adminFinancialSearch = v; renderAdminFinancialList(); }
 function renderAdminFinancialList(){
   const el = document.getElementById('finList');
@@ -1557,8 +1577,6 @@ function renderAdminFinancialList(){
   const q = adminFinancialSearch.trim().toLowerCase();
   if(q) rows = rows.filter(r => (r.c.name||'').toLowerCase().includes(q) || (r.c.itemCode||'').toLowerCase().includes(q));
   rows.sort((a,b) => b.fin.total - a.fin.total);
-  const cnt = document.getElementById('finListCount');
-  if(cnt) cnt.textContent = rows.length + ' مورد';
   if(!rows.length){ el.innerHTML = '<div class="empty">موردی یافت نشد.</div>'; return; }
   el.innerHTML = rows.map(r => `
     <div class="warn-item" style="cursor:pointer; border-inline-start-color:var(--teal);" onclick="openContractDetail('${r.c.id}')">
@@ -1569,6 +1587,88 @@ function renderAdminFinancialList(){
       <span class="warn-tag">${formatToman(r.fin.total)} ریال</span>
     </div>`).join('');
 }
+
+async function exportFinancialExcel(){
+  const st = computeFinancialStats();
+  const priced = st.rows.filter(r => r.fin.total > 0).sort((a,b) => b.fin.total - a.fin.total);
+  if(!priced.length){ alert('هیچ قراردادی قیمت‌گذاری نشده است.'); return; }
+  const btn = document.getElementById('finExcelBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
+  try{
+    const summaryRows = [
+      ['گزارش مالی افراچوب', ''],
+      ['تاریخ گزارش', todayJalaliLabel()],
+      [],
+      ['ارزش کل قراردادها (ریال)', st.totalValue],
+      ['جمع قیمت جنس (ریال)', st.totalMaterial],
+      ['جمع اجرت نصب (ریال)', st.totalLabor],
+      ['میانگین ارزش هر قرارداد (ریال)', st.avgValue],
+      ['دارای فاکتور نهایی', st.withFinalCount + ' از ' + st.totalCount],
+      ['ارزش تحقق‌یافته بر اساس پیشرفت (ریال)', st.realizedValue],
+      ['ارزش قراردادهای باز (ریال)', st.activeValue],
+      ['ارزش قراردادهای خاتمه‌یافته (ریال)', st.closedValue],
+      ['میانگین اختلاف فاکتور نهایی با اولیه', st.varianceRows.length ? st.avgVariancePct+'٪' : '—']
+    ];
+    const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
+    wsSummary['!cols'] = [{wch:36},{wch:22}];
+
+    const listRows = priced.map(r => ({
+      'نام قرارداد': r.c.name || '',
+      'کد قلم': r.c.itemCode || '',
+      'قیمت جنس (ریال)': r.fin.material,
+      'اجرت نصب (ریال)': r.fin.labor,
+      'مبلغ کل (ریال)': r.fin.total,
+      'منبع محاسبه': r.fin.isFinal ? 'فاکتور نهایی' : 'فاکتور اولیه',
+      'درصد پیشرفت': r.pct + '٪',
+      'ارزش تحقق‌یافته (ریال)': r.realized
+    }));
+    const wsList = XLSX.utils.json_to_sheet(listRows);
+    wsList['!cols'] = [{wch:22},{wch:12},{wch:16},{wch:16},{wch:16},{wch:14},{wch:12},{wch:18}];
+
+    const wb = XLSX.utils.book_new();
+    wb.Workbook = { Views: [{ RTL: true }] };
+    XLSX.utils.book_append_sheet(wb, wsSummary, 'خلاصه مالی');
+    XLSX.utils.book_append_sheet(wb, wsList, 'قراردادها');
+    XLSX.writeFile(wb, `گزارش مالی افراچوب - ${todayJalaliFileLabel()}.xlsx`);
+  }catch(err){
+    alert('خطا در ساخت فایل اکسل: ' + err.message);
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '📊 خروجی اکسل'; }
+  }
+}
+
+async function exportFinancialPdf(){
+  const st = computeFinancialStats();
+  const priced = st.rows.filter(r => r.fin.total > 0).sort((a,b) => b.fin.total - a.fin.total);
+  if(!priced.length){ alert('هیچ قراردادی قیمت‌گذاری نشده است.'); return; }
+  const btn = document.getElementById('finPdfBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
+  try{
+    const extraHeaderHtml = `
+      <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px;">
+        <div style="flex:1; min-width:140px; background:#f5f5f5; border-radius:8px; padding:8px 10px;"><div style="font-size:9px;color:#666;">ارزش کل (ریال)</div><div style="font-size:12px;font-weight:800;">${formatToman(st.totalValue)}</div></div>
+        <div style="flex:1; min-width:140px; background:#f5f5f5; border-radius:8px; padding:8px 10px;"><div style="font-size:9px;color:#666;">جمع جنس (ریال)</div><div style="font-size:12px;font-weight:800;">${formatToman(st.totalMaterial)}</div></div>
+        <div style="flex:1; min-width:140px; background:#f5f5f5; border-radius:8px; padding:8px 10px;"><div style="font-size:9px;color:#666;">جمع اجرت (ریال)</div><div style="font-size:12px;font-weight:800;">${formatToman(st.totalLabor)}</div></div>
+        <div style="flex:1; min-width:140px; background:#f5f5f5; border-radius:8px; padding:8px 10px;"><div style="font-size:9px;color:#666;">ارزش تحقق‌یافته (ریال)</div><div style="font-size:12px;font-weight:800;">${formatToman(st.realizedValue)}</div></div>
+      </div>`;
+    const headers = ['نام قرارداد','کد قلم','جنس (ریال)','اجرت (ریال)','کل (ریال)','منبع','پیشرفت'];
+    const rows = priced.map(r => [
+      r.c.name || '—', r.c.itemCode || '—', formatToman(r.fin.material), formatToman(r.fin.labor),
+      formatToman(r.fin.total), r.fin.isFinal ? 'نهایی' : 'اولیه', r.pct + '٪'
+    ]);
+    await renderPaginatedReportPdf({
+      reportTitle: 'گزارش مالی افراچوب',
+      extraHeaderHtml,
+      headers, rows,
+      filename: `گزارش مالی افراچوب - ${todayJalaliFileLabel()}.pdf`
+    });
+  }catch(err){
+    alert('خطا در ساخت PDF: ' + err.message);
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '🧾 خروجی PDF'; }
+  }
+}
+
 
 
 /* ---------- Admin-only: برنامه قراردادها ----------
