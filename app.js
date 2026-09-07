@@ -20,6 +20,7 @@ let currentUser = null;
 let myRole = null;
 let myPosition = '';
 let contracts = [];
+let archivedContracts = []; // قراردادهای بایگانی‌شده — جدا از «contracts»، در همه‌ی پنل‌ها پیش‌فرض جمع‌شده
 let usersList = [];
 let openCardId = null;
 let adminTab = 'dashboard';   // 'dashboard' | 'contracts' | 'users' | 'log' | 'plans'
@@ -67,6 +68,8 @@ let afrDashSection = null;    // null | 'critical' | 'waitingdelivery' | 'panelw
 let afrDashSearch = '';
 let afrFilterStage = 'all';
 let afrFilterStatus = 'all';
+let archivedSectionOpen = {}; // per-panel: 'admin' | 'supervisor' | 'afr' | 'viewer'
+let importBusy = false;
 
 function toggleTheme(){
   const isLight = document.documentElement.getAttribute('data-theme') === 'light';
@@ -326,7 +329,7 @@ async function addComment(id, inputElId){
   const input = document.getElementById(inputElId);
   const text = input ? input.value.trim() : '';
   if(!text) return;
-  const c = contracts.find(x => x.id === id);
+  const c = findAnyContract(id);
   if(!c) return;
   try{
     await db.collection('contracts').doc(id).update({
@@ -340,7 +343,7 @@ async function addComment(id, inputElId){
 }
 async function deleteComment(id, time){
   if(!db || !currentUser) return;
-  const c = contracts.find(x => x.id === id);
+  const c = findAnyContract(id);
   if(!c) return;
   const cm = (c.comments||[]).find(x => x.time === time);
   if(!cm) return;
@@ -710,8 +713,18 @@ function ensureDataSubscriptions(){
   if(myRole !== 'admin' && myRole !== 'supervisor' && myRole !== 'viewer' && myRole !== 'afrachoobSupervisor') return;
   dataSubscribed = true;
   db.collection('contracts').orderBy('createdAt','desc').onSnapshot((snap) => {
-    contracts = snap.docs.map(d => ({ id:d.id, ...d.data() }));
-    contracts.sort((a,b) => contractDateSortValue(b) - contractDateSortValue(a));
+    const all = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+    all.sort((a,b) => contractDateSortValue(b) - contractDateSortValue(a));
+    // تفکیک بایگانی از فعال — این‌جا تنها نقطه‌ی مشترکیه که همه‌ی پنل‌ها (مدیر، سرپرست نصب،
+    // مدیر پروژه، سرپرست افراچوب) از آرایه‌ی «contracts» می‌خونن. با این تفکیک، بدون این‌که
+    // لازم باشه هرکدوم از توابع رندر تک‌تک تغییر کنن، قراردادهای بایگانی‌شده به‌صورت خودکار
+    // از لیست‌های پیش‌فرض همه‌جا کنار می‌رن؛ فقط با کلیک روی بخش «قراردادهای بایگانی‌شده»
+    // (که به هر پنل اضافه شده) قابل دیدنن. فعلاً این فیلتر فقط سمت کلاینته (نه در سطح کوئری
+    // Firestore) چون قراردادهای قدیمی فعلاً اصلاً فیلد archived ندارن و فیلتر در سطح کوئری
+    // بدون مهاجرت اول، باعث خالی‌دیدن لیست همه می‌شه. کاهش واقعی مصرف Read (فیلتر در سطح
+    // کوئری) قدم بعدیه، بعد از migrateArchivedField و ساخت ایندکس ترکیبی.
+    contracts = all.filter(c => !c.archived);
+    archivedContracts = all.filter(c => c.archived);
     setStatus('همگام — لحظه‌ای', true);
     renderApp();
   }, (err) => setStatus('خطا: ' + err.message, false));
@@ -894,7 +907,8 @@ function renderSupervisor(el){
     body.innerHTML = `
       <div class="section-title" style="margin-top:14px;">قراردادها <span class="cnt" id="supCount"></span></div>
       <input type="text" id="supSearch" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(supervisorSearchQuery)}" class="auth-input" style="max-width:none;width:100%;margin-bottom:10px;" oninput="onSupervisorSearch(this.value)">
-      <div id="list"></div>`;
+      <div id="list"></div>
+      ${archivedSectionHtml('supervisor', false)}`;
     renderSupervisorList();
   } else if(supervisorTab === 'warnings'){
     body.innerHTML = renderWarningsHtml();
@@ -959,7 +973,8 @@ function renderAfrachoobSupervisor(el){
           <option value="closed" ${afrFilterStatus==='closed'?'selected':''}>خاتمه‌یافته</option>
         </select>
       </div>
-      <div id="list"></div>`;
+      <div id="list"></div>
+      ${archivedSectionHtml('afr', false)}`;
     renderAfrList();
   } else if(afrTab === 'warnings'){
     body.innerHTML = renderWarningsHtml();
@@ -1187,7 +1202,8 @@ function renderViewerSectionBody(){
     <div class="section-title" style="margin-top:18px;">${viewerSectionTitle()} <span class="cnt" id="viewerSecCount"></span></div>
     <input type="text" id="viewerSearch" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(viewerSearchQuery)}" class="auth-input" style="max-width:none;width:100%;margin-bottom:10px;" oninput="onViewerSearch(this.value)">
     ${filtersHtml}
-    <div id="viewerList"></div>`;
+    <div id="viewerList"></div>
+    ${viewerSection === 'all' ? archivedSectionHtml('viewer', false) : ''}`;
   renderViewerSectionList();
 }
 function onViewerStageFilter(v){ viewerFilterStage = v; renderViewerSectionList(); }
@@ -1941,8 +1957,23 @@ async function exportPlanExcel(){
 
 function renderAdminContracts(){
   const body = document.getElementById('adminBody');
+  const batches = computeImportBatches();
   body.innerHTML = `
     <div class="section-title" style="margin-top:14px;">مدیریت قراردادها <span class="cnt" id="mgmtCount"></span></div>
+    <div class="toolbar" style="display:flex; gap:8px; flex-wrap:wrap;">
+      <input type="file" id="bulkImportFile" accept=".xlsx,.xls" style="display:none" onchange="handleBulkImportFile(this)">
+      <button id="bulkImportBtn" class="btn-secondary" onclick="triggerBulkImport()">📥 ورود گروهی از اکسل</button>
+      <button class="btn-secondary" onclick="migrateArchivedField()">🔧 آماده‌سازی قراردادهای قدیمی</button>
+    </div>
+    ${batches.length ? `
+    <div class="admin-only-note" style="margin-bottom:10px;">
+      دسته‌های ایمپورت‌شده:
+      ${batches.map(b => `
+        <div style="display:flex; align-items:center; justify-content:space-between; margin-top:6px;">
+          <span>${importBatchLabel(b.id)} — ${b.count} قرارداد</span>
+          <button class="field-save" style="background:var(--red-dim,#5c1e1e); color:var(--red,#ff8080);" onclick="deleteImportBatch('${b.id}')">حذف این دسته</button>
+        </div>`).join('')}
+    </div>` : ''}
     <div class="export-filters">
       <div class="row1">
         <select id="exportScopeSelect" class="admin-select" onchange="onExportScopeChange(this.value)">
@@ -1986,6 +2017,7 @@ function renderAdminContracts(){
       <input type="text" id="contractYearFilter" class="auth-input" style="max-width:130px;" placeholder="سال، مثلاً 1404" value="${escapeHtml(adminFilterContractYear)}" oninput="onContractYearFilter(this.value)">
     </div>
     <div id="mgmtList"></div>
+    ${archivedSectionHtml('admin', true)}
   `;
   renderMgmtList();
 }
@@ -2686,9 +2718,12 @@ function renderMgmtList(){
 
 let openContractModalId = null;
 let openContractModalIsAdmin = true;
+function findAnyContract(id){
+  return contracts.find(x => x.id === id) || archivedContracts.find(x => x.id === id);
+}
 function openContractDetail(id, isAdmin){
   if(isAdmin === undefined) isAdmin = true;
-  const c = contracts.find(x => x.id === id);
+  const c = findAnyContract(id);
   if(!c) return;
   openContractModalId = id;
   openContractModalIsAdmin = isAdmin;
@@ -2699,7 +2734,7 @@ function refreshContractModal(){
   if(!openContractModalId) return;
   const bg = document.getElementById('contractModalBg');
   if(!bg || !bg.classList.contains('open')) return;
-  const c = contracts.find(x => x.id === openContractModalId);
+  const c = findAnyContract(openContractModalId);
   if(!c){ closeModal('contractModalBg'); return; }
   document.getElementById('contractModalBody').innerHTML = renderCard(c, openContractModalIsAdmin, true);
 }
@@ -2860,7 +2895,7 @@ function renderList(isAdmin, predicate){
   list.innerHTML = items.map(c => renderSupervisorRow(c)).join('');
 }
 
-function renderSupervisorRow(c){
+function renderSupervisorRow(c, isAdminView){
   const displayIdx = getDisplayStageIndex(c);
   const pct = overallPercent(c);
   const done = isCompleted(c);
@@ -2868,7 +2903,7 @@ function renderSupervisorRow(c){
   const badges = (c.itemCode ? `<span class="mini-badge">کد قلم: ${escapeHtml(c.itemCode)}</span>` : '')
     + (myRole !== 'afrachoobSupervisor' && myRole !== 'supervisor' && (c.comments||[]).length ? `<span class="mini-badge">💬 ${c.comments.length}</span>` : '');
   return `
-    <div class="card" style="cursor:pointer;" onclick="openContractDetail('${c.id}', false)">
+    <div class="card" style="cursor:pointer;" onclick="openContractDetail('${c.id}', ${isAdminView ? 'true' : 'false'})">
       <div class="card-head">
         <div class="card-title">
           <span class="card-name">${escapeHtml(c.name)}</span>
@@ -2881,6 +2916,20 @@ function renderSupervisorRow(c){
       ${done ? '' : `<div class="due-row"><span class="due-tag ${due.cls}">${due.label}</span></div>`}
     </div>`;
 }
+
+/* ---------- بایگانی: بخش مشترک، در همه‌ی پنل‌ها پیش‌فرض جمع‌شده، با کلیک قابل باز شدن ---------- */
+function archivedSectionHtml(key, isAdminView){
+  if(!archivedContracts.length) return '';
+  const open = !!archivedSectionOpen[key];
+  return `
+    <div class="section-title" style="margin-top:18px; cursor:pointer; justify-content:space-between;" onclick="toggleArchivedSection('${key}')">
+      <span>🗄 قراردادهای بایگانی‌شده <span class="cnt">(${archivedContracts.length})</span></span>
+      <span>${open ? '▲ بستن' : '▼ نمایش'}</span>
+    </div>
+    ${open ? archivedContracts.map(c => renderSupervisorRow(c, isAdminView)).join('') : ''}
+  `;
+}
+function toggleArchivedSection(key){ archivedSectionOpen[key] = !archivedSectionOpen[key]; renderApp(); }
 
 function renderCard(c, isAdmin, forceOpen){
   const status = c.status || {};
@@ -3027,6 +3076,12 @@ function renderCard(c, isAdmin, forceOpen){
     <div class="field-row">
       <label>مبلغ کل فعلی این قرارداد:</label>
       <span style="font-family:'JetBrains Mono',monospace; color:var(--ink-soft);">${formatToman(finInfo.total)} ریال ${finInfo.total ? (finInfo.isFinal ? '(بر اساس فاکتور نهایی)' : '(بر اساس فاکتور اولیه)') : ''}</span>
+    </div>
+    <div class="field-row">
+      <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+        <input type="checkbox" ${c.archived ? 'checked' : ''} onchange="toggleArchiveContract('${c.id}', this.checked)" style="margin:0;">
+        بایگانی شود (از لیست پیش‌فرض همه‌ی پنل‌ها مخفی می‌شود)
+      </label>
     </div>` : '';
 
   const descFieldHtml = `
@@ -3087,7 +3142,7 @@ function toggleCard(id){ openCardId = openCardId === id ? null : id; renderApp()
 
 async function toggleCheck(id, idx){
   if(!db) return;
-  const c = contracts.find(x => x.id === id);
+  const c = findAnyContract(id);
   if(!c) return;
   const status = c.status || {};
   const cur = status[idx] || {};
@@ -3101,7 +3156,7 @@ async function toggleCheck(id, idx){
 
 async function togglePanelInstalled(id, idx){
   if(!db) return;
-  const c = contracts.find(x => x.id === id);
+  const c = findAnyContract(id);
   if(!c) return;
   const status = c.status || {};
   const cur = status[idx] || {};
@@ -3121,7 +3176,7 @@ async function togglePanelInstalled(id, idx){
 
 async function saveProgress(id, idx){
   if(!db) return;
-  const c = contracts.find(x => x.id === id);
+  const c = findAnyContract(id);
   if(!c) return;
   const st = STAGES[idx];
   const cur = (c.status||{})[idx] || {};
@@ -3144,7 +3199,7 @@ async function saveDueDate(id){
   if(!db) return;
   const val = document.getElementById(`due_${id}`).value.trim();
   if(val && !parseJalaliStr(val)){ alert('فرمت تاریخ درست نیست. مثال: 1405/06/04'); return; }
-  const c = contracts.find(x => x.id === id);
+  const c = findAnyContract(id);
   const history = (c.history||[]).concat([historyEntry('سررسید ثبت شد: '+val)]);
   await db.collection('contracts').doc(id).update({ dueDate: val, history });
   logActivity('ویرایش سررسید', id, c && c.name, 'سررسید: '+val);
@@ -3153,7 +3208,7 @@ async function saveRevisedDueDate(id){
   if(!db) return;
   const val = document.getElementById(`revdue_${id}`).value.trim();
   if(val && !parseJalaliStr(val)){ alert('فرمت تاریخ درست نیست. مثال: 1405/06/20'); return; }
-  const c = contracts.find(x => x.id === id);
+  const c = findAnyContract(id);
   const history = (c.history||[]).concat([historyEntry('سررسید جبرانی ثبت شد: '+val)]);
   await db.collection('contracts').doc(id).update({ revisedDueDate: val, history });
   logActivity('ویرایش سررسید جبرانی', id, c && c.name, 'سررسید جبرانی: '+val);
@@ -3161,7 +3216,7 @@ async function saveRevisedDueDate(id){
 async function saveItemCode(id){
   if(!db) return;
   const val = document.getElementById(`item_${id}`).value.trim();
-  const c = contracts.find(x => x.id === id);
+  const c = findAnyContract(id);
   const history = (c.history||[]).concat([historyEntry('کد قلم ثبت شد: '+val)]);
   await db.collection('contracts').doc(id).update({ itemCode: val, history });
   logActivity('ویرایش کد قلم', id, c && c.name, 'کد قلم: '+val);
@@ -3170,7 +3225,7 @@ async function saveName(id){
   if(!db) return;
   const val = document.getElementById(`name_${id}`).value.trim();
   if(!val){ alert('نام قرارداد نمی‌تواند خالی باشد.'); return; }
-  const c = contracts.find(x => x.id === id);
+  const c = findAnyContract(id);
   const history = (c.history||[]).concat([historyEntry('نام قرارداد ویرایش شد: '+val)]);
   await db.collection('contracts').doc(id).update({ name: val, history });
   logActivity('ویرایش نام قرارداد', id, val, '');
@@ -3179,10 +3234,18 @@ async function saveContractDate(id){
   if(!db) return;
   const val = document.getElementById(`cdate_${id}`).value.trim();
   if(val && !parseJalaliStr(val)){ alert('فرمت تاریخ درست نیست. مثال: 1405/06/04'); return; }
-  const c = contracts.find(x => x.id === id);
+  const c = findAnyContract(id);
   const history = (c.history||[]).concat([historyEntry('تاریخ قرارداد ثبت شد: '+val)]);
   await db.collection('contracts').doc(id).update({ contractDate: val, history });
   logActivity('ویرایش تاریخ قرارداد', id, c && c.name, 'تاریخ قرارداد: '+val);
+}
+async function toggleArchiveContract(id, checked){
+  if(!db) return;
+  const c = contracts.concat(archivedContracts).find(x => x.id === id);
+  const label = checked ? 'قرارداد بایگانی شد' : 'قرارداد از بایگانی خارج شد';
+  const history = ((c && c.history) || []).concat([historyEntry(label)]);
+  await db.collection('contracts').doc(id).update({ archived: checked, history });
+  logActivity(label, id, c && c.name, '');
 }
 async function saveInitialPrices(id){
   if(!db) return;
@@ -3192,7 +3255,7 @@ async function saveInitialPrices(id){
   if(lRaw && isNaN(Number(lRaw))){ alert('قیمت اجرت نصب باید عدد باشد.'); return; }
   const materialPrice = mRaw ? Number(mRaw) : 0;
   const laborPrice = lRaw ? Number(lRaw) : 0;
-  const c = contracts.find(x => x.id === id);
+  const c = findAnyContract(id);
   const label = 'فاکتور اولیه ثبت شد — جنس: ' + formatToman(materialPrice) + ' — اجرت: ' + formatToman(laborPrice);
   const history = (c.history||[]).concat([historyEntry(label)]);
   await db.collection('contracts').doc(id).update({ materialPrice, laborPrice, history });
@@ -3206,7 +3269,7 @@ async function saveFinalInvoice(id){
   if(lRaw && isNaN(Number(lRaw))){ alert('قیمت اجرت نصب فاکتور نهایی باید عدد باشد.'); return; }
   const finalMaterialPrice = mRaw ? Number(mRaw) : 0;
   const finalLaborPrice = lRaw ? Number(lRaw) : 0;
-  const c = contracts.find(x => x.id === id);
+  const c = findAnyContract(id);
   const label = (finalMaterialPrice || finalLaborPrice)
     ? 'فاکتور نهایی ثبت شد — جنس: ' + formatToman(finalMaterialPrice) + ' — اجرت: ' + formatToman(finalLaborPrice)
     : 'فاکتور نهایی حذف شد (محاسبات به فاکتور اولیه برگشت)';
@@ -3217,7 +3280,7 @@ async function saveFinalInvoice(id){
 async function saveDescription(id){
   if(!db) return;
   const val = document.getElementById(`desc_${id}`).value.trim();
-  const c = contracts.find(x => x.id === id);
+  const c = findAnyContract(id);
   const history = (c.history||[]).concat([historyEntry('توضیحات ثبت شد')]);
   await db.collection('contracts').doc(id).update({ description: val, history });
   logActivity('ویرایش توضیحات', id, c && c.name, val);
@@ -3225,14 +3288,14 @@ async function saveDescription(id){
 async function deleteContract(id){
   if(!db) return;
   if(!confirm('این قرارداد حذف شود؟')) return;
-  const c = contracts.find(x => x.id === id);
+  const c = findAnyContract(id);
   await db.collection('contracts').doc(id).delete();
   logActivity('حذف قرارداد', id, c && c.name, '');
 }
 async function clearHistory(id){
   if(!db) return;
   if(!confirm('کل تاریخچه‌ی این قرارداد پاک شود؟ این کار قابل بازگشت نیست.')) return;
-  const c = contracts.find(x => x.id === id);
+  const c = findAnyContract(id);
   await db.collection('contracts').doc(id).update({ history: [historyEntry('تاریخچه توسط مدیر پاک شد')] });
   logActivity('پاک‌کردن تاریخچه', id, c && c.name, '');
 }
@@ -3248,6 +3311,205 @@ function closeModal(id){
   document.getElementById(id).classList.remove('open');
   if(id === 'contractModalBg') openContractModalId = null;
 }
+/* ---------- بایگانی: مهاجرت یک‌باره‌ی قراردادهای قدیمی + حذف دسته‌ی ایمپورت (rollback امن) ----------
+   این دو تابع فقط آماده‌سازی برای قدم بعدی (فیلتر بایگانی در سطح کوئری Firestore) هستن؛
+   فعلاً هیچ کوئری‌ای در اپ عوض نشده، پس اجرا/عدم‌اجرای این تابع هیچ ریسکی برای پنل‌های فعلی نداره. */
+async function migrateArchivedField(){
+  if(!db) return;
+  if(!confirm('این کار یک‌بار همه‌ی قراردادهایی که فیلد «بایگانی» ندارن (قراردادهای قدیمی‌تر از این آپدیت) رو با «غیر بایگانی» علامت‌گذاری می‌کنه — آماده‌سازی برای بهینه‌سازی سرعت/مصرف در آینده. الان هیچ چیزی توی نمایش فعلی عوض نمی‌شه. ادامه بدم؟')) return;
+  try{
+    const snap = await db.collection('contracts').get();
+    const missing = snap.docs.filter(d => d.data().archived === undefined);
+    if(!missing.length){ alert('همه‌ی قراردادها از قبل فیلد بایگانی دارن؛ نیازی به کاری نیست.'); return; }
+    for(let i=0;i<missing.length;i+=400){
+      const chunk = missing.slice(i, i+400);
+      const batch = db.batch();
+      chunk.forEach(d => batch.update(d.ref, { archived:false }));
+      await batch.commit();
+    }
+    alert(`${missing.length} قرارداد قدیمی آماده‌سازی شد.`);
+  }catch(err){
+    alert('خطا در آماده‌سازی: ' + err.message);
+  }
+}
+function computeImportBatches(){
+  const map = {};
+  archivedContracts.forEach(c => {
+    if(!c.importBatchId) return;
+    if(!map[c.importBatchId]) map[c.importBatchId] = { id:c.importBatchId, count:0 };
+    map[c.importBatchId].count++;
+  });
+  return Object.values(map).sort((a,b) => b.id.localeCompare(a.id));
+}
+function importBatchLabel(batchId){
+  const n = Number((batchId||'').replace('imp_',''));
+  if(!n) return batchId;
+  const d = new Date(n);
+  return d.toLocaleString('fa-IR', {year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit'});
+}
+async function deleteImportBatch(batchId){
+  if(!db) return;
+  const docs = archivedContracts.filter(c => c.importBatchId === batchId);
+  if(!docs.length){ alert('موردی برای این دسته پیدا نشد.'); return; }
+  if(!confirm(`${docs.length} قرارداد از دسته‌ی ایمپورت ${importBatchLabel(batchId)} حذف بشن؟ این کار غیرقابل بازگشته و فقط همین دسته رو پاک می‌کنه (کاری به بقیه‌ی قراردادها نداره).`)) return;
+  try{
+    for(let i=0;i<docs.length;i+=400){
+      const chunk = docs.slice(i, i+400);
+      const batch = db.batch();
+      chunk.forEach(c => batch.delete(db.collection('contracts').doc(c.id)));
+      await batch.commit();
+    }
+    logActivity('حذف دسته ایمپورت', null, null, `دسته ${batchId} — ${docs.length} قرارداد`);
+    alert(`${docs.length} قرارداد حذف شد.`);
+  }catch(err){
+    alert('خطا در حذف: ' + err.message);
+  }
+}
+
+/* ---------- ورود گروهی قراردادهای قدیمی از اکسل (فقط پنل مدیر) ---------- */
+const BULK_IMPORT_HEADERS = {
+  name: 'نام قرارداد',
+  itemCode: 'کد قلم (یکتا)',
+  contractDate: 'تاریخ قرارداد',
+  dueDate: 'سررسید قرارداد',
+  revisedDueDate: 'سررسید جبرانی',
+  materialPrice: 'قیمت جنس - فاکتور اولیه (ریال)',
+  laborPrice: 'قیمت اجرت نصب - فاکتور اولیه (ریال)',
+  finalMaterialPrice: 'فاکتور نهایی - جنس (ریال)',
+  finalLaborPrice: 'فاکتور نهایی - اجرت نصب (ریال)',
+  status: 'وضعیت',
+  description: 'توضیحات'
+};
+let pendingBulkImport = null; // { toInsert, dupCount, invalidCount } بین مرحله‌ی پارس و تایید نهایی
+function triggerBulkImport(){
+  const el = document.getElementById('bulkImportFile');
+  if(el) el.click();
+}
+function handleBulkImportFile(input){
+  const file = input.files && input.files[0];
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try{
+      const data = new Uint8Array(e.target.result);
+      const wb = XLSX.read(data, { type:'array' });
+      const sheetName = wb.SheetNames.find(n => n.trim() === 'قراردادها') || wb.SheetNames[0];
+      const ws = wb.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(ws, { header:1, raw:false, defval:'' });
+      processBulkImportRows(rows);
+    }catch(err){
+      alert('خطا در خوندن فایل اکسل: ' + err.message);
+    }finally{
+      input.value = '';
+    }
+  };
+  reader.readAsArrayBuffer(file);
+}
+function buildAutoStatus(statusText){
+  if(statusText === 'در انتظار تحویل‌دهی به مالک'){
+    return { 0:{done:true}, 1:{done:true}, 2:{done:true}, 3:{percent:100}, 4:{done:true}, 5:{percent:100, panelInstalled:true}, 6:{done:true}, 7:{done:false} };
+  }
+  if(statusText === 'خاتمه‌یافته'){
+    return { 0:{done:true}, 1:{done:true}, 2:{done:true}, 3:{percent:100}, 4:{done:true}, 5:{percent:100, panelInstalled:true}, 6:{done:true}, 7:{done:true} };
+  }
+  return {};
+}
+function processBulkImportRows(rows){
+  if(!rows.length){ alert('فایل خالیه.'); return; }
+  const headerRow = rows[0].map(h => String(h||'').trim());
+  const colIndex = {};
+  Object.keys(BULK_IMPORT_HEADERS).forEach(key => {
+    colIndex[key] = headerRow.indexOf(BULK_IMPORT_HEADERS[key]);
+  });
+  if(colIndex.name === -1 || colIndex.itemCode === -1){
+    alert('ساختار فایل با قالب مطابقت نداره (ستون «نام قرارداد» یا «کد قلم» پیدا نشد). لطفاً از همون فایل قالب استفاده کنید.');
+    return;
+  }
+  const existingCodes = new Set(
+    contracts.concat(archivedContracts).map(c => (c.itemCode||'').trim()).filter(Boolean)
+  );
+  const toInsert = [];
+  let dupCount = 0, invalidCount = 0, emptyCount = 0;
+  const now = Date.now();
+  for(let r = 1; r < rows.length; r++){
+    const row = rows[r];
+    if(!row) continue;
+    const get = (key) => colIndex[key] > -1 ? String(row[colIndex[key]] ?? '').trim() : '';
+    const name = get('name');
+    const itemCode = get('itemCode');
+    const description = get('description');
+    if(!name && !itemCode) continue; // ردیف کاملاً خالی
+    if(description === 'این ردیف فقط نمونه است — پاک کنید') continue; // نمونه‌ی پیش‌فرض قالب
+    if(!name){ invalidCount++; continue; }
+    const itemCodeNorm = itemCode;
+    if(itemCodeNorm){
+      if(existingCodes.has(itemCodeNorm)){ dupCount++; continue; }
+      existingCodes.add(itemCodeNorm); // تکراری داخل خودِ همین فایل هم رد بشه
+    }
+    const contractDateRaw = get('contractDate');
+    const dueDateRaw = get('dueDate');
+    const revisedDueDateRaw = get('revisedDueDate');
+    const contractDate = (contractDateRaw && parseJalaliStr(contractDateRaw)) ? contractDateRaw : '';
+    const dueDate = (dueDateRaw && parseJalaliStr(dueDateRaw)) ? dueDateRaw : '';
+    const revisedDueDate = (revisedDueDateRaw && parseJalaliStr(revisedDueDateRaw)) ? revisedDueDateRaw : '';
+    const num = (key) => { const v = Number(get(key).replace(/,/g,'')); return isNaN(v) ? 0 : v; };
+    const statusText = get('status');
+    toInsert.push({
+      name, itemCode: itemCode || '', contractDate, dueDate,
+      revisedDueDate: revisedDueDate || undefined,
+      materialPrice: num('materialPrice'), laborPrice: num('laborPrice'),
+      finalMaterialPrice: num('finalMaterialPrice'), finalLaborPrice: num('finalLaborPrice'),
+      description: description || '',
+      status: buildAutoStatus(statusText),
+      archived: true,
+      createdAt: now + toInsert.length
+    });
+  }
+  if(!toInsert.length){
+    alert(`چیزی برای وارد کردن پیدا نشد. (رد شده به‌خاطر تکراری بودن کد قلم: ${dupCount} — ردیف نامعتبر: ${invalidCount})`);
+    return;
+  }
+  pendingBulkImport = { toInsert, dupCount, invalidCount };
+  const msg = `${toInsert.length} قرارداد آماده‌ی ورود به سیستمه (به‌صورت بایگانی‌شده).\n`
+    + (dupCount ? `${dupCount} مورد به‌خاطر تکراری‌بودن کد قلم رد شد.\n` : '')
+    + (invalidCount ? `${invalidCount} ردیف بدون نام، نامعتبر بود و رد شد.\n` : '')
+    + `\nتوصیه می‌شه اول با یه فایل کوچیک (۲-۳ ردیف) تست کنید. ادامه بدم و وارد کنم؟`;
+  if(confirm(msg)) commitBulkImport();
+  else pendingBulkImport = null;
+}
+async function commitBulkImport(){
+  if(!db || !pendingBulkImport || importBusy) return;
+  importBusy = true;
+  const btn = document.getElementById('bulkImportBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'در حال وارد کردن...'; }
+  const importBatchId = 'imp_' + Date.now();
+  const { toInsert, dupCount } = pendingBulkImport;
+  try{
+    for(let i=0; i<toInsert.length; i+=400){
+      const chunk = toInsert.slice(i, i+400);
+      const batch = db.batch();
+      chunk.forEach(item => {
+        const ref = db.collection('contracts').doc();
+        const docData = Object.assign({}, item, {
+          importBatchId,
+          history: [historyEntry('وارد شده از فایل اکسل (ورود گروهی قراردادهای قدیمی)')]
+        });
+        if(docData.revisedDueDate === undefined) delete docData.revisedDueDate;
+        batch.set(ref, docData);
+      });
+      await batch.commit();
+    }
+    logActivity('ورود گروهی از اکسل', null, null, `دسته ${importBatchId} — ${toInsert.length} قرارداد (${dupCount} تکراری رد شد)`);
+    alert(`${toInsert.length} قرارداد با موفقیت وارد شد (به‌صورت بایگانی‌شده).`);
+  }catch(err){
+    alert('خطا در وارد کردن: ' + err.message);
+  }finally{
+    pendingBulkImport = null;
+    importBusy = false;
+    if(btn){ btn.disabled = false; btn.textContent = '📥 ورود گروهی از اکسل'; }
+  }
+}
+
 async function addContract(){
   if(!db) return;
   const name = document.getElementById('newName').value.trim();
@@ -3259,7 +3521,7 @@ async function addContract(){
   if(dueDate && !parseJalaliStr(dueDate)){ alert('فرمت سررسید درست نیست. مثال: 1405/06/04'); return; }
   const ref = await db.collection('contracts').add({
     name, itemCode: itemCode || '', contractDate: contractDate || '', dueDate: dueDate || '',
-    status: {},
+    status: {}, archived: false,
     history: [historyEntry('قرارداد ثبت شد')],
     createdAt: Date.now()
   });
