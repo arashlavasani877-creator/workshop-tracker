@@ -2257,15 +2257,29 @@ async function renderPaginatedReportPdf({ reportTitle, extraHeaderHtml, headers,
       <div style="font-size:10px; color:#666;">صفحه ${pageNo}</div>
     </div>`;
 
+  // ستون‌های «نام قرارداد» و «وضعیت» عرض ثابتِ سقف‌دار دارند و به‌جای «...» تک‌خطی، تا ۲ خط می‌شکنند
+  // (بدون افتادن روی ستون کناری)؛ فضای باقی‌مانده بین بقیه‌ی ستون‌ها بر اساس طول معمول محتوای هرکدام
+  // (نه به‌طور مساوی) تقسیم می‌شود تا ستون‌هایی مثل «مرحله فعلی»/«وضعیت زمانی» سهم بیشتری بگیرند.
+  const wrapColNames = ['نام قرارداد','وضعیت'];
+  const wrapColIdxs = headers.map((h,i)=>wrapColNames.includes(h)?i:-1).filter(i=>i>-1);
+  const WRAP_COL_PCT = 24;
+  const colWeights = { 'کد قلم':0.75, 'تاریخ قرارداد':0.95, 'سررسید اصلی':0.95, 'سررسید جبرانی':0.95,
+    'مرحله فعلی':1.3, 'پیشرفت':0.6, 'درصد پیشرفت کل':0.6, 'وضعیت زمانی':1.25, 'وزن':0.6, 'شروع':0.95,
+    'پایان':0.95, 'منبع':0.75, 'جنس (ریال)':1, 'اجرت (ریال)':1, 'کل (ریال)':1 };
   const colCount = headers.length;
-  const firstColPct = 26;
-  const restPct = +((100 - firstColPct) / Math.max(1, colCount - 1)).toFixed(2);
-  const colgroupHtml = `<colgroup>${headers.map((_,i)=>`<col style="width:${i===0?firstColPct:restPct}%;">`).join('')}</colgroup>`;
-  // همه‌ی سلول‌ها روی یک خط نگه داشته می‌شوند و در صورت طولانی بودن با «...» کوتاه می‌شوند؛
-  // این باعث می‌شود html2canvas مجبور به شکستن خط وسط کلمه‌ی فارسی نشود (علت اصلی به‌هم‌ریختگی فونت مقادیر بلند مثل نام قرارداد)
+  const firstColPct = wrapColIdxs.length * WRAP_COL_PCT;
+  const otherIdx = headers.map((_,i)=>i).filter(i => !wrapColIdxs.includes(i));
+  const weightSum = otherIdx.reduce((s,i) => s + (colWeights[headers[i]] || 1), 0) || 1;
+  const remainPct = 100 - firstColPct;
+  const colPct = headers.map((h,i) => wrapColIdxs.includes(i) ? WRAP_COL_PCT : +((colWeights[h] || 1) / weightSum * remainPct).toFixed(2));
+  const colgroupHtml = `<colgroup>${colPct.map(p=>`<col style="width:${p}%;">`).join('')}</colgroup>`;
+  // سلول‌های معمولی روی یک خط نگه داشته می‌شوند و در صورت طولانی بودن با «...» کوتاه می‌شوند؛
+  // این باعث می‌شود html2canvas مجبور به شکستن خط وسط کلمه‌ی فارسی نشود (علت اصلی به‌هم‌ریختگی فونت مقادیر بلند)
   const cellStyle = 'padding:6px 8px; border:1px solid #ddd; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; direction:rtl; text-align:right;';
+  // ستون‌های شکست‌خور (نام قرارداد/وضعیت): حداکثر ۲ خط، با «...» در انتهای خط دوم اگر باز هم بلندتر بود؛ هرگز روی ستون بعدی نمی‌افتد
+  const wrapCellStyle = 'padding:6px 8px; border:1px solid #ddd; white-space:normal; overflow:hidden; text-overflow:ellipsis; direction:rtl; text-align:right; word-break:break-word; line-height:1.32; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;';
   const theadHtml = `<thead><tr style="background:#222; color:#fff;">${headers.map(h=>`<th style="padding:6px 8px; text-align:right; border:1px solid #333; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(h)}</th>`).join('')}</tr></thead>`;
-  const rowHtml = (r) => `<tr style="background:${r.__i%2?'#f5f5f5':'#fff'};">${r.vals.map(v=>`<td style="${cellStyle}">${escapeHtml(v==null?'':String(v))}</td>`).join('')}</tr>`;
+  const rowHtml = (r) => `<tr style="background:${r.__i%2?'#f5f5f5':'#fff'};">${r.vals.map((v,i)=>`<td style="${wrapColIdxs.includes(i)?wrapCellStyle:cellStyle}">${escapeHtml(v==null?'':String(v))}</td>`).join('')}</tr>`;
   const dataRows = rows.map((vals,i) => ({ vals, __i:i }));
 
   const holder = document.createElement('div');
