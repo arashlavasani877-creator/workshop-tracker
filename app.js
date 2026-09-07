@@ -1081,7 +1081,11 @@ function computeViewerStats(){
 
 function renderViewer(el){
   const s = computeViewerStats();
+  const inFinancial = (viewerSection === 'financial');
   el.innerHTML = `
+    ${inFinancial ? `
+    <div class="toolbar"><button class="btn-secondary" onclick="switchViewerSection('financial')">⬅ بازگشت به داشبورد</button></div>
+    ` : `
     <div class="viewer-hero">
       <img src="./icon-192.png" alt="افراچوب">
       <div>
@@ -1114,9 +1118,11 @@ function renderViewer(el){
         <button class="${viewerSection==='mycomments'?'active':''}" onclick="switchViewerSection('mycomments')">💬 کامنت‌های من ${myCommentsUnseenCount()?('('+myCommentsUnseenCount()+')'):''}</button>
       </div>
     </div>
+    `}
 
     <div id="viewerSectionBody"></div>
 
+    ${inFinancial ? '' : `
     <div class="section-title" style="margin-top:22px;">خروجی گزارش</div>
     <div class="export-filters">
       <div class="row1">
@@ -1134,6 +1140,7 @@ function renderViewer(el){
     </div>
 
     <div class="viewer-footer-badge">پنل هوشمند مدیریت پروژه — افراچوب</div>
+    `}
     <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
   `;
   const installBtn = document.getElementById('installBtn');
