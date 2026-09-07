@@ -15,12 +15,13 @@ service cloud.firestore {
     function isEditor() {
       return isSignedIn() && (myRole() == 'admin' || myRole() == 'supervisor' || myRole() == 'afrachoobSupervisor');
     }
-    // isApproved: کسانی که فقط اجازه‌ی خواندن دارند هم شامل می‌شود (+ مدیر پروژه، نقش فقط‌گزارش)
+    // isApproved: کسانی که فقط اجازه‌ی خواندن دارند هم شامل می‌شود (+ مدیر پروژه و معاونت PMO، هر دو فقط‌گزارش)
     function isApproved() {
-      return isSignedIn() && (myRole() == 'admin' || myRole() == 'supervisor' || myRole() == 'viewer' || myRole() == 'afrachoobSupervisor');
+      return isSignedIn() && (myRole() == 'admin' || myRole() == 'supervisor' || myRole() == 'viewer' || myRole() == 'afrachoobSupervisor' || myRole() == 'pmoDeputy');
     }
     // isCommentOnlyUpdate: مدیر پروژه اجازه ندارد هیچ فیلدی از قرارداد را تغییر دهد جز کامنت‌ها —
     // این تابع فقط زمانی true است که در آپدیت، فقط و فقط فیلد comments تغییر کرده باشد (نه فیلد دیگری)
+    // توجه: عمداً معاونت PMO اینجا نیست — این نقش حتی اجازه‌ی ثبت کامنت هم ندارد و فقط باید بتواند بخواند
     function isCommentOnlyUpdate() {
       return isSignedIn() && myRole() == 'viewer'
              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['comments']);

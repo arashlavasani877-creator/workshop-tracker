@@ -357,7 +357,8 @@ async function deleteComment(id, time){
     alert('خطا در حذف کامنت: ' + (err && err.message ? err.message : String(err)));
   }
 }
-function renderCommentsHtml(c, idSuffix){
+function renderCommentsHtml(c, idSuffix, canAdd){
+  if(canAdd === undefined) canAdd = true;
   const comments = (c.comments || []).slice().sort((a,b) => (b.time||0)-(a.time||0));
   const inputId = 'cmt_' + c.id + '_' + idSuffix;
   const list = comments.length ? comments.map(cm => {
@@ -375,10 +376,11 @@ function renderCommentsHtml(c, idSuffix){
     <div class="comments-box" onclick="event.stopPropagation();">
       <div class="hist-title">💬 کامنت‌ها ${comments.length?('('+comments.length+')'):''}</div>
       ${list}
+      ${canAdd ? `
       <div class="comment-add-row">
         <input type="text" id="${inputId}" class="auth-input" style="max-width:none; flex:1;" placeholder="کامنت خود را بنویسید...">
         <button class="field-save" onclick="addComment('${c.id}', '${inputId}')">ثبت</button>
-      </div>
+      </div>` : ''}
     </div>`;
 }
 
@@ -710,7 +712,7 @@ function fmtLastSeen(ts){
 
 function ensureDataSubscriptions(){
   if(dataSubscribed) return;
-  if(myRole !== 'admin' && myRole !== 'supervisor' && myRole !== 'viewer' && myRole !== 'afrachoobSupervisor') return;
+  if(myRole !== 'admin' && myRole !== 'supervisor' && myRole !== 'viewer' && myRole !== 'afrachoobSupervisor' && myRole !== 'pmoDeputy') return;
   dataSubscribed = true;
   db.collection('contracts').orderBy('createdAt','desc').onSnapshot((snap) => {
     const all = snap.docs.map(d => ({ id:d.id, ...d.data() }));
@@ -853,6 +855,7 @@ function renderApp(){
   if(myRole === 'supervisor'){ renderSupervisor(el); return; }
   if(myRole === 'viewer'){ renderViewer(el); return; }
   if(myRole === 'afrachoobSupervisor'){ renderAfrachoobSupervisor(el); return; }
+  if(myRole === 'pmoDeputy'){ renderViewer(el); return; }
 
   el.innerHTML = `<div class="center-screen">
     <span class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">در حال بارگذاری…</span></span>
@@ -862,7 +865,7 @@ function renderApp(){
 }
 
 function roleFa(r){
-  return { admin:'مدیر', supervisor:'سرپرست نصب', viewer:'مدیر پروژه', afrachoobSupervisor:'سرپرست افراچوب', pending:'در انتظار تایید', blocked:'مسدود' }[r] || r;
+  return { admin:'مدیر', supervisor:'سرپرست نصب', viewer:'مدیر پروژه', afrachoobSupervisor:'سرپرست افراچوب', pmoDeputy:'معاونت PMO', pending:'در انتظار تایید', blocked:'مسدود' }[r] || r;
 }
 
 /* ---------- Shared: warnings list ---------- */
@@ -1089,7 +1092,7 @@ function renderViewer(el){
     <div class="viewer-hero">
       <img src="./icon-192.png" alt="افراچوب">
       <div>
-        <div class="viewer-hero-title">${myPosition ? escapeHtml(myPosition) : 'مدیر پروژه'} عزیز، خوش آمدید 👋</div>
+        <div class="viewer-hero-title">${myPosition ? escapeHtml(myPosition) : (myRole === 'pmoDeputy' ? 'معاونت PMO' : 'مدیر پروژه')} عزیز، خوش آمدید 👋</div>
         <div class="viewer-hero-sub">نمای کلی و لحظه‌ای وضعیت همه‌ی پروژه‌های افراچوب — با یک نگاه</div>
       </div>
     </div>
@@ -1113,10 +1116,12 @@ function renderViewer(el){
       <button class="${viewerSection==='panelwait'?'active':''}" onclick="switchViewerSection('panelwait')">🛠 منتظر نصب صفحه کابینت ${s.panelWaitList.length?('('+s.panelWaitList.length+')'):''}</button>
       <button class="${viewerSection==='waitingdelivery'?'active':''}" onclick="switchViewerSection('waitingdelivery')">📦 در انتظار تحویل‌دهی به مالک ${s.waitingDeliveryList.length?('('+s.waitingDeliveryList.length+')'):''}</button>
       <button class="${viewerSection==='all'?'active':''}" onclick="switchViewerSection('all')">📋 همه قراردادها (${contracts.length})</button>
+      ${myRole === 'pmoDeputy' ? '' : `
       <div class="viewer-quicklinks-split">
         <button class="${viewerSection==='contact'?'active':''}" onclick="switchViewerSection('contact')">✉️ ارتباط با کنترل پروژه ${pmMessagesUnseenCountForViewer()?('('+pmMessagesUnseenCountForViewer()+')'):''}</button>
         <button class="${viewerSection==='mycomments'?'active':''}" onclick="switchViewerSection('mycomments')">💬 کامنت‌های من ${myCommentsUnseenCount()?('('+myCommentsUnseenCount()+')'):''}</button>
       </div>
+      `}
     </div>
     `}
 
@@ -1178,6 +1183,7 @@ function renderViewerSectionBody(){
     return;
   }
   if(viewerSection === 'contact'){
+    if(myRole === 'pmoDeputy'){ body.innerHTML = ''; viewerSection = null; return; }
     markPmNotesSeen(n => n.byRole === 'admin' && currentUser && n.toUid === currentUser.uid);
     body.innerHTML = `
       <div class="section-title" style="margin-top:18px;">✉️ ارتباط با کنترل پروژه</div>
@@ -1190,6 +1196,7 @@ function renderViewerSectionBody(){
     return;
   }
   if(viewerSection === 'mycomments'){
+    if(myRole === 'pmoDeputy'){ body.innerHTML = ''; viewerSection = null; return; }
     body.innerHTML = `
       <div class="section-title" style="margin-top:18px;">💬 کامنت‌های من</div>
       <div class="viewer-report-note">کامنت‌هایی که روی هر قرارداد گذاشته‌اید و جواب‌هایی که به آن‌ها داده شده، اینجا نمایش داده می‌شود.</div>
@@ -1216,7 +1223,7 @@ function renderViewerSectionBody(){
     <input type="text" id="viewerSearch" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(viewerSearchQuery)}" class="auth-input" style="max-width:none;width:100%;margin-bottom:10px;" oninput="onViewerSearch(this.value)">
     ${filtersHtml}
     <div id="viewerList"></div>
-    ${viewerSection === 'all' ? archivedSectionHtml('viewer', false) : ''}`;
+    ${viewerSection === 'all' ? archivedSectionHtml('viewer', false, myRole !== 'pmoDeputy') : ''}`;
   renderViewerSectionList();
 }
 function onViewerStageFilter(v){ viewerFilterStage = v; renderViewerSectionList(); }
@@ -1289,7 +1296,7 @@ function renderViewerCard(c){
           <span>تاریخچه ${hOpen ? '▲' : '▼'}</span>
         </div>
         ${hOpen ? histHtml : ''}
-        ${renderCommentsHtml(c, 'v')}
+        ${renderCommentsHtml(c, 'v', myRole !== 'pmoDeputy')}
       </div>
     </div>`;
 }
@@ -2865,7 +2872,7 @@ function renderAdminUsers(){
     if(u.role === 'pending'){
       actions = `<button class="btn-approve" onclick="openApproveModal('${u.id}','${escapeHtml(u.name||'')}')">تایید و تعیین سمت</button>
                  <button class="btn-block" onclick="setUserRole('${u.id}','blocked')">رد</button>`;
-    } else if(u.role === 'supervisor' || u.role === 'viewer' || u.role === 'afrachoobSupervisor'){
+    } else if(u.role === 'supervisor' || u.role === 'viewer' || u.role === 'afrachoobSupervisor' || u.role === 'pmoDeputy'){
       actions = `<button class="btn-revoke" onclick="setUserRole('${u.id}','pending')">لغو دسترسی</button>
                  <button class="btn-block" onclick="setUserRole('${u.id}','blocked')">مسدود کن</button>`;
     } else if(u.role === 'blocked'){
@@ -2953,7 +2960,8 @@ function renderList(isAdmin, predicate){
   list.innerHTML = items.map(c => renderSupervisorRow(c)).join('');
 }
 
-function renderSupervisorRow(c, isAdminView){
+function renderSupervisorRow(c, isAdminView, canOpen){
+  if(canOpen === undefined) canOpen = true;
   const displayIdx = getDisplayStageIndex(c);
   const pct = overallPercent(c);
   const done = isCompleted(c);
@@ -2961,7 +2969,7 @@ function renderSupervisorRow(c, isAdminView){
   const badges = (c.itemCode ? `<span class="mini-badge">کد قلم: ${escapeHtml(c.itemCode)}</span>` : '')
     + (myRole !== 'afrachoobSupervisor' && myRole !== 'supervisor' && (c.comments||[]).length ? `<span class="mini-badge">💬 ${c.comments.length}</span>` : '');
   return `
-    <div class="card" style="cursor:pointer;" onclick="openContractDetail('${c.id}', ${isAdminView ? 'true' : 'false'})">
+    <div class="card"${canOpen ? ` style="cursor:pointer;" onclick="openContractDetail('${c.id}', ${isAdminView ? 'true' : 'false'})"` : ''}>
       <div class="card-head">
         <div class="card-title">
           <span class="card-name">${escapeHtml(c.name)}</span>
@@ -2976,7 +2984,7 @@ function renderSupervisorRow(c, isAdminView){
 }
 
 /* ---------- بایگانی: بخش مشترک، در همه‌ی پنل‌ها پیش‌فرض جمع‌شده، با کلیک قابل باز شدن ---------- */
-function archivedSectionHtml(key, isAdminView){
+function archivedSectionHtml(key, isAdminView, canOpen){
   if(!archivedContracts.length) return '';
   const open = !!archivedSectionOpen[key];
   return `
@@ -2984,7 +2992,7 @@ function archivedSectionHtml(key, isAdminView){
       <span>🗄 قراردادهای بایگانی‌شده <span class="cnt">(${archivedContracts.length})</span></span>
       <span>${open ? '▲ بستن' : '▼ نمایش'}</span>
     </div>
-    ${open ? archivedContracts.map(c => renderSupervisorRow(c, isAdminView)).join('') : ''}
+    ${open ? archivedContracts.map(c => renderSupervisorRow(c, isAdminView, canOpen)).join('') : ''}
   `;
 }
 function toggleArchivedSection(key){ archivedSectionOpen[key] = !archivedSectionOpen[key]; renderApp(); }
@@ -3180,7 +3188,7 @@ function renderCard(c, isAdmin, forceOpen){
           ${isAdmin ? `<button onclick="event.stopPropagation(); clearHistory('${c.id}')" style="border:none;background:none;color:var(--red);font-size:10.5px;cursor:pointer;font-family:'Vazirmatn';text-decoration:underline;">پاک‌کردن تاریخچه</button>` : ''}
         </div>
         ${hOpen ? histHtml : ''}` : ''}
-        ${showComments ? renderCommentsHtml(c, isAdmin ? 'a' : 's') : ''}
+        ${showComments ? renderCommentsHtml(c, isAdmin ? 'a' : 's', myRole !== 'pmoDeputy') : ''}
         ${isAdmin ? `<div class="del-row"><button onclick="event.stopPropagation(); deleteContract('${c.id}')">حذف قرارداد</button></div>` : ''}
       </div>
     </div>`;
