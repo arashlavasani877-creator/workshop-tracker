@@ -2276,7 +2276,9 @@ async function renderPaginatedReportPdf({ reportTitle, extraHeaderHtml, headers,
         ${pf ? bigHeaderHtml : smallHeaderHtml(p+1)}
         <table style="width:100%; table-layout:fixed; border-collapse:collapse; font-size:10.5px;">${colgroupHtml}${theadHtml}<tbody>${chunk.map(rowHtml).join('')}</tbody></table>
       `;
-      const canvas = await html2canvas(holder, { scale:2, backgroundColor:'#ffffff', useCORS:true });
+      // foreignObjectRendering:true یعنی به‌جای موتور رسم متن خودِ html2canvas (که ترکیب حروف فارسی رو
+      // در برخی رشته‌ها اشتباه می‌چیند)، از موتور واقعی مرورگر برای رندر متن استفاده بشه — رفع اصلی به‌هم‌ریختگی فونت
+      const canvas = await html2canvas(holder, { scale:2, backgroundColor:'#ffffff', useCORS:true, foreignObjectRendering:true });
       const imgData = canvas.toDataURL('image/jpeg', 0.92);
       const imgW = pageW;
       const imgH = canvas.height * (imgW / canvas.width);
@@ -2524,7 +2526,7 @@ async function exportManagementSummaryPdf(){
         while(true){
           const chunk = units.slice(idx, idx+count);
           holder.innerHTML = `${headerHtml}${chunk.join('')}`;
-          canvas = await html2canvas(holder, { scale:2, backgroundColor:'#ffffff', useCORS:true });
+          canvas = await html2canvas(holder, { scale:2, backgroundColor:'#ffffff', useCORS:true, foreignObjectRendering:true });
           imgH = canvas.height * (pageW / canvas.width);
           if(imgH <= availPt + 0.5 || count === 1) break; // یا جا شد، یا فقط یک واحد مانده (دیگر نمی‌شود کوچک‌ترش کرد)
           count--; // یک واحد را برای صفحه‌ی بعد نگه دار و دوباره امتحان کن
