@@ -36,8 +36,8 @@ let adminFilterContractMonth = 'all';
 let adminFilterContractYear = '';
 let adminFinancialSearch = ''; // جستجو در لیست «گزارش مالی» مدیر
 let finSectionOpen = { top:false, variance:false, all:false }; // دکمه‌ای‌بودن بخش‌های گزارش مالی
-let finHiddenMonths = {}; // ماه‌هایی که کاربر از نمودار گزارش مالی مخفی کرده
-let finMonthFilterOpen = false; // باز/بسته بودن پنل فیلتر ماه‌های نمودار
+let finFilterMonths = new Set(); // فیلتر گزارش مالی: مجموعه‌ی ماه‌های انتخاب‌شده («۱۴۰۳/۰۲») — خالی یعنی فیلتری فعال نیست (همه نمایش داده می‌شه)
+let finFilterOpen = false; // باز/بسته بودن پنل فیلتر گزارش مالی
 let supervisorSearchQuery = '';
 let viewerOpenId = null;
 let viewerSearchQuery = '';
@@ -1462,12 +1462,22 @@ function openWaitingDeliveryList(){
 }
 
 /* ---------- Admin-only: گزارش مالی — تب کاملاً جدا، بدون هیچ تغییری در داشبورد اصلی ---------- */
+function contractMonthKey(c){
+  const p = parseJalaliStr(c.contractDate);
+  return p ? (p[0] + '/' + String(p[1]).padStart(2,'0')) : null;
+}
 function computeFinancialStats(){
-  const rows = contracts.concat(archivedContracts).map(c => {
+  const allRows = contracts.concat(archivedContracts).map(c => {
     const fin = getContractFinance(c);
     const pct = overallPercent(c);
     return { c, fin, pct, realized: Math.round(fin.total * pct / 100) };
   });
+  const availableMonths = Array.from(new Set(allRows.map(r => contractMonthKey(r.c)).filter(Boolean))).sort();
+  const filterActive = finFilterMonths.size > 0;
+  const rows = filterActive
+    ? allRows.filter(r => { const mk = contractMonthKey(r.c); return mk && finFilterMonths.has(mk); })
+    : allRows;
+
   const totalValue = rows.reduce((s,r) => s + r.fin.total, 0);
   const totalMaterial = rows.reduce((s,r) => s + r.fin.material, 0);
   const totalLabor = rows.reduce((s,r) => s + r.fin.labor, 0);
@@ -1486,24 +1496,22 @@ function computeFinancialStats(){
 
   const monthMap = {};
   rows.forEach(r => {
-    const p = parseJalaliStr(r.c.contractDate);
-    if(!p || r.fin.total <= 0) return;
-    const key = p[0] + '/' + String(p[1]).padStart(2,'0');
+    const key = contractMonthKey(r.c);
+    if(!key || r.fin.total <= 0) return;
     monthMap[key] = (monthMap[key] || 0) + r.fin.total;
   });
   const monthly = Object.keys(monthMap).sort().map(k => ({ label: k, value: monthMap[k] }));
 
   return { rows, totalValue, totalMaterial, totalLabor, avgValue, withFinalCount: withFinal.length,
            totalCount: rows.length, realizedValue, missing, varianceRows, avgVariancePct,
-           monthly, activeValue, closedValue };
+           monthly, activeValue, closedValue, availableMonths, filterActive };
 }
 
 function renderAdminFinancial(){
   const body = document.getElementById('adminBody');
   const st = computeFinancialStats();
   const topList = st.rows.slice().filter(r => r.fin.total > 0).sort((a,b) => b.fin.total - a.fin.total).slice(0,5);
-  const visibleMonthly = st.monthly.filter(m => !finHiddenMonths[m.label]);
-  const maxMonth = visibleMonthly.length ? Math.max(...visibleMonthly.map(m => m.value)) : 0;
+  const maxMonth = st.monthly.length ? Math.max(...st.monthly.map(m => m.value)) : 0;
 
   const sectionHeader = (key, title, count) => `
     <div class="section-title" style="margin-top:20px; cursor:pointer; justify-content:space-between;" onclick="toggleFinSection('${key}')">
@@ -1511,12 +1519,47 @@ function renderAdminFinancial(){
       <span>${finSectionOpen[key] ? '▲ بستن' : '▼ نمایش'}</span>
     </div>`;
 
+  const monthsByYear = {};
+  st.availableMonths.forEach(mk => {
+    const y = mk.split('/')[0];
+    (monthsByYear[y] = monthsByYear[y] || []).push(mk);
+  });
+  const yearKeys = Object.keys(monthsByYear).sort();
+  const filterLabel = st.filterActive ? `${finFilterMonths.size} ماه انتخاب‌شده` : 'همه‌ی قراردادها';
+
   body.innerHTML = `
     <div class="section-title" style="margin-top:14px;">💰 گزارش مالی</div>
     <div class="toolbar" style="display:flex; gap:8px; flex-wrap:wrap;">
       <button id="finExcelBtn" class="btn-secondary" onclick="exportFinancialExcel()">📊 خروجی اکسل</button>
       <button id="finPdfBtn" class="btn-secondary" onclick="exportFinancialPdf()">🧾 خروجی PDF</button>
     </div>
+
+    <div class="section-title" style="margin-top:14px; cursor:pointer; justify-content:space-between;" onclick="toggleFinFilterPanel()">
+      <span>🔎 فیلتر گزارش <span class="cnt">(${filterLabel})</span></span>
+      <span>${finFilterOpen ? '▲ بستن' : '▼ نمایش'}</span>
+    </div>
+    ${finFilterOpen ? (yearKeys.length ? `
+    <div style="background:var(--panel-2); border:1px solid var(--line); border-radius:10px; padding:10px; margin-bottom:12px;">
+      <button class="btn-secondary" style="font-size:10.5px; padding:6px 10px; width:100%;" onclick="clearFinFilter()">نمایش همه (حذف فیلتر)</button>
+      ${yearKeys.map(y => {
+        const monthsOfYear = monthsByYear[y];
+        const allSelected = monthsOfYear.every(mk => finFilterMonths.has(mk));
+        return `
+        <div style="margin-top:12px;">
+          <label style="display:flex; align-items:center; gap:6px; font-weight:700; cursor:pointer;">
+            <input type="checkbox" ${allSelected ? 'checked' : ''} onchange="toggleFinFilterYear('${y}', this.checked)">
+            کل سال ${y}
+          </label>
+          <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;">
+            ${monthsOfYear.map(mk => `
+              <label style="display:flex; align-items:center; gap:4px; font-family:'JetBrains Mono',monospace; font-size:10.5px; border:1px solid var(--line); border-radius:8px; padding:4px 8px; cursor:pointer;">
+                <input type="checkbox" ${finFilterMonths.has(mk) ? 'checked' : ''} onchange="toggleFinFilterMonth('${mk}')" style="margin:0;">
+                ${mk}
+              </label>`).join('')}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>` : `<div class="empty">هیچ قراردادی تاریخ معتبر نداره تا بشه بر اساس ماه/سال فیلترش کرد.</div>`) : ''}
 
     <div class="kpi-grid" style="grid-template-columns:repeat(2,1fr);">
       <div class="kpi-card kpi-blue"><div class="kpi-num" style="font-size:13px; word-break:break-all; white-space:normal; line-height:1.3;">${formatToman(st.totalValue)}</div><div class="kpi-label">ارزش کل قراردادها (ریال)</div></div>
@@ -1534,30 +1577,13 @@ function renderAdminFinancial(){
 
     ${st.monthly.length ? `
     <div class="chart-box">
-      <div class="chart-title" style="display:flex; justify-content:space-between; align-items:center;">
-        <span>ارزش قراردادها بر اساس ماه ثبت (ریال)</span>
-        <span onclick="toggleFinMonthFilter()" style="cursor:pointer; font-size:10.5px; font-weight:500; color:var(--teal);">⚙️ فیلتر ماه‌ها ${finMonthFilterOpen ? '▲' : '▼'}</span>
-      </div>
-      ${finMonthFilterOpen ? `
-      <div style="background:var(--panel-2); border:1px solid var(--line); border-radius:10px; padding:10px; margin-bottom:12px;">
-        <div style="display:flex; gap:8px; margin-bottom:10px;">
-          <button class="btn-secondary" style="font-size:10.5px; padding:6px 10px; flex:1;" onclick="finShowRecentMonths(6)">فقط ۶ ماه اخیر</button>
-          <button class="btn-secondary" style="font-size:10.5px; padding:6px 10px; flex:1;" onclick="finShowRecentMonths(0)">نمایش همه</button>
-        </div>
-        <div style="display:flex; flex-wrap:wrap; gap:6px;">
-          ${st.monthly.map(m => `
-            <label style="display:flex; align-items:center; gap:4px; font-family:'JetBrains Mono',monospace; font-size:10.5px; border:1px solid var(--line); border-radius:8px; padding:4px 8px; cursor:pointer;">
-              <input type="checkbox" ${finHiddenMonths[m.label] ? '' : 'checked'} onchange="toggleFinMonth('${m.label}')" style="margin:0;">
-              ${m.label}
-            </label>`).join('')}
-        </div>
-      </div>` : ''}
-      ${visibleMonthly.length ? visibleMonthly.map(m => `
+      <div class="chart-title">ارزش قراردادها بر اساس ماه ثبت (ریال)</div>
+      ${st.monthly.map(m => `
         <div class="chart-row">
           <span class="chart-label">${m.label}</span>
           <div class="chart-bar-track"><div class="chart-bar-fill" style="width:${maxMonth ? Math.round(m.value/maxMonth*100) : 0}%"></div></div>
           <span class="chart-count" style="width:auto; max-width:92px; white-space:normal; word-break:break-all; text-align:left; font-size:10px; line-height:1.25;">${formatToman(m.value)}</span>
-        </div>`).join('') : `<div class="empty">همه‌ی ماه‌ها مخفی شده‌اند — از «فیلتر ماه‌ها» برای نمایش دوباره استفاده کنید.</div>`}
+        </div>`).join('')}
     </div>` : ''}
 
     ${topList.length ? sectionHeader('top', 'قراردادهای پرارزش', topList.length) : ''}
@@ -1596,14 +1622,17 @@ function renderAdminFinancial(){
   if(finSectionOpen.all) renderAdminFinancialList();
 }
 function toggleFinSection(key){ finSectionOpen[key] = !finSectionOpen[key]; renderAdminFinancial(); }
-function toggleFinMonthFilter(){ finMonthFilterOpen = !finMonthFilterOpen; renderAdminFinancial(); }
-function toggleFinMonth(label){ finHiddenMonths[label] = !finHiddenMonths[label]; renderAdminFinancial(); }
-function finShowRecentMonths(n){
+function toggleFinFilterPanel(){ finFilterOpen = !finFilterOpen; renderAdminFinancial(); }
+function clearFinFilter(){ finFilterMonths = new Set(); renderAdminFinancial(); }
+function toggleFinFilterMonth(mk){
+  if(finFilterMonths.has(mk)) finFilterMonths.delete(mk); else finFilterMonths.add(mk);
+  renderAdminFinancial();
+}
+function toggleFinFilterYear(year, checked){
   const st = computeFinancialStats();
-  finHiddenMonths = {};
-  if(n > 0 && st.monthly.length > n){
-    st.monthly.slice(0, st.monthly.length - n).forEach(m => { finHiddenMonths[m.label] = true; });
-  }
+  st.availableMonths.filter(mk => mk.startsWith(year + '/')).forEach(mk => {
+    if(checked) finFilterMonths.add(mk); else finFilterMonths.delete(mk);
+  });
   renderAdminFinancial();
 }
 function onAdminFinancialSearch(v){ adminFinancialSearch = v; renderAdminFinancialList(); }
@@ -1636,6 +1665,7 @@ async function exportFinancialExcel(){
     const summaryRows = [
       ['گزارش مالی افراچوب', ''],
       ['تاریخ گزارش', todayJalaliLabel()],
+      ['بازه‌ی فیلتر', st.filterActive ? Array.from(finFilterMonths).sort().join('، ') : 'همه‌ی قراردادها'],
       [],
       ['ارزش کل قراردادها (ریال)', st.totalValue],
       ['جمع قیمت جنس (ریال)', st.totalMaterial],
@@ -1683,6 +1713,7 @@ async function exportFinancialPdf(){
   if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
   try{
     const extraHeaderHtml = `
+      <div style="font-size:10px; color:#555; margin-bottom:8px;">بازه‌ی فیلتر: ${st.filterActive ? escapeHtml(Array.from(finFilterMonths).sort().join('، ')) : 'همه‌ی قراردادها'}</div>
       <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px;">
         <div style="flex:1; min-width:140px; background:#f5f5f5; border-radius:8px; padding:8px 10px;"><div style="font-size:9px;color:#666;">ارزش کل (ریال)</div><div style="font-size:12px;font-weight:800;">${formatToman(st.totalValue)}</div></div>
         <div style="flex:1; min-width:140px; background:#f5f5f5; border-radius:8px; padding:8px 10px;"><div style="font-size:9px;color:#666;">جمع جنس (ریال)</div><div style="font-size:12px;font-weight:800;">${formatToman(st.totalMaterial)}</div></div>
