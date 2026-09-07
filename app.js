@@ -1090,6 +1090,7 @@ function renderViewer(el){
       </div>
     </div>
 
+    <div class="toolbar"><button class="btn-primary" onclick="switchViewerSection('financial')">💰 گزارش مالی</button></div>
     <div class="toolbar"><button id="installBtn" class="btn-secondary" onclick="installApp()">نصب اپلیکیشن روی گوشی</button></div>
 
     <div class="kpi-grid" style="margin-top:6px;">
@@ -1164,6 +1165,11 @@ function renderViewerSectionBody(){
   const body = document.getElementById('viewerSectionBody');
   if(!body) return;
   if(!viewerSection){ body.innerHTML = ''; return; }
+  if(viewerSection === 'financial'){
+    // گزارش مالی برای مدیر پروژه: دقیقاً همون گزارش مدیر، فقط‌خواندنی — بدون هیچ راهی برای تغییر داده
+    renderAdminFinancial();
+    return;
+  }
   if(viewerSection === 'contact'){
     markPmNotesSeen(n => n.byRole === 'admin' && currentUser && n.toUid === currentUser.uid);
     body.innerHTML = `
@@ -1508,8 +1514,12 @@ function computeFinancialStats(){
 }
 
 function renderAdminFinancial(){
-  const body = document.getElementById('adminBody');
+  // این تابع برای هر دو پنل مدیر و مدیر پروژه استفاده می‌شود؛ مدیر پروژه فقط‌خواندنی می‌بیند (بدون امکان باز کردن فرم ویرایش)
+  const finEditable = (myRole === 'admin');
+  const body = document.getElementById(finEditable ? 'adminBody' : 'viewerSectionBody');
+  if(!body) return;
   const st = computeFinancialStats();
+  const finRowOpen = (id) => finEditable ? ` onclick="openContractDetail('${id}')"` : '';
   const topList = st.rows.slice().filter(r => r.fin.total > 0).sort((a,b) => b.fin.total - a.fin.total).slice(0,5);
   const maxMonth = st.monthly.length ? Math.max(...st.monthly.map(m => m.value)) : 0;
 
@@ -1588,7 +1598,7 @@ function renderAdminFinancial(){
 
     ${topList.length ? sectionHeader('top', 'قراردادهای پرارزش', topList.length) : ''}
     ${(topList.length && finSectionOpen.top) ? topList.map(r => `
-      <div class="warn-item" style="cursor:pointer; border-inline-start-color:var(--teal);" onclick="openContractDetail('${r.c.id}')">
+      <div class="warn-item" style="${finEditable?'cursor:pointer; ':''}border-inline-start-color:var(--teal);"${finRowOpen(r.c.id)}>
         <div>
           <div class="warn-name">${escapeHtml(r.c.name)}</div>
           <div class="warn-sub">پیشرفت ${r.pct}٪ — ${r.fin.isFinal?'فاکتور نهایی':'فاکتور اولیه'}</div>
@@ -1598,7 +1608,7 @@ function renderAdminFinancial(){
 
     ${st.varianceRows.length ? sectionHeader('variance', 'اختلاف فاکتور نهایی با اولیه', st.varianceRows.length) : ''}
     ${(st.varianceRows.length && finSectionOpen.variance) ? st.varianceRows.map(r => `
-      <div class="warn-item" style="cursor:pointer; ${r.deltaPct>0?'':'border-inline-start-color:var(--teal);'}" onclick="openContractDetail('${r.c.id}')">
+      <div class="warn-item" style="${finEditable?'cursor:pointer; ':''}${r.deltaPct>0?'':'border-inline-start-color:var(--teal);'}"${finRowOpen(r.c.id)}>
         <div>
           <div class="warn-name">${escapeHtml(r.c.name)}</div>
           <div class="warn-sub">اولیه: ${formatToman(r.fin.initTotal)} — نهایی: ${formatToman(r.fin.total)}</div>
@@ -1614,7 +1624,7 @@ function renderAdminFinancial(){
     ${st.missing.length ? `
     <div class="section-title" style="margin-top:20px;">⚠️ قراردادهای بدون قیمت ثبت‌شده <span class="cnt">(${st.missing.length})</span></div>
     ${st.missing.map(r => `
-      <div class="warn-item" style="cursor:pointer;" onclick="openContractDetail('${r.c.id}')">
+      <div class="warn-item"${finEditable?' style="cursor:pointer;"':''}${finRowOpen(r.c.id)}>
         <div class="warn-name">${escapeHtml(r.c.name)}</div>
         <span class="warn-tag">ثبت نشده</span>
       </div>`).join('')}` : ''}
@@ -1639,6 +1649,7 @@ function onAdminFinancialSearch(v){ adminFinancialSearch = v; renderAdminFinanci
 function renderAdminFinancialList(){
   const el = document.getElementById('finList');
   if(!el) return;
+  const finEditable = (myRole === 'admin');
   const st = computeFinancialStats();
   let rows = st.rows.filter(r => r.fin.total > 0);
   const q = adminFinancialSearch.trim().toLowerCase();
@@ -1646,7 +1657,7 @@ function renderAdminFinancialList(){
   rows.sort((a,b) => b.fin.total - a.fin.total);
   if(!rows.length){ el.innerHTML = '<div class="empty">موردی یافت نشد.</div>'; return; }
   el.innerHTML = rows.map(r => `
-    <div class="warn-item" style="cursor:pointer; border-inline-start-color:var(--teal);" onclick="openContractDetail('${r.c.id}')">
+    <div class="warn-item" style="${finEditable?'cursor:pointer; ':''}border-inline-start-color:var(--teal);"${finEditable?` onclick="openContractDetail('${r.c.id}')"`:''}>
       <div>
         <div class="warn-name">${escapeHtml(r.c.name)}</div>
         <div class="warn-sub">جنس: ${formatToman(r.fin.material)} — اجرت: ${formatToman(r.fin.labor)} ${r.fin.isFinal?'(نهایی)':'(اولیه)'}</div>
