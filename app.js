@@ -1463,7 +1463,7 @@ function openWaitingDeliveryList(){
 
 /* ---------- Admin-only: گزارش مالی — تب کاملاً جدا، بدون هیچ تغییری در داشبورد اصلی ---------- */
 function computeFinancialStats(){
-  const rows = contracts.map(c => {
+  const rows = contracts.concat(archivedContracts).map(c => {
     const fin = getContractFinance(c);
     const pct = overallPercent(c);
     return { c, fin, pct, realized: Math.round(fin.total * pct / 100) };
@@ -1494,7 +1494,7 @@ function computeFinancialStats(){
   const monthly = Object.keys(monthMap).sort().map(k => ({ label: k, value: monthMap[k] }));
 
   return { rows, totalValue, totalMaterial, totalLabor, avgValue, withFinalCount: withFinal.length,
-           totalCount: contracts.length, realizedValue, missing, varianceRows, avgVariancePct,
+           totalCount: rows.length, realizedValue, missing, varianceRows, avgVariancePct,
            monthly, activeValue, closedValue };
 }
 
