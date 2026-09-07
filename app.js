@@ -2192,6 +2192,37 @@ async function exportExcel(){
    قبلاً کل جدول یک عکس بود و برای صفحه‌ی بعد فقط جابجا می‌شد؛ همین باعث می‌شد
    ته صفحه‌ی اول وسط یک ردیف بریده بشه و صفحه‌های بعدی اصلاً تیتر/هدر نداشته باشن.
    الان هر صفحه جدا و دقیقاً بر اساس ارتفاع واقعی ردیف‌ها رندر و عکس‌برداری می‌شود. */
+/* بررسی می‌کند خروجی html2canvas کاملاً سیاه/خالی نیست. علت اصلی باگ «صفحه سیاه»: در برخی گوشی‌ها
+   (به‌خصوص با فونت گوگل‌فونت که از دامنه‌ی دیگری بارگذاری می‌شود) رندر foreignObjectRendering
+   به‌جای متن، یک تصویر کاملاً مشکی برمی‌گرداند. */
+function isCanvasBlank(canvas){
+  try{
+    const ctx = canvas.getContext('2d');
+    const w = canvas.width, h = canvas.height;
+    const pts = [[w*0.1,h*0.1],[w*0.5,h*0.5],[w*0.9,h*0.9],[w*0.5,h*0.1],[w*0.1,h*0.9]];
+    for(const [px,py] of pts){
+      const x = Math.max(0, Math.min(w-2, Math.floor(px)));
+      const y = Math.max(0, Math.min(h-2, Math.floor(py)));
+      const d = ctx.getImageData(x, y, 2, 2).data;
+      for(let i=0;i<d.length;i+=4){
+        if(!(d[i]<12 && d[i+1]<12 && d[i+2]<12)) return false;
+      }
+    }
+    return true;
+  }catch(e){ return false; }
+}
+
+/* عکس‌برداری امن از هر واحد گزارش برای PDF: ابتدا با foreignObjectRendering (برای چسبیدن درست حروف
+   فارسی) امتحان می‌شود؛ اگر روی گوشی خاصی نتیجه‌اش صفحه‌ی سیاه بود، خودکار بدون foreignObjectRendering
+   دوباره تلاش می‌شود تا حداقل محتوا خالی نماند. */
+async function captureReportNode(node){
+  let canvas = await html2canvas(node, { scale:2, backgroundColor:'#ffffff', useCORS:true, foreignObjectRendering:true });
+  if(isCanvasBlank(canvas)){
+    canvas = await html2canvas(node, { scale:2, backgroundColor:'#ffffff', useCORS:true, foreignObjectRendering:false });
+  }
+  return canvas;
+}
+
 async function renderPaginatedReportPdf({ reportTitle, extraHeaderHtml, headers, rows, filename }){
   // اطمینان از لود کامل فونت فارسی قبل از عکس‌برداری (علت اصلی خراب دیده شدن فونت در PDF)
   try{
@@ -2285,7 +2316,7 @@ async function renderPaginatedReportPdf({ reportTitle, extraHeaderHtml, headers,
       `;
       // foreignObjectRendering:true یعنی به‌جای موتور رسم متن خودِ html2canvas (که ترکیب حروف فارسی رو
       // در برخی رشته‌ها اشتباه می‌چیند)، از موتور واقعی مرورگر برای رندر متن استفاده بشه — رفع اصلی به‌هم‌ریختگی فونت
-      const canvas = await html2canvas(holder, { scale:2, backgroundColor:'#ffffff', useCORS:true, foreignObjectRendering:true });
+      const canvas = await captureReportNode(holder);
       const imgData = canvas.toDataURL('image/jpeg', 0.92);
       const imgW = pageW;
       const imgH = canvas.height * (imgW / canvas.width);
@@ -2533,7 +2564,7 @@ async function exportManagementSummaryPdf(){
         while(true){
           const chunk = units.slice(idx, idx+count);
           holder.innerHTML = `${headerHtml}${chunk.join('')}`;
-          canvas = await html2canvas(holder, { scale:2, backgroundColor:'#ffffff', useCORS:true, foreignObjectRendering:true });
+          canvas = await captureReportNode(holder);
           imgH = canvas.height * (pageW / canvas.width);
           if(imgH <= availPt + 0.5 || count === 1) break; // یا جا شد، یا فقط یک واحد مانده (دیگر نمی‌شود کوچک‌ترش کرد)
           count--; // یک واحد را برای صفحه‌ی بعد نگه دار و دوباره امتحان کن
