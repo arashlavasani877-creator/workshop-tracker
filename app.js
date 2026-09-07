@@ -2219,8 +2219,15 @@ async function renderPaginatedReportPdf({ reportTitle, extraHeaderHtml, headers,
       <div style="font-size:10px; color:#666;">صفحه ${pageNo}</div>
     </div>`;
 
-  const theadHtml = `<thead><tr style="background:#222; color:#fff;">${headers.map(h=>`<th style="padding:6px 8px; text-align:right; border:1px solid #333;">${escapeHtml(h)}</th>`).join('')}</tr></thead>`;
-  const rowHtml = (r) => `<tr style="background:${r.__i%2?'#f5f5f5':'#fff'};">${r.vals.map(v=>`<td style="padding:6px 8px; border:1px solid #ddd;">${escapeHtml(v==null?'':String(v))}</td>`).join('')}</tr>`;
+  const colCount = headers.length;
+  const firstColPct = 26;
+  const restPct = +((100 - firstColPct) / Math.max(1, colCount - 1)).toFixed(2);
+  const colgroupHtml = `<colgroup>${headers.map((_,i)=>`<col style="width:${i===0?firstColPct:restPct}%;">`).join('')}</colgroup>`;
+  // همه‌ی سلول‌ها روی یک خط نگه داشته می‌شوند و در صورت طولانی بودن با «...» کوتاه می‌شوند؛
+  // این باعث می‌شود html2canvas مجبور به شکستن خط وسط کلمه‌ی فارسی نشود (علت اصلی به‌هم‌ریختگی فونت مقادیر بلند مثل نام قرارداد)
+  const cellStyle = 'padding:6px 8px; border:1px solid #ddd; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; direction:rtl; text-align:right;';
+  const theadHtml = `<thead><tr style="background:#222; color:#fff;">${headers.map(h=>`<th style="padding:6px 8px; text-align:right; border:1px solid #333; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(h)}</th>`).join('')}</tr></thead>`;
+  const rowHtml = (r) => `<tr style="background:${r.__i%2?'#f5f5f5':'#fff'};">${r.vals.map(v=>`<td style="${cellStyle}">${escapeHtml(v==null?'':String(v))}</td>`).join('')}</tr>`;
   const dataRows = rows.map((vals,i) => ({ vals, __i:i }));
 
   const holder = document.createElement('div');
@@ -2233,7 +2240,7 @@ async function renderPaginatedReportPdf({ reportTitle, extraHeaderHtml, headers,
     const bigHeaderPx = holder.getBoundingClientRect().height;
     holder.innerHTML = smallHeaderHtml(2);
     const smallHeaderPx = holder.getBoundingClientRect().height;
-    holder.innerHTML = `<table style="width:100%; border-collapse:collapse; font-size:10.5px;">${theadHtml}<tbody>${dataRows.map(rowHtml).join('')}</tbody></table>`;
+    holder.innerHTML = `<table style="width:100%; table-layout:fixed; border-collapse:collapse; font-size:10.5px;">${colgroupHtml}${theadHtml}<tbody>${dataRows.map(rowHtml).join('')}</tbody></table>`;
     const table = holder.querySelector('table');
     const theadPx = table.querySelector('thead').getBoundingClientRect().height;
     const trEls = Array.from(table.querySelectorAll('tbody tr'));
@@ -2267,7 +2274,7 @@ async function renderPaginatedReportPdf({ reportTitle, extraHeaderHtml, headers,
       const chunk = dataRows.slice(start, start+count);
       holder.innerHTML = `
         ${pf ? bigHeaderHtml : smallHeaderHtml(p+1)}
-        <table style="width:100%; border-collapse:collapse; font-size:10.5px;">${theadHtml}<tbody>${chunk.map(rowHtml).join('')}</tbody></table>
+        <table style="width:100%; table-layout:fixed; border-collapse:collapse; font-size:10.5px;">${colgroupHtml}${theadHtml}<tbody>${chunk.map(rowHtml).join('')}</tbody></table>
       `;
       const canvas = await html2canvas(holder, { scale:2, backgroundColor:'#ffffff', useCORS:true });
       const imgData = canvas.toDataURL('image/jpeg', 0.92);
