@@ -3405,11 +3405,20 @@ function handleBulkImportFile(input){
   };
   reader.readAsArrayBuffer(file);
 }
-function buildAutoStatus(statusText){
-  if(statusText === 'در انتظار تحویل‌دهی به مالک'){
+function normalizePersianText(s){
+  return String(s||'')
+    .replace(/[\u200c\u200d\u200e\u200f]/g, '') // نیم‌فاصله و کاراکترهای جهت‌نمای نامرئی
+    .replace(/[يى]/g, 'ی')
+    .replace(/ك/g, 'ک')
+    .replace(/\s+/g, '')
+    .trim();
+}
+function buildAutoStatus(statusTextRaw){
+  const t = normalizePersianText(statusTextRaw);
+  if(t.includes('انتظار') && t.includes('تحویل')){
     return { 0:{done:true}, 1:{done:true}, 2:{done:true}, 3:{percent:100}, 4:{done:true}, 5:{percent:100, panelInstalled:true}, 6:{done:true}, 7:{done:false} };
   }
-  if(statusText === 'خاتمه‌یافته'){
+  if(t.includes('خاتمه') || t.includes('پایان')){
     return { 0:{done:true}, 1:{done:true}, 2:{done:true}, 3:{percent:100}, 4:{done:true}, 5:{percent:100, panelInstalled:true}, 6:{done:true}, 7:{done:true} };
   }
   return {};
@@ -3439,7 +3448,7 @@ function processBulkImportRows(rows){
     const itemCode = get('itemCode');
     const description = get('description');
     if(!name && !itemCode) continue; // ردیف کاملاً خالی
-    if(description === 'این ردیف فقط نمونه است — پاک کنید') continue; // نمونه‌ی پیش‌فرض قالب
+    if(normalizePersianText(description).includes(normalizePersianText('این ردیف فقط نمونه است'))) continue; // نمونه‌ی پیش‌فرض قالب
     if(!name){ invalidCount++; continue; }
     const itemCodeNorm = itemCode;
     if(itemCodeNorm){
