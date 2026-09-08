@@ -2320,8 +2320,8 @@ async function renderPaginatedReportPdf({ reportTitle, extraHeaderHtml, headers,
     const cellStyleFor = (i) => `${BOX} padding:${CELL_PAD}; border:1px solid #ddd; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; direction:rtl; text-align:${alignOf(i)};`;
     // ستون‌های شکست‌خور: حداکثر ۲ خط با «...» در انتهای خط دوم اگر باز هم بلندتر بود؛ هرگز روی ستون بعدی نمی‌افتد
     const wrapCellStyleFor = (i) => `${BOX} padding:${CELL_PAD}; border:1px solid #ddd; white-space:normal; overflow:hidden; text-overflow:ellipsis; direction:rtl; text-align:${alignOf(i)}; word-break:break-word; line-height:1.32; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;`;
-    // تیتر ستون‌ها هم اگر جا نشود به‌جای بریده/به‌هم‌ریخته شدن، در حداکثر ۲ خط می‌شکند (نه Ellipsis وسط عنوان)
-    const theadHtml = `<thead><tr style="background:#222; color:#fff;">${headers.map((h,i)=>`<th style="${BOX} padding:${CELL_PAD}; text-align:${alignOf(i)}; border:1px solid #333; white-space:normal; word-break:break-word; line-height:1.3; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;">${escapeHtml(h)}</th>`).join('')}</tr></thead>`;
+    // تیتر ستون‌ها به همان حالت قبلی (تک‌خطی، با «...» در صورت طولانی بودن)
+    const theadHtml = `<thead><tr style="background:#222; color:#fff;">${headers.map((h,i)=>`<th style="${BOX} padding:${CELL_PAD}; text-align:${alignOf(i)}; border:1px solid #333; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(h)}</th>`).join('')}</tr></thead>`;
     const rowHtml = (r) => `<tr style="background:${r.__i%2?'#f5f5f5':'#fff'};">${r.vals.map((v,i)=>`<td style="${wrapColIdxs.includes(i)?wrapCellStyleFor(i):cellStyleFor(i)}">${escapeHtml(v==null?'':String(v))}</td>`).join('')}</tr>`;
     const dataRows = rows.map((vals,i) => ({ vals, __i:i }));
 
