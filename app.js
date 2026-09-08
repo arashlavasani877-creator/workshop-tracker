@@ -2257,42 +2257,67 @@ async function renderPaginatedReportPdf({ reportTitle, extraHeaderHtml, headers,
       <div style="font-size:10px; color:#666;">صفحه ${pageNo}</div>
     </div>`;
 
-  // ستون‌های «نام قرارداد» و «وضعیت» عرض ثابتِ سقف‌دار دارند و به‌جای «...» تک‌خطی، تا ۲ خط می‌شکنند
-  // (بدون افتادن روی ستون کناری)؛ فضای باقی‌مانده بین بقیه‌ی ستون‌ها بر اساس طول معمول محتوای هرکدام
-  // (نه به‌طور مساوی) تقسیم می‌شود تا ستون‌هایی مثل «مرحله فعلی»/«وضعیت زمانی» سهم بیشتری بگیرند.
-  const wrapColNames = ['نام قرارداد','وضعیت'];
-  const wrapColIdxs = headers.map((h,i)=>wrapColNames.includes(h)?i:-1).filter(i=>i>-1);
-  const WRAP_COL_PCT = 24;
-  const colWeights = { 'کد قلم':0.75, 'تاریخ قرارداد':0.95, 'سررسید اصلی':0.95, 'سررسید جبرانی':0.95,
-    'مرحله فعلی':1.3, 'پیشرفت':0.6, 'درصد پیشرفت کل':0.6, 'وضعیت زمانی':1.25, 'وزن':0.6, 'شروع':0.95,
-    'پایان':0.95, 'منبع':0.75, 'جنس (ریال)':1, 'اجرت (ریال)':1, 'کل (ریال)':1 };
-  const colCount = headers.length;
-  const firstColPct = wrapColIdxs.length * WRAP_COL_PCT;
-  const otherIdx = headers.map((_,i)=>i).filter(i => !wrapColIdxs.includes(i));
-  const weightSum = otherIdx.reduce((s,i) => s + (colWeights[headers[i]] || 1), 0) || 1;
-  const remainPct = 100 - firstColPct;
-  const colPct = headers.map((h,i) => wrapColIdxs.includes(i) ? WRAP_COL_PCT : +((colWeights[h] || 1) / weightSum * remainPct).toFixed(2));
-  const colgroupHtml = `<colgroup>${colPct.map(p=>`<col style="width:${p}%;">`).join('')}</colgroup>`;
-  // سلول‌های معمولی روی یک خط نگه داشته می‌شوند و در صورت طولانی بودن با «...» کوتاه می‌شوند؛
-  // این باعث می‌شود html2canvas مجبور به شکستن خط وسط کلمه‌ی فارسی نشود (علت اصلی به‌هم‌ریختگی فونت مقادیر بلند)
-  const cellStyle = 'padding:6px 8px; border:1px solid #ddd; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; direction:rtl; text-align:right;';
-  // ستون‌های شکست‌خور (نام قرارداد/وضعیت): حداکثر ۲ خط، با «...» در انتهای خط دوم اگر باز هم بلندتر بود؛ هرگز روی ستون بعدی نمی‌افتد
-  const wrapCellStyle = 'padding:6px 8px; border:1px solid #ddd; white-space:normal; overflow:hidden; text-overflow:ellipsis; direction:rtl; text-align:right; word-break:break-word; line-height:1.32; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;';
-  const theadHtml = `<thead><tr style="background:#222; color:#fff;">${headers.map(h=>`<th style="padding:6px 8px; text-align:right; border:1px solid #333; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(h)}</th>`).join('')}</tr></thead>`;
-  const rowHtml = (r) => `<tr style="background:${r.__i%2?'#f5f5f5':'#fff'};">${r.vals.map((v,i)=>`<td style="${wrapColIdxs.includes(i)?wrapCellStyle:cellStyle}">${escapeHtml(v==null?'':String(v))}</td>`).join('')}</tr>`;
-  const dataRows = rows.map((vals,i) => ({ vals, __i:i }));
-
   const holder = document.createElement('div');
   holder.style.cssText = 'position:fixed; top:0; left:-99999px; width:820px; background:#ffffff; color:#1a1a1a; font-family:Vazirmatn,sans-serif; direction:rtl; padding:28px; box-sizing:border-box;';
   document.body.appendChild(holder);
 
   try{
+    const FONT_SIZE = '10.5px';
+    const CELL_PAD = '6px 8px';
+
+    // ---------- عرض ستون‌ها: بر اساس محتوای واقعیِ همین گزارش، نه حدس یا درصد ثابت از قبل ----------
+    // یک جدول موقت با table-layout:auto و بدون Wrap رندر می‌شود؛ در این حالت مرورگر خودش عرض هر
+    // ستون را دقیقاً برابر با پهن‌ترین محتوای واقعی همان ستون (شامل عنوان) محاسبه می‌کند — بدون هیچ حدسی.
+    const probeCellStyle = `padding:${CELL_PAD}; white-space:nowrap; font-size:${FONT_SIZE};`;
+    holder.innerHTML = `<table style="table-layout:auto; border-collapse:collapse;">
+      <thead><tr>${headers.map(h=>`<th style="${probeCellStyle}">${escapeHtml(h)}</th>`).join('')}</tr></thead>
+      <tbody>${rows.map(vals=>`<tr>${vals.map(v=>`<td style="${probeCellStyle}">${escapeHtml(v==null?'':String(v))}</td>`).join('')}</tr>`).join('')}</tbody>
+    </table>`;
+    const naturalPx = Array.from(holder.querySelectorAll('thead th')).map(th => th.getBoundingClientRect().width);
+
+    // طبق قانون چیدمان گزارش: «نام قرارداد» همیشه راست‌چین است؛ تمام ستون‌های دیگر وسط‌چین (هم عنوان، هم مقدار)
+    const nameColIdx = headers.indexOf('نام قرارداد');
+    // تشخیص ستون‌های «متن آزاد و بلند» بر اساس طول واقعی محتوای همان ستون (نه نام ستون) — این‌ها باید حداکثر
+    // ۲ خط بشکنند تا هرگز روی ستون بعدی نیفتند. «نام قرارداد» طبق قانون همیشه در این گروه است.
+    const WRAP_LEN_THRESHOLD = 14;
+    const maxLen = headers.map((h,i) => Math.max(h.length, ...rows.map(r => String(r[i]==null?'':r[i]).length), 0));
+    const wrapColIdxs = headers.map((h,i)=> (i===nameColIdx || maxLen[i] > WRAP_LEN_THRESHOLD) ? i : -1).filter(i=>i>-1);
+
+    // سقف عرض برای ستون‌های شکست‌خور (چون عرض طبیعی‌شان معمولاً خیلی زیاد است) تا کل جدول را نگیرند؛
+    // باقی عرض بین ستون‌های غیرشکست‌خور متناسب با عرض طبیعی واقعی‌شان (نه مساوی) تقسیم می‌شود.
+    const totalNatural = naturalPx.reduce((s,w)=>s+w,0) || 1;
+    let wrapPct = wrapColIdxs.map(i => Math.min(26, +((naturalPx[i]/totalNatural)*100).toFixed(2)));
+    let wrapPctSum = wrapPct.reduce((s,p)=>s+p,0);
+    if(wrapPctSum > 78){ // محافظ برای حالت نادر که چند ستون شکست‌خور هم‌زمان وجود دارند
+      const scale = 78/wrapPctSum;
+      wrapPct = wrapPct.map(p=>+(p*scale).toFixed(2));
+      wrapPctSum = wrapPct.reduce((s,p)=>s+p,0);
+    }
+    const otherIdx = headers.map((_,i)=>i).filter(i => !wrapColIdxs.includes(i));
+    const otherNaturalSum = otherIdx.reduce((s,i)=>s+naturalPx[i],0) || 1;
+    const remainPct = 100 - wrapPctSum;
+    const colPct = headers.map((h,i) => {
+      const wi = wrapColIdxs.indexOf(i);
+      return wi > -1 ? wrapPct[wi] : +((naturalPx[i]/otherNaturalSum) * remainPct).toFixed(2);
+    });
+    const colgroupHtml = `<colgroup>${colPct.map(p=>`<col style="width:${p}%;">`).join('')}</colgroup>`;
+
+    const alignOf = (i) => i === nameColIdx ? 'right' : 'center';
+    // سلول‌های غیرشکست‌خور روی یک خط می‌مانند و در صورت طولانی بودن (مقدار غیرمنتظره) با «...» کوتاه می‌شوند؛
+    // این باعث می‌شود html2canvas مجبور به شکستن خط وسط کلمه‌ی فارسی نشود (علت اصلی به‌هم‌ریختگی فونت)
+    const cellStyleFor = (i) => `padding:${CELL_PAD}; border:1px solid #ddd; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; direction:rtl; text-align:${alignOf(i)};`;
+    // ستون‌های شکست‌خور: حداکثر ۲ خط با «...» در انتهای خط دوم اگر باز هم بلندتر بود؛ هرگز روی ستون بعدی نمی‌افتد
+    const wrapCellStyleFor = (i) => `padding:${CELL_PAD}; border:1px solid #ddd; white-space:normal; overflow:hidden; text-overflow:ellipsis; direction:rtl; text-align:${alignOf(i)}; word-break:break-word; line-height:1.32; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;`;
+    const theadHtml = `<thead><tr style="background:#222; color:#fff;">${headers.map((h,i)=>`<th style="padding:${CELL_PAD}; text-align:${alignOf(i)}; border:1px solid #333; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(h)}</th>`).join('')}</tr></thead>`;
+    const rowHtml = (r) => `<tr style="background:${r.__i%2?'#f5f5f5':'#fff'};">${r.vals.map((v,i)=>`<td style="${wrapColIdxs.includes(i)?wrapCellStyleFor(i):cellStyleFor(i)}">${escapeHtml(v==null?'':String(v))}</td>`).join('')}</tr>`;
+    const dataRows = rows.map((vals,i) => ({ vals, __i:i }));
+
     // اندازه‌گیری ارتفاع واقعی هدر بزرگ، هدر کوچک، سرستون جدول، و تک‌تک ردیف‌ها (بدون عکس‌برداری، فقط DOM)
     holder.innerHTML = bigHeaderHtml;
     const bigHeaderPx = holder.getBoundingClientRect().height;
     holder.innerHTML = smallHeaderHtml(2);
     const smallHeaderPx = holder.getBoundingClientRect().height;
-    holder.innerHTML = `<table style="width:100%; table-layout:fixed; border-collapse:collapse; font-size:10.5px;">${colgroupHtml}${theadHtml}<tbody>${dataRows.map(rowHtml).join('')}</tbody></table>`;
+    holder.innerHTML = `<table style="width:100%; table-layout:fixed; border-collapse:collapse; font-size:${FONT_SIZE};">${colgroupHtml}${theadHtml}<tbody>${dataRows.map(rowHtml).join('')}</tbody></table>`;
     const table = holder.querySelector('table');
     const theadPx = table.querySelector('thead').getBoundingClientRect().height;
     const trEls = Array.from(table.querySelectorAll('tbody tr'));
@@ -2326,7 +2351,7 @@ async function renderPaginatedReportPdf({ reportTitle, extraHeaderHtml, headers,
       const chunk = dataRows.slice(start, start+count);
       holder.innerHTML = `
         ${pf ? bigHeaderHtml : smallHeaderHtml(p+1)}
-        <table style="width:100%; table-layout:fixed; border-collapse:collapse; font-size:10.5px;">${colgroupHtml}${theadHtml}<tbody>${chunk.map(rowHtml).join('')}</tbody></table>
+        <table style="width:100%; table-layout:fixed; border-collapse:collapse; font-size:${FONT_SIZE};">${colgroupHtml}${theadHtml}<tbody>${chunk.map(rowHtml).join('')}</tbody></table>
       `;
       // foreignObjectRendering:true یعنی به‌جای موتور رسم متن خودِ html2canvas (که ترکیب حروف فارسی رو
       // در برخی رشته‌ها اشتباه می‌چیند)، از موتور واقعی مرورگر برای رندر متن استفاده بشه — رفع اصلی به‌هم‌ریختگی فونت
