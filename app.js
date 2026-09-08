@@ -2286,29 +2286,42 @@ async function renderPaginatedReportPdf({ reportTitle, extraHeaderHtml, headers,
     // سقف عرض برای ستون‌های شکست‌خور (چون عرض طبیعی‌شان معمولاً خیلی زیاد است) تا کل جدول را نگیرند؛
     // باقی عرض بین ستون‌های غیرشکست‌خور متناسب با عرض طبیعی واقعی‌شان (نه مساوی) تقسیم می‌شود.
     const totalNatural = naturalPx.reduce((s,w)=>s+w,0) || 1;
+    const otherIdx = headers.map((_,i)=>i).filter(i => !wrapColIdxs.includes(i));
+    // به هر ستون غیرشکست‌خور (تاریخ، کد قلم، درصد و ...) یک حداقل عرض تضمینی می‌رسد تا هرگز آن‌قدر
+    // تنگ نشود که محتوایش بیرون بزند یا فشرده شود — حتی اگر ستون‌های شکست‌خور بخواهند سهم زیادی بگیرند.
+    const MIN_OTHER_PCT = 7;
+    const floorSum = otherIdx.length * MIN_OTHER_PCT;
     let wrapPct = wrapColIdxs.map(i => Math.min(26, +((naturalPx[i]/totalNatural)*100).toFixed(2)));
     let wrapPctSum = wrapPct.reduce((s,p)=>s+p,0);
-    if(wrapPctSum > 78){ // محافظ برای حالت نادر که چند ستون شکست‌خور هم‌زمان وجود دارند
-      const scale = 78/wrapPctSum;
+    if(wrapPctSum > 100 - floorSum){ // تضمین می‌کند همیشه فضای کف‌شده برای ستون‌های دیگر باقی بماند
+      const scale = (100 - floorSum) / wrapPctSum;
       wrapPct = wrapPct.map(p=>+(p*scale).toFixed(2));
       wrapPctSum = wrapPct.reduce((s,p)=>s+p,0);
     }
-    const otherIdx = headers.map((_,i)=>i).filter(i => !wrapColIdxs.includes(i));
     const otherNaturalSum = otherIdx.reduce((s,i)=>s+naturalPx[i],0) || 1;
     const remainPct = 100 - wrapPctSum;
+    const otherPctByIdx = {};
+    if(otherIdx.length){
+      const extra = Math.max(0, remainPct - floorSum);
+      otherIdx.forEach(i => { otherPctByIdx[i] = +(MIN_OTHER_PCT + (naturalPx[i]/otherNaturalSum)*extra).toFixed(2); });
+    }
     const colPct = headers.map((h,i) => {
       const wi = wrapColIdxs.indexOf(i);
-      return wi > -1 ? wrapPct[wi] : +((naturalPx[i]/otherNaturalSum) * remainPct).toFixed(2);
+      return wi > -1 ? wrapPct[wi] : otherPctByIdx[i];
     });
     const colgroupHtml = `<colgroup>${colPct.map(p=>`<col style="width:${p}%;">`).join('')}</colgroup>`;
 
     const alignOf = (i) => i === nameColIdx ? 'right' : 'center';
+    // box-sizing:border-box روی همه‌ی سلول‌ها تضمین می‌کند padding/border داخل همان درصدِ عرض تعیین‌شده جا شود
+    // و هرگز باعث بیرون‌زدگی یا جابه‌جایی ستون‌های کناری نشود.
+    const BOX = 'box-sizing:border-box;';
     // سلول‌های غیرشکست‌خور روی یک خط می‌مانند و در صورت طولانی بودن (مقدار غیرمنتظره) با «...» کوتاه می‌شوند؛
     // این باعث می‌شود html2canvas مجبور به شکستن خط وسط کلمه‌ی فارسی نشود (علت اصلی به‌هم‌ریختگی فونت)
-    const cellStyleFor = (i) => `padding:${CELL_PAD}; border:1px solid #ddd; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; direction:rtl; text-align:${alignOf(i)};`;
+    const cellStyleFor = (i) => `${BOX} padding:${CELL_PAD}; border:1px solid #ddd; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; direction:rtl; text-align:${alignOf(i)};`;
     // ستون‌های شکست‌خور: حداکثر ۲ خط با «...» در انتهای خط دوم اگر باز هم بلندتر بود؛ هرگز روی ستون بعدی نمی‌افتد
-    const wrapCellStyleFor = (i) => `padding:${CELL_PAD}; border:1px solid #ddd; white-space:normal; overflow:hidden; text-overflow:ellipsis; direction:rtl; text-align:${alignOf(i)}; word-break:break-word; line-height:1.32; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;`;
-    const theadHtml = `<thead><tr style="background:#222; color:#fff;">${headers.map((h,i)=>`<th style="padding:${CELL_PAD}; text-align:${alignOf(i)}; border:1px solid #333; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${escapeHtml(h)}</th>`).join('')}</tr></thead>`;
+    const wrapCellStyleFor = (i) => `${BOX} padding:${CELL_PAD}; border:1px solid #ddd; white-space:normal; overflow:hidden; text-overflow:ellipsis; direction:rtl; text-align:${alignOf(i)}; word-break:break-word; line-height:1.32; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;`;
+    // تیتر ستون‌ها هم اگر جا نشود به‌جای بریده/به‌هم‌ریخته شدن، در حداکثر ۲ خط می‌شکند (نه Ellipsis وسط عنوان)
+    const theadHtml = `<thead><tr style="background:#222; color:#fff;">${headers.map((h,i)=>`<th style="${BOX} padding:${CELL_PAD}; text-align:${alignOf(i)}; border:1px solid #333; white-space:normal; word-break:break-word; line-height:1.3; overflow:hidden; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;">${escapeHtml(h)}</th>`).join('')}</tr></thead>`;
     const rowHtml = (r) => `<tr style="background:${r.__i%2?'#f5f5f5':'#fff'};">${r.vals.map((v,i)=>`<td style="${wrapColIdxs.includes(i)?wrapCellStyleFor(i):cellStyleFor(i)}">${escapeHtml(v==null?'':String(v))}</td>`).join('')}</tr>`;
     const dataRows = rows.map((vals,i) => ({ vals, __i:i }));
 
@@ -2667,10 +2680,10 @@ async function exportPDF(){
         ${kpi('در انتظار تحویل به مالک', stats.waitingDelivery)}
         ${kpi('میانگین پیشرفت', stats.avgProgress+'٪')}
       </div>`;
-    const headers = ['نام قرارداد','کد قلم','تاریخ قرارداد','سررسید اصلی','سررسید جبرانی','مرحله فعلی','پیشرفت','وضعیت زمانی','وضعیت'];
+    const headers = ['نام قرارداد','کد قلم','تاریخ قرارداد','سررسید اصلی','سررسید جبرانی','مرحله فعلی','پیشرفت','وضعیت زمانی'];
     const tableRows = rows.map(r => [
       r['نام قرارداد'], r['کد قلم'], r['تاریخ قرارداد'], r['سررسید اصلی'], r['سررسید جبرانی'],
-      r['مرحله فعلی'], r['درصد پیشرفت کل'], r['وضعیت زمانی'], r['وضعیت']
+      r['مرحله فعلی'], r['درصد پیشرفت کل'], r['وضعیت زمانی']
     ]);
     await renderPaginatedReportPdf({
       reportTitle: 'گزارش افراچوب — PMO',
