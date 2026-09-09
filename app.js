@@ -1138,6 +1138,7 @@ function renderViewer(el){
           <option value="active" ${exportScope==='active'?'selected':''}>فقط خاتمه‌نیافته</option>
           <option value="closed" ${exportScope==='closed'?'selected':''}>فقط خاتمه‌یافته</option>
           <option value="waiting" ${exportScope==='waiting'?'selected':''}>فقط در انتظار تحویل‌دهی</option>
+          <option value="pmoSpecial" ${exportScope==='pmoSpecial'?'selected':''}>🌟 فقط قراردادهای خاص</option>
         </select>
       </div>
     </div>
@@ -1209,18 +1210,36 @@ function renderViewerSectionBody(){
   if(viewerSection === 'pmoSpecial'){
     if(myRole === 'pmoDeputy'){ body.innerHTML = ''; viewerSection = null; return; }
     const items = computeViewerStats().pmSpecialList;
-    const finRows = items.map(c => {
+    const finItemsHtml = items.map(c => {
       const f = getContractFinance(c);
-      return `<div class="field-row"><label>${escapeHtml(c.name)}:</label><span style="font-family:'JetBrains Mono',monospace; color:var(--ink-soft);">${formatToman(f.total)} ریال ${f.total?(f.isFinal?'(فاکتور نهایی)':'(فاکتور اولیه)'):''}</span></div>`;
+      return `
+        <div class="pmo-fin-item">
+          <div class="pmo-fin-name">${escapeHtml(c.name)}</div>
+          <div class="pmo-fin-nums">
+            <div class="pmo-fin-line"><span>قیمت جنس</span><span>${formatToman(f.material)} ریال</span></div>
+            <div class="pmo-fin-line"><span>قیمت اجرت نصب</span><span>${formatToman(f.labor)} ریال</span></div>
+            <div class="pmo-fin-line total"><span>جمع قرارداد</span><span>${formatToman(f.total)} ریال</span></div>
+          </div>
+          <span class="pmo-fin-tag ${f.isFinal?'':'soft'}">${f.isFinal?'فاکتور نهایی':'فاکتور اولیه'}</span>
+        </div>`;
     }).join('');
-    const grandTotal = items.reduce((sum,c) => sum + getContractFinance(c).total, 0);
+    const totalMaterial = items.reduce((sum,c) => sum + getContractFinance(c).material, 0);
+    const totalLabor = items.reduce((sum,c) => sum + getContractFinance(c).labor, 0);
     body.innerHTML = `
       <div class="section-title" style="margin-top:18px;">🌟 قراردادهای خاص <span class="cnt">${items.length} مورد</span></div>
       <div class="viewer-report-note">قراردادهایی که مدیر برای نمایش در این بخش انتخاب کرده — همراه خلاصه مالی و وضعیت پیشرفت هرکدام.</div>
       <div class="chart-box" style="margin-bottom:14px;">
         <div class="chart-title">خلاصه مالی</div>
-        ${finRows || '<div class="empty">موردی انتخاب نشده.</div>'}
-        ${items.length ? `<div class="field-row" style="margin-top:6px;"><label>جمع کل:</label><span style="font-family:'JetBrains Mono',monospace; color:var(--ink); font-weight:700;">${formatToman(grandTotal)} ریال</span></div>` : ''}
+        ${finItemsHtml || '<div class="empty">موردی انتخاب نشده.</div>'}
+        ${items.length ? `
+        <div class="pmo-fin-item pmo-fin-grand">
+          <div class="pmo-fin-name">جمع کل</div>
+          <div class="pmo-fin-nums">
+            <div class="pmo-fin-line"><span>جمع کل قیمت جنس</span><span>${formatToman(totalMaterial)} ریال</span></div>
+            <div class="pmo-fin-line"><span>جمع کل قیمت اجرت نصب</span><span>${formatToman(totalLabor)} ریال</span></div>
+            <div class="pmo-fin-line total"><span>جمع کل (جنس + اجرت)</span><span>${formatToman(totalMaterial+totalLabor)} ریال</span></div>
+          </div>
+        </div>` : ''}
       </div>
       <div class="section-title" style="margin-top:6px;">وضعیت پیشرفت</div>
       <div id="viewerList"></div>`;
@@ -2061,6 +2080,7 @@ function renderAdminContracts(){
           <option value="active" ${exportScope==='active'?'selected':''}>فقط فعال (بدون خاتمه)</option>
           <option value="closed" ${exportScope==='closed'?'selected':''}>فقط خاتمه‌یافته</option>
           <option value="waiting" ${exportScope==='waiting'?'selected':''}>فقط در انتظار تحویل‌دهی</option>
+          <option value="pmoSpecial" ${exportScope==='pmoSpecial'?'selected':''}>🌟 فقط قراردادهای خاص</option>
         </select>
       </div>
       <div class="row2">
@@ -2115,6 +2135,7 @@ function getExportContracts(){
   if(exportScope === 'active') list = list.filter(c => !isCompleted(c));
   else if(exportScope === 'closed') list = list.filter(isCompleted);
   else if(exportScope === 'waiting') list = list.filter(c => !isCompleted(c) && getDisplayStageIndex(c) === DISPLAY_STAGES.length-2);
+  else if(exportScope === 'pmoSpecial') list = list.filter(c => c.pmSpecial);
 
   const fromStr = (exportDateFrom||'').trim();
   const toStr = (exportDateTo||'').trim();
@@ -2166,7 +2187,7 @@ function reportFileName(ext){
 }
 
 function exportScopeLabel(){
-  const map = { all:'همه قراردادها', active:'فقط فعال (بدون خاتمه)', closed:'فقط خاتمه‌یافته', waiting:'فقط در انتظار تحویل‌دهی' };
+  const map = { all:'همه قراردادها', active:'فقط فعال (بدون خاتمه)', closed:'فقط خاتمه‌یافته', waiting:'فقط در انتظار تحویل‌دهی', pmoSpecial:'🌟 فقط قراردادهای خاص' };
   let label = map[exportScope] || 'همه قراردادها';
   if(exportDateFrom || exportDateTo) label += ' — بازه‌ی تاریخ قرارداد: ' + (exportDateFrom||'ابتدا') + ' تا ' + (exportDateTo||'انتها');
   return label;
