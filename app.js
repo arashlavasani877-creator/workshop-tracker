@@ -1079,7 +1079,8 @@ function computeViewerStats(){
   const nearList = active.filter(c => viewerCriticalStatus(c).cls === 'warn');
   const panelWaitList = active.filter(isPanelWaiting);
   const waitingDeliveryList = active.filter(c => getDisplayStageIndex(c) === DISPLAY_STAGES.length-2);
-  return { active, completed, avgProgress, criticalList, nearList, panelWaitList, waitingDeliveryList };
+  const pmSpecialList = contracts.filter(c => c.pmSpecial);
+  return { active, completed, avgProgress, criticalList, nearList, panelWaitList, waitingDeliveryList, pmSpecialList };
 }
 
 function renderViewer(el){
@@ -1117,6 +1118,7 @@ function renderViewer(el){
       <button class="${viewerSection==='waitingdelivery'?'active':''}" onclick="switchViewerSection('waitingdelivery')">📦 در انتظار تحویل‌دهی به مالک ${s.waitingDeliveryList.length?('('+s.waitingDeliveryList.length+')'):''}</button>
       <button class="${viewerSection==='all'?'active':''}" onclick="switchViewerSection('all')">📋 همه قراردادها (${contracts.length})</button>
       ${myRole === 'pmoDeputy' ? '' : `
+      <button class="${viewerSection==='pmoSpecial'?'active':''}" onclick="switchViewerSection('pmoSpecial')">🌟 قراردادهای خاص ${s.pmSpecialList.length?('('+s.pmSpecialList.length+')'):''}</button>
       <div class="viewer-quicklinks-split">
         <button class="${viewerSection==='contact'?'active':''}" onclick="switchViewerSection('contact')">✉️ ارتباط با کنترل پروژه ${pmMessagesUnseenCountForViewer()?('('+pmMessagesUnseenCountForViewer()+')'):''}</button>
         <button class="${viewerSection==='mycomments'?'active':''}" onclick="switchViewerSection('mycomments')">💬 کامنت‌های من ${myCommentsUnseenCount()?('('+myCommentsUnseenCount()+')'):''}</button>
@@ -1168,10 +1170,11 @@ function viewerSectionContracts(){
   if(viewerSection === 'active') return s.active;
   if(viewerSection === 'closed') return s.completed;
   if(viewerSection === 'all') return contracts.slice();
+  if(viewerSection === 'pmoSpecial') return s.pmSpecialList;
   return [];
 }
 function viewerSectionTitle(){
-  return { critical:'قراردادهای بحرانی', panelwait:'منتظر نصب صفحه کابینت', waitingdelivery:'در انتظار تحویل‌دهی به مالک', active:'قراردادهای خاتمه نیافته', closed:'قراردادهای خاتمه‌یافته', all:'همه قراردادها' }[viewerSection] || '';
+  return { critical:'قراردادهای بحرانی', panelwait:'منتظر نصب صفحه کابینت', waitingdelivery:'در انتظار تحویل‌دهی به مالک', active:'قراردادهای خاتمه نیافته', closed:'قراردادهای خاتمه‌یافته', all:'همه قراردادها', pmoSpecial:'قراردادهای خاص' }[viewerSection] || '';
 }
 function renderViewerSectionBody(){
   const body = document.getElementById('viewerSectionBody');
@@ -1201,6 +1204,27 @@ function renderViewerSectionBody(){
       <div class="section-title" style="margin-top:18px;">💬 کامنت‌های من</div>
       <div class="viewer-report-note">کامنت‌هایی که روی هر قرارداد گذاشته‌اید و جواب‌هایی که به آن‌ها داده شده، اینجا نمایش داده می‌شود.</div>
       ${renderMyCommentsHtml()}`;
+    return;
+  }
+  if(viewerSection === 'pmoSpecial'){
+    if(myRole === 'pmoDeputy'){ body.innerHTML = ''; viewerSection = null; return; }
+    const items = computeViewerStats().pmSpecialList;
+    const finRows = items.map(c => {
+      const f = getContractFinance(c);
+      return `<div class="field-row"><label>${escapeHtml(c.name)}:</label><span style="font-family:'JetBrains Mono',monospace; color:var(--ink-soft);">${formatToman(f.total)} ریال ${f.total?(f.isFinal?'(فاکتور نهایی)':'(فاکتور اولیه)'):''}</span></div>`;
+    }).join('');
+    const grandTotal = items.reduce((sum,c) => sum + getContractFinance(c).total, 0);
+    body.innerHTML = `
+      <div class="section-title" style="margin-top:18px;">🌟 قراردادهای خاص <span class="cnt">${items.length} مورد</span></div>
+      <div class="viewer-report-note">قراردادهایی که مدیر برای نمایش در این بخش انتخاب کرده — همراه خلاصه مالی و وضعیت پیشرفت هرکدام.</div>
+      <div class="chart-box" style="margin-bottom:14px;">
+        <div class="chart-title">خلاصه مالی</div>
+        ${finRows || '<div class="empty">موردی انتخاب نشده.</div>'}
+        ${items.length ? `<div class="field-row" style="margin-top:6px;"><label>جمع کل:</label><span style="font-family:'JetBrains Mono',monospace; color:var(--ink); font-weight:700;">${formatToman(grandTotal)} ریال</span></div>` : ''}
+      </div>
+      <div class="section-title" style="margin-top:6px;">وضعیت پیشرفت</div>
+      <div id="viewerList"></div>`;
+    renderViewerSectionList();
     return;
   }
   const filtersHtml = viewerSection === 'all' ? `
@@ -3178,6 +3202,14 @@ function renderCard(c, isAdmin, forceOpen){
       <button class="field-save" onclick="saveRevisedDueDate('${c.id}')">ثبت</button>
     </div>`;
 
+  const pmSpecialFieldHtml = isAdmin ? `
+    <div class="field-row">
+      <label style="display:flex; align-items:center; gap:6px; cursor:pointer;">
+        <input type="checkbox" ${c.pmSpecial ? 'checked' : ''} onchange="togglePmSpecialContract('${c.id}', this.checked)" style="margin:0;">
+        نمایش در «قراردادهای خاص» پنل مدیر پروژه
+      </label>
+    </div>` : '';
+
   const nameFieldHtml = isAdmin ? `
     <div class="field-row text">
       <label>نام قرارداد:</label>
@@ -3257,6 +3289,7 @@ function renderCard(c, isAdmin, forceOpen){
         ${sched ? `<span class="schedule-tag">${sched}</span>` : ''}
       </div>`}
       <div class="body-panel ${isOpen ? 'open' : ''}">
+        ${pmSpecialFieldHtml}
         ${nameFieldHtml}
         ${dueFieldHtml}
         ${revDueFieldHtml}
@@ -3394,6 +3427,14 @@ async function toggleArchiveContract(id, checked){
   const label = checked ? 'قرارداد بایگانی شد' : 'قرارداد از بایگانی خارج شد';
   const history = ((c && c.history) || []).concat([historyEntry(label)]);
   await db.collection('contracts').doc(id).update({ archived: checked, history });
+  logActivity(label, id, c && c.name, '');
+}
+async function togglePmSpecialContract(id, checked){
+  if(!db) return;
+  const c = contracts.concat(archivedContracts).find(x => x.id === id);
+  const label = checked ? 'قرارداد به «قراردادهای خاص» مدیر پروژه اضافه شد' : 'قرارداد از «قراردادهای خاص» مدیر پروژه حذف شد';
+  const history = ((c && c.history) || []).concat([historyEntry(label)]);
+  await db.collection('contracts').doc(id).update({ pmSpecial: checked, history });
   logActivity(label, id, c && c.name, '');
 }
 async function saveInitialPrices(id){
