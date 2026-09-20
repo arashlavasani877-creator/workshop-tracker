@@ -23,7 +23,8 @@ let contracts = [];
 let archivedContracts = []; // قراردادهای بایگانی‌شده — جدا از «contracts»، در همه‌ی پنل‌ها پیش‌فرض جمع‌شده
 let usersList = [];
 let openCardId = null;
-let adminTab = 'dashboard';   // 'dashboard' | 'contracts' | 'users' | 'log' | 'plans'
+let adminTab = 'dashboard';   // صفحه‌ی فعال در پنل مدیر؛ از Navigation پنج‌بخشی استفاده می‌کند
+let adminKanbanStage = 0;     // فقط وضعیت نمایشی Kanban؛ هیچ چیزی در Firestore نوشته نمی‌شود
 let supervisorTab = 'contracts'; // 'contracts' | 'warnings' | 'closed' — V8، دست‌نخورده
 let dataSubscribed = false;
 let historyOpen = {};         // id -> bool
@@ -1353,31 +1354,27 @@ function renderAdmin(el){
   const alertCount = adminAlerts().length;
   const pmoUnseen = pmoUnseenCount();
   const pmMsgUnseen = pmMessagesUnseenCountForAdmin();
+  const activeSection = adminSectionForTab(adminTab);
   el.innerHTML = `
-    <div class="toolbar">
-      <button class="btn-primary" onclick="openAddModal()">+ قرارداد جدید</button>
-      <button class="btn-secondary" onclick="openNotifications()">🔔 هشدارها ${alertCount ? '('+alertCount+')' : ''}</button>
+    <div class="admin-shell">
+      ${renderAdminSectionNav(activeSection, { pendingCount, alertCount, pmoUnseen, pmMsgUnseen })}
+      <div id="adminBody"></div>
+      <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
+      <nav class="admin-bottom-nav" aria-label="ناوبری پنل مدیر">
+        <button class="${activeSection==='home'?'active':''}" onclick="switchAdminSection('home')"><span>⌂</span>خانه</button>
+        <button class="${activeSection==='contracts'?'active':''}" onclick="switchAdminSection('contracts')"><span>▤</span>قراردادها</button>
+        <button class="${activeSection==='kanban'?'active':''}" onclick="switchAdminSection('kanban')"><span>▦</span>کانبان</button>
+        <button class="${activeSection==='reports'?'active':''}" onclick="switchAdminSection('reports')"><span>▥</span>گزارش‌ها</button>
+        <button class="${activeSection==='more'?'active':''}" onclick="switchAdminSection('more')"><span>•••</span>بیشتر</button>
+      </nav>
     </div>
-    <div class="toolbar"><button id="mgmtSummaryBtn" class="btn-primary" onclick="exportManagementSummaryPdf()">📱 خلاصه مدیریتی (اشتراک‌گذاری)</button></div>
-    <div class="toolbar"><button class="btn-primary" onclick="switchAdminTab('financial')">💰 گزارش مالی</button></div>
-    <div class="toolbar"><button id="installBtn" class="btn-secondary" onclick="installApp()">نصب اپلیکیشن روی گوشی</button></div>
-    <div class="tabs">
-      <button class="${adminTab==='dashboard'?'active':''}" onclick="switchAdminTab('dashboard')">داشبورد</button>
-      <button class="${adminTab==='contracts'?'active':''}" onclick="switchAdminTab('contracts')">مدیریت قراردادها</button>
-      <button class="${adminTab==='users'?'active':''}" onclick="switchAdminTab('users')">کاربران ${pendingCount?('('+pendingCount+')'):''}</button>
-      <button class="${adminTab==='plans'?'active':''}" onclick="switchAdminTab('plans')">برنامه قراردادها</button>
-    </div>
-    <div class="tabs" style="margin-top:8px;">
-      <button class="${adminTab==='log'?'active':''}" onclick="switchAdminTab('log')">لاگ سیستم</button>
-      <button class="${adminTab==='pmoComments'?'active':''}" onclick="switchAdminTab('pmoComments')">💬 کامنت‌های مدیر پروژه ${pmoUnseen?('('+pmoUnseen+')'):''}</button>
-      <button class="${adminTab==='pmoMessages'?'active':''}" onclick="switchAdminTab('pmoMessages')">✉️ ارتباط با مدیر ${pmMsgUnseen?('('+pmMsgUnseen+')'):''}</button>
-    </div>
-    <div id="adminBody"></div>
-    <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
   `;
-  document.getElementById('installBtn').style.display = window.__deferredPrompt ? 'block' : 'none';
+  const installBtn = document.getElementById('installBtn');
+  if(installBtn) installBtn.style.display = window.__deferredPrompt ? 'block' : 'none';
   if(adminTab === 'dashboard') renderAdminDashboard();
+  else if(adminTab === 'kanban') renderAdminKanban();
   else if(adminTab === 'financial') renderAdminFinancial();
+  else if(adminTab === 'exports') renderAdminExports();
   else if(adminTab === 'contracts') renderAdminContracts();
   else if(adminTab === 'plans') renderAdminPlans();
   else if(adminTab === 'log') renderAdminLog();
@@ -1393,6 +1390,128 @@ function renderAdmin(el){
   } else renderAdminUsers();
 }
 function switchAdminTab(t){ adminTab = t; renderApp(); }
+
+function adminSectionForTab(tab){
+  if(tab === 'dashboard') return 'home';
+  if(tab === 'contracts' || tab === 'plans') return 'contracts';
+  if(tab === 'kanban') return 'kanban';
+  if(tab === 'financial' || tab === 'exports') return 'reports';
+  return 'more';
+}
+function switchAdminSection(section){
+  const defaultTabs = { home:'dashboard', contracts:'contracts', kanban:'kanban', reports:'financial', more:'users' };
+  if(defaultTabs[section]) switchAdminTab(defaultTabs[section]);
+}
+function renderAdminSectionNav(section, counts){
+  if(section === 'home') return `
+    <div class="admin-home-actions">
+      <button class="admin-action-primary" onclick="openAddModal()"><span>＋</span><b>قرارداد جدید</b></button>
+      <button onclick="openNotifications()"><span>🔔</span><b>هشدارها${counts.alertCount ? ' ('+counts.alertCount+')' : ''}</b></button>
+      <button id="mgmtSummaryBtn" onclick="exportManagementSummaryPdf()"><span>📱</span><b>خلاصه مدیریتی</b></button>
+    </div>`;
+  if(section === 'contracts') return `
+    <div class="admin-section-nav">
+      <button class="${adminTab==='contracts'?'active':''}" onclick="switchAdminTab('contracts')">مدیریت قراردادها</button>
+      <button class="${adminTab==='plans'?'active':''}" onclick="switchAdminTab('plans')">برنامه قراردادها</button>
+    </div>`;
+  if(section === 'reports') return `
+    <div class="admin-section-nav admin-report-actions">
+      <button class="${adminTab==='financial'?'active':''}" onclick="switchAdminTab('financial')">گزارش مالی</button>
+      <button class="${adminTab==='exports'?'active':''}" onclick="switchAdminTab('exports')">خروجی‌ها</button>
+      <button id="mgmtSummaryBtn" onclick="exportManagementSummaryPdf()">خلاصه مدیریتی</button>
+    </div>`;
+  if(section === 'more') return `
+    <div class="admin-hub-grid">
+      <button class="${adminTab==='users'?'active':''}" onclick="switchAdminTab('users')"><span>👥</span>کاربران${counts.pendingCount ? ' ('+counts.pendingCount+')' : ''}</button>
+      <button class="${adminTab==='log'?'active':''}" onclick="switchAdminTab('log')"><span>🧾</span>لاگ سیستم</button>
+      <button class="${adminTab==='pmoComments'?'active':''}" onclick="switchAdminTab('pmoComments')"><span>💬</span>کامنت‌های مدیر پروژه${counts.pmoUnseen ? ' ('+counts.pmoUnseen+')' : ''}</button>
+      <button class="${adminTab==='pmoMessages'?'active':''}" onclick="switchAdminTab('pmoMessages')"><span>✉️</span>ارتباط با مدیر${counts.pmMsgUnseen ? ' ('+counts.pmMsgUnseen+')' : ''}</button>
+      <button id="installBtn" onclick="installApp()"><span>📲</span>نصب اپلیکیشن</button>
+    </div>`;
+  return '';
+}
+
+function selectAdminKanbanStage(index){
+  if(index < 0 || index >= DISPLAY_STAGES.length) return;
+  adminKanbanStage = index;
+  renderAdminKanban();
+}
+function renderAdminKanban(){
+  const body = document.getElementById('adminBody');
+  if(!body) return;
+  const stageCounts = DISPLAY_STAGES.map((name, index) => contracts.filter(c => getDisplayStageIndex(c) === index).length);
+  const items = contracts.filter(c => getDisplayStageIndex(c) === adminKanbanStage);
+  body.innerHTML = `
+    <div class="admin-kanban-head">
+      <div>
+        <div class="section-title">کانبان قراردادها</div>
+        <div class="admin-kanban-note">نمای فقط‌خواندنی بر اساس وضعیت فعلی قراردادها</div>
+      </div>
+      <span class="admin-kanban-count">${items.length} قرارداد</span>
+    </div>
+    <div class="admin-kanban-stages" role="tablist" aria-label="مراحل قرارداد">
+      ${DISPLAY_STAGES.map((name,index) => `
+        <button role="tab" aria-selected="${adminKanbanStage===index?'true':'false'}" class="${adminKanbanStage===index?'active':''}" onclick="selectAdminKanbanStage(${index})">
+          <span>${name}</span><b>${stageCounts[index]}</b>
+        </button>`).join('')}
+    </div>
+    <div class="admin-kanban-list">
+      ${items.length ? items.map(renderAdminKanbanCard).join('') : '<div class="empty">در این مرحله قراردادی وجود ندارد.</div>'}
+    </div>`;
+  const activeStage = body.querySelector('.admin-kanban-stages button.active');
+  if(activeStage) activeStage.scrollIntoView({ behavior:'smooth', inline:'center', block:'nearest' });
+}
+function renderAdminKanbanCard(c){
+  const pct = overallPercent(c);
+  const time = adminTimeStatus(c);
+  const timeClass = time.cls === 'late' ? 'late' : (time.cls === 'near' ? 'warn' : (time.cls === 'none' ? 'none' : 'ok'));
+  const dueLabel = c.revisedDueDate ? 'سررسید جبرانی' : 'سررسید';
+  const dueValue = c.revisedDueDate || c.dueDate || 'ثبت نشده';
+  return `
+    <button class="admin-kanban-card" onclick="openContractDetail('${c.id}')">
+      <div class="admin-kanban-card-top">
+        <div class="admin-kanban-card-title">
+          <strong>${escapeHtml(c.name)}</strong>
+          <span>${c.itemCode ? 'کد قلم: '+escapeHtml(c.itemCode) : 'بدون کد قلم'}</span>
+        </div>
+        <span class="admin-kanban-percent">${pct}٪</span>
+      </div>
+      <div class="admin-kanban-progress"><span style="width:${pct}%"></span></div>
+      <div class="admin-kanban-meta">
+        <span>${dueLabel}: ${escapeHtml(dueValue)}</span>
+        <span class="due-tag ${timeClass}">${escapeHtml(time.label)}</span>
+      </div>
+    </button>`;
+}
+
+function renderAdminExports(){
+  const body = document.getElementById('adminBody');
+  if(!body) return;
+  body.innerHTML = `
+    <div class="section-title" style="margin-top:14px;">خروجی قراردادها</div>
+    <div class="export-filters">
+      <div class="row1">
+        <select id="exportScopeSelect" class="admin-select" onchange="onExportScopeChange(this.value)">
+          <option value="all" ${exportScope==='all'?'selected':''}>همه قراردادها</option>
+          <option value="active" ${exportScope==='active'?'selected':''}>فقط فعال (بدون خاتمه)</option>
+          <option value="closed" ${exportScope==='closed'?'selected':''}>فقط خاتمه‌یافته</option>
+          <option value="waiting" ${exportScope==='waiting'?'selected':''}>فقط در انتظار تحویل‌دهی</option>
+          <option value="pmoSpecial" ${exportScope==='pmoSpecial'?'selected':''}>🌟 فقط قراردادهای خاص</option>
+        </select>
+      </div>
+      <div class="row2">
+        <div class="date-field"><label>از تاریخ قرارداد:</label>
+          <input type="text" id="exportFromInput" placeholder="1405/01/01" value="${escapeHtml(exportDateFrom)}" oninput="onExportDateFrom(this.value)"></div>
+        <div class="date-field"><label>تا:</label>
+          <input type="text" id="exportToInput" placeholder="1405/12/29" value="${escapeHtml(exportDateTo)}" oninput="onExportDateTo(this.value)"></div>
+      </div>
+    </div>
+    <div class="export-row">
+      <button class="export-btn" id="exportExcelBtn" onclick="exportExcel()">📊 خروجی اکسل</button>
+      <button class="export-btn" id="exportPdfBtn" onclick="exportPDF()">📄 خروجی PDF</button>
+    </div>
+    <div class="admin-only-note">این بخش از همان داده‌ها، فیلترها و توابع خروجی موجود استفاده می‌کند.</div>`;
+}
 
 function computeDashboardStats(){
   const active = contracts.filter(c => !isCompleted(c));

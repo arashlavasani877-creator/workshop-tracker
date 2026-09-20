@@ -233,6 +233,50 @@
   .kpi-blue .kpi-num{ color:var(--teal); }
   .admin-select{ flex:1; font-family:'Vazirmatn'; font-size:12.5px; padding:9px 8px; border-radius:8px; border:1px solid var(--line); background:var(--panel-2); color:var(--ink); }
 
+  /* ---- Navigation و Kanban فقط برای پنل مدیر ---- */
+  .admin-shell{ padding-bottom:calc(76px + env(safe-area-inset-bottom)); }
+  .admin-bottom-nav{ position:fixed; z-index:20; right:50%; transform:translateX(50%); bottom:0; width:min(640px,100%); display:grid; grid-template-columns:repeat(5,1fr); gap:2px; padding:7px 8px calc(7px + env(safe-area-inset-bottom)); background:color-mix(in srgb,var(--panel) 94%,transparent); border-top:1px solid var(--line); box-shadow:0 -8px 24px rgba(0,0,0,.2); backdrop-filter:blur(14px); }
+  .admin-bottom-nav button{ min-width:0; border:0; background:transparent; color:var(--ink-soft); font-family:'Vazirmatn'; font-size:10px; font-weight:700; border-radius:9px; padding:5px 2px; cursor:pointer; }
+  .admin-bottom-nav button span{ display:block; height:21px; font-family:'JetBrains Mono',monospace; font-size:17px; line-height:19px; }
+  .admin-bottom-nav button.active{ color:var(--amber); background:var(--amber-dim); }
+  .admin-home-actions{ display:grid; grid-template-columns:repeat(3,1fr); gap:8px; margin:14px 0 4px; }
+  .admin-home-actions button{ min-width:0; min-height:76px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:12px; font-family:'Vazirmatn'; font-size:11px; cursor:pointer; }
+  .admin-home-actions button span{ font-size:20px; }
+  .admin-home-actions button b{ font-weight:800; line-height:1.4; }
+  .admin-home-actions .admin-action-primary{ background:var(--amber-dim); color:var(--amber); border-color:var(--amber); }
+  .admin-section-nav{ display:flex; gap:7px; margin:14px 0 4px; overflow-x:auto; scrollbar-width:none; }
+  .admin-section-nav::-webkit-scrollbar{ display:none; }
+  .admin-section-nav button{ flex:1 0 auto; border:1px solid var(--line); border-radius:10px; background:var(--panel); color:var(--ink-soft); padding:10px 14px; font-family:'Vazirmatn'; font-size:12px; font-weight:700; cursor:pointer; }
+  .admin-section-nav button.active{ color:var(--amber); border-color:var(--amber); background:var(--amber-dim); }
+  .admin-hub-grid{ display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px; margin:14px 0 4px; }
+  .admin-hub-grid button{ min-height:70px; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px; background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:12px; font-family:'Vazirmatn'; font-size:11.5px; font-weight:700; cursor:pointer; }
+  .admin-hub-grid button span{ font-size:20px; }
+  .admin-hub-grid button.active{ color:var(--amber); border-color:var(--amber); background:var(--amber-dim); }
+  .admin-kanban-head{ display:flex; align-items:flex-end; justify-content:space-between; gap:12px; margin-top:14px; }
+  .admin-kanban-head .section-title{ margin:0 0 3px; }
+  .admin-kanban-note{ color:var(--ink-soft); font-size:10.5px; }
+  .admin-kanban-count{ flex-shrink:0; color:var(--amber); background:var(--amber-dim); border-radius:20px; padding:5px 9px; font-family:'JetBrains Mono',monospace; font-size:10px; }
+  .admin-kanban-stages{ display:flex; gap:7px; margin:14px -14px 12px; padding:0 14px 4px; overflow-x:auto; scroll-snap-type:x proximity; scrollbar-width:none; }
+  .admin-kanban-stages::-webkit-scrollbar{ display:none; }
+  .admin-kanban-stages button{ scroll-snap-align:center; flex:0 0 auto; display:flex; align-items:center; gap:7px; background:var(--panel); color:var(--ink-soft); border:1px solid var(--line); border-radius:20px; padding:8px 11px; font-family:'Vazirmatn'; font-size:11px; font-weight:700; cursor:pointer; white-space:nowrap; }
+  .admin-kanban-stages button b{ min-width:20px; height:20px; display:inline-flex; align-items:center; justify-content:center; background:var(--panel-2); border-radius:10px; color:var(--ink); font-family:'JetBrains Mono',monospace; font-size:9.5px; }
+  .admin-kanban-stages button.active{ color:var(--amber); border-color:var(--amber); background:var(--amber-dim); }
+  .admin-kanban-stages button.active b{ background:var(--amber); color:#191300; }
+  .admin-kanban-list{ display:flex; flex-direction:column; gap:10px; }
+  .admin-kanban-card{ width:100%; text-align:right; background:var(--panel); color:var(--ink); border:1px solid var(--line); border-radius:13px; padding:13px 14px; font-family:'Vazirmatn'; cursor:pointer; }
+  .admin-kanban-card:active{ transform:scale(.99); }
+  .admin-kanban-card-top{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; }
+  .admin-kanban-card-title{ min-width:0; display:flex; flex-direction:column; gap:3px; }
+  .admin-kanban-card-title strong{ font-size:14px; word-break:break-word; }
+  .admin-kanban-card-title span{ color:var(--ink-soft); font-family:'JetBrains Mono',monospace; font-size:9.5px; }
+  .admin-kanban-percent{ flex-shrink:0; color:var(--teal); font-family:'JetBrains Mono',monospace; font-size:13px; font-weight:700; }
+  .admin-kanban-progress{ height:5px; margin:11px 0; overflow:hidden; background:var(--line); border-radius:3px; }
+  .admin-kanban-progress span{ display:block; height:100%; background:var(--teal); border-radius:3px; }
+  .admin-kanban-meta{ display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:7px; color:var(--ink-soft); font-size:10.5px; }
+  @media (min-width:641px){
+    .admin-bottom-nav{ border-inline:1px solid var(--line); border-radius:14px 14px 0 0; }
+  }
+
   /* ---- پنل مدیر پروژه (Viewer) ---- */
   .viewer-hero{ display:flex; align-items:center; gap:14px; background:linear-gradient(135deg, var(--teal-dim), var(--panel)); border:1px solid var(--line); border-radius:16px; padding:16px; margin:14px 0 4px; }
   .viewer-hero img{ width:46px; height:46px; border-radius:12px; background:#fff; padding:5px; flex-shrink:0; }
