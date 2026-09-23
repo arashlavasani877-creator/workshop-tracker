@@ -662,10 +662,15 @@ function initAuthAndData(){
         }
       }
       ref.onSnapshot((doc) => {
-        myRole = doc.exists ? doc.data().role : 'pending';
-        myPosition = doc.exists ? (doc.data().position || '') : '';
+        const nextRole = doc.exists ? doc.data().role : 'pending';
+        const nextPosition = doc.exists ? (doc.data().position || '') : '';
+        const accessChanged = nextRole !== myRole || nextPosition !== myPosition;
+        myRole = nextRole;
+        myPosition = nextPosition;
         ensureDataSubscriptions();
-        renderApp();
+        // heartbeat فقط lastSeen را تغییر می‌دهد؛ برای آن کل صفحه نباید دوباره ساخته شود.
+        // رندر کامل فقط وقتی نقش یا عنوان کاربر واقعاً تغییر کرده باشد انجام می‌شود.
+        if(accessChanged) renderApp();
       }, (e) => {
         authErrorMsg = 'خطا در همگام‌سازی حساب: ' + ((e&&e.code)?e.code+' — ':'') + (e&&e.message?e.message:String(e));
         renderApp();
@@ -711,7 +716,7 @@ function stopPresenceHeartbeat(){
 // دوباره رندر می‌کنه تا «آنلاین/آخرین بازدید» با گذر زمان واقعی هماهنگ بمونه.
 setInterval(() => {
   if(myRole === 'admin' && adminTab === 'users' && document.visibilityState === 'visible'){
-    renderApp();
+    renderAppPreservingInputs();
   }
 }, PRESENCE_UI_REFRESH_MS);
 function isUserOnline(u){
@@ -725,6 +730,49 @@ function fmtLastSeen(ts){
   const diffH = Math.round(diffMin / 60);
   if(diffH < 24) return 'آخرین بازدید: ' + diffH + ' ساعت پیش';
   return 'آخرین بازدید: ' + Math.round(diffH / 24) + ' روز پیش';
+}
+
+// رندرهای پس‌زمینه‌ی Firestore نباید نوشته‌ی درحال‌ورود کاربر را پاک کنند.
+// قبل از رندر، مقدار فیلدهای دارای id ذخیره می‌شود و بلافاصله بعد از رندر برمی‌گردد.
+function renderAppPreservingInputs(){
+  const active = document.activeElement;
+  const activeId = active && active.id ? active.id : '';
+  let selectionStart = null;
+  let selectionEnd = null;
+  try{
+    if(active && typeof active.selectionStart === 'number'){
+      selectionStart = active.selectionStart;
+      selectionEnd = active.selectionEnd;
+    }
+  }catch(e){}
+
+  const states = {};
+  document.querySelectorAll('input[id]:not([type="file"]), textarea[id], select[id]').forEach(el => {
+    states[el.id] = {
+      value: el.value,
+      checked: ('checked' in el) ? !!el.checked : null
+    };
+  });
+
+  renderApp();
+
+  Object.keys(states).forEach(id => {
+    const el = document.getElementById(id);
+    if(!el) return;
+    const st = states[id];
+    if(st.checked !== null && 'checked' in el) el.checked = st.checked;
+    if(el.value !== st.value) el.value = st.value;
+  });
+
+  if(activeId){
+    const restored = document.getElementById(activeId);
+    if(restored){
+      try{ restored.focus({ preventScroll:true }); }catch(e){ try{ restored.focus(); }catch(_){} }
+      if(selectionStart !== null && typeof restored.setSelectionRange === 'function'){
+        try{ restored.setSelectionRange(selectionStart, selectionEnd); }catch(e){}
+      }
+    }
+  }
 }
 
 function ensureDataSubscriptions(){
@@ -745,35 +793,36 @@ function ensureDataSubscriptions(){
     contracts = all.filter(c => !c.archived);
     archivedContracts = all.filter(c => c.archived);
     setStatus('همگام — لحظه‌ای', true);
-    renderApp();
+    renderAppPreservingInputs();
   }, (err) => setStatus('خطا: ' + err.message, false));
 
   if(myRole === 'admin'){
     db.collection('users').orderBy('requestedAt','desc').onSnapshot((snap) => {
       usersList = snap.docs.map(d => ({ id:d.id, ...d.data() }));
-      renderApp();
+      // lastSeen کاربران مرتب تغییر می‌کند؛ بیرون از تب کاربران نیازی به بازسازی کل صفحه نیست.
+      if(adminTab === 'users') renderAppPreservingInputs();
     }, (err) => setStatus('خطا در کاربران: ' + err.message, false));
 
     db.collection('activityLog').orderBy('time','desc').limit(300).onSnapshot((snap) => {
       activityLog = snap.docs.map(d => ({ id:d.id, ...d.data() }));
-      if(adminTab === 'log') renderApp();
+      if(adminTab === 'log') renderAppPreservingInputs();
     }, () => { /* اگه قوانین Firestore هنوز آپدیت نشده باشه، فقط لاگ کار نمی‌کنه؛ بقیه‌ی اپ دست‌نخورده می‌مونه */ });
 
     db.collection('pmNotes').orderBy('time','desc').limit(200).onSnapshot((snap) => {
       pmNotes = snap.docs.map(d => ({ id:d.id, ...d.data() }));
-      renderApp();
+      renderAppPreservingInputs();
     }, () => { /* اگه قوانین هنوز آپدیت نشده، فقط این بخش کار نمی‌کنه */ });
   }
   if(myRole === 'viewer'){
     db.collection('pmNotes').where('byUid','==', currentUser.uid).onSnapshot((snap) => {
       pmNotesA = snap.docs.map(d => ({ id:d.id, ...d.data() }));
       mergePmNotesAB();
-      renderApp();
+      renderAppPreservingInputs();
     }, () => {});
     db.collection('pmNotes').where('toUid','==', currentUser.uid).onSnapshot((snap) => {
       pmNotesB = snap.docs.map(d => ({ id:d.id, ...d.data() }));
       mergePmNotesAB();
-      renderApp();
+      renderAppPreservingInputs();
     }, () => {});
   }
 }
@@ -1714,7 +1763,7 @@ function ensureMaterialPurchaseDefaultFilter(){
   if(materialPurchaseYearFilter) return;
   const now = materialPurchaseCurrentJalali();
   materialPurchaseYearFilter = String(now.year);
-  materialPurchaseMonthFilter = String(now.month);
+  materialPurchaseMonthFilter = 'all';
 }
 function sortMaterialPurchases(){
   materialPurchases.sort((a,b) =>
@@ -1727,16 +1776,33 @@ async function ensureMaterialPurchasesLoaded(){
   if(myRole !== 'admin' || !db || materialPurchasesLoaded || materialPurchasesLoading) return;
   materialPurchasesLoading = true;
   materialPurchasesError = '';
-  try{
-    const snap = await db.collection('materialPurchases').get();
+
+  const applySnapshot = (snap) => {
     materialPurchases = snap.docs.map(d => ({ id:d.id, ...d.data() }));
     sortMaterialPurchases();
     materialPurchasesLoaded = true;
+  };
+
+  try{
+    // ابتدا کش محلی Firestore را می‌خوانیم تا بخش خرید متریال بدون انتظار شبکه باز شود.
+    // اگر کش در دسترس نبود، مستقیم سراغ سرور می‌رویم.
+    try{
+      const cachedSnap = await db.collection('materialPurchases').get({ source:'cache' });
+      applySnapshot(cachedSnap);
+      if(myRole === 'admin' && adminTab === 'financial') renderAppPreservingInputs();
+    }catch(e){}
+
+    // سپس نسخه‌ی تازه‌ی سرور را می‌گیریم تا داده‌ی نمایش‌داده‌شده حتماً همگام باشد.
+    const serverSnap = await db.collection('materialPurchases').get({ source:'server' });
+    applySnapshot(serverSnap);
   }catch(err){
-    materialPurchasesError = (err && err.message) ? err.message : String(err);
+    // اگر کش قبلاً با موفقیت نمایش داده شده، خطای موقت شبکه نباید آن را از بین ببرد.
+    if(!materialPurchasesLoaded){
+      materialPurchasesError = (err && err.message) ? err.message : String(err);
+    }
   }finally{
     materialPurchasesLoading = false;
-    if(myRole === 'admin' && adminTab === 'financial') renderAdminFinancial();
+    if(myRole === 'admin' && adminTab === 'financial') renderAppPreservingInputs();
   }
 }
 function materialPurchaseToEnglishDigits(v){
@@ -1843,11 +1909,10 @@ async function saveMaterialPurchase(){
     sortMaterialPurchases();
     materialPurchasesLoaded = true;
     materialPurchaseYearFilter = String(year);
-    materialPurchaseMonthFilter = String(month);
+    materialPurchaseMonthFilter = 'all';
     materialPurchaseFormOpen = false;
     materialPurchaseEditId = null;
     renderAdminFinancial();
-    alert('ثبت شد ✓');
   }catch(err){
     alert('خطا در ثبت خرید متریال: ' + ((err && err.message) ? err.message : String(err)));
   }finally{
@@ -1873,7 +1938,6 @@ async function deleteMaterialPurchase(id){
       materialPurchaseFormOpen = false;
     }
     renderAdminFinancial();
-    alert('حذف شد ✓');
   }catch(err){
     alert('خطا در حذف خرید متریال: ' + ((err && err.message) ? err.message : String(err)));
   }
