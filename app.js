@@ -19,6 +19,9 @@ let presenceInterval = null;
 let currentUser = null;
 let myRole = null;
 let myPosition = '';
+// حالت پیش‌نمایش پنل‌ها فقط برای Admin است؛ نقش واقعی کاربر در Firestore تغییر نمی‌کند.
+// با Refresh/بستن برنامه این مقدار از بین می‌رود و اکانت دوباره در پنل مدیر باز می‌شود.
+let adminPreviewRole = null;
 let contracts = [];
 let archivedContracts = []; // قراردادهای بایگانی‌شده — جدا از «contracts»، در همه‌ی پنل‌ها پیش‌فرض جمع‌شده
 let usersList = [];
@@ -656,6 +659,7 @@ function initAuthAndData(){
       financialCardSettingsError = '';
       financialCardEditMode = false;
       financialCardDraggedId = null;
+      adminPreviewRole = null;
       stopPresenceHeartbeat();
       if(!user){ myRole = null; myPosition = ''; renderApp(); return; }
       const ref = db.collection('users').doc(user.uid);
@@ -879,7 +883,11 @@ function signUp(){
     renderApp();
   });
 }
-function signOutUser(){ auth.signOut(); }
+function signOutUser(){
+  if(!auth) return;
+  if(!confirm('آیا مطمئن هستید که می‌خواهید از حساب کاربری خارج شوید؟')) return;
+  auth.signOut();
+}
 
 /* ---------- Root render ---------- */
 function renderApp(){
@@ -908,11 +916,19 @@ function renderApp(){
     return;
   }
 
-  const badgeText = myPosition ? escapeHtml(myPosition) : roleFa(myRole);
+  const badgeText = adminPreviewRole
+    ? `مدیر · مشاهده ${roleFa(adminPreviewRole)}`
+    : (myPosition ? escapeHtml(myPosition) : roleFa(myRole));
   headerRight.innerHTML = `<div style="display:flex;align-items:center;">
       <span class="role-badge">${badgeText}</span>
       <button class="signout-btn" onclick="signOutUser()">خروج</button>
     </div>`;
+
+  // Admin می‌تواند محیط سایر پنل‌ها را بدون تغییر Role واقعی حساب ببیند.
+  if(myRole === 'admin' && adminPreviewRole){
+    renderAdminRolePreview(el, adminPreviewRole);
+    return;
+  }
 
   if(myRole === 'pending'){
     el.innerHTML = `
@@ -949,6 +965,56 @@ function renderApp(){
 
 function roleFa(r){
   return { admin:'مدیر', supervisor:'سرپرست نصب', viewer:'مدیر پروژه', afrachoobSupervisor:'سرپرست افراچوب', pmoDeputy:'معاونت PMO', pending:'در انتظار تایید', blocked:'مسدود' }[r] || r;
+}
+
+const ADMIN_PREVIEW_ROLES = ['supervisor', 'viewer', 'afrachoobSupervisor', 'pmoDeputy'];
+function openAdminPanelPreview(role){
+  if(myRole !== 'admin' || !ADMIN_PREVIEW_ROLES.includes(role)) return;
+  adminPreviewRole = role;
+  // هر پیش‌نمایش از صفحه‌ی اصلی همان پنل شروع می‌شود.
+  if(role === 'supervisor') supervisorTab = 'contracts';
+  if(role === 'afrachoobSupervisor') afrTab = 'dashboard';
+  if(role === 'viewer' || role === 'pmoDeputy') {
+    viewerSection = null;
+    viewerOpenId = null;
+  }
+  renderApp();
+}
+function exitAdminPanelPreview(){
+  if(myRole !== 'admin') return;
+  adminPreviewRole = null;
+  adminTab = 'panels';
+  renderApp();
+}
+function renderAdminRolePreview(el, role){
+  if(!ADMIN_PREVIEW_ROLES.includes(role)){
+    adminPreviewRole = null;
+    renderAdmin(el);
+    return;
+  }
+
+  // فقط هنگام ساخت HTML نقش ظاهری را عوض می‌کنیم و بلافاصله به admin برمی‌گردانیم.
+  // بنابراین Role واقعی کاربر، Auth و Firestore دست‌نخورده می‌مانند.
+  const actualRole = myRole;
+  try{
+    myRole = role;
+    if(role === 'supervisor') renderSupervisor(el);
+    else if(role === 'afrachoobSupervisor') renderAfrachoobSupervisor(el);
+    else renderViewer(el); // viewer و pmoDeputy از همین View مشترک استفاده می‌کنند.
+  }finally{
+    myRole = actualRole;
+  }
+
+  if(el){
+    el.insertAdjacentHTML('afterbegin', `
+      <div style="position:sticky;top:0;z-index:50;margin:0 0 12px;padding:10px 12px;border:1px solid var(--line);border-radius:12px;background:var(--panel);box-shadow:0 6px 18px rgba(0,0,0,.14);display:flex;align-items:center;justify-content:space-between;gap:10px;">
+        <div style="font-size:11px;line-height:1.6;">
+          <b>در حال مشاهده: پنل ${escapeHtml(roleFa(role))}</b>
+          <div style="color:var(--ink-soft);font-size:10px;">نقش واقعی حساب شما همچنان مدیر است.</div>
+        </div>
+        <button class="btn-secondary" style="width:auto;white-space:nowrap;padding:8px 10px;" onclick="exitAdminPanelPreview()">↩ بازگشت به پنل مدیر</button>
+      </div>`);
+  }
 }
 
 /* ---------- Shared: warnings list ---------- */
@@ -1460,6 +1526,7 @@ function renderAdmin(el){
   else if(adminTab === 'contracts') renderAdminContracts();
   else if(adminTab === 'plans') renderAdminPlans();
   else if(adminTab === 'log') renderAdminLog();
+  else if(adminTab === 'panels') renderAdminPanels();
   else if(adminTab === 'pmoComments'){
     document.getElementById('adminBody').innerHTML = renderPmoCommentsHtml();
     renderPmoCommentsList();
@@ -1508,9 +1575,25 @@ function renderAdminSectionNav(section, counts){
       <button class="${adminTab==='log'?'active':''}" onclick="switchAdminTab('log')"><span>🧾</span>لاگ سیستم</button>
       <button class="${adminTab==='pmoComments'?'active':''}" onclick="switchAdminTab('pmoComments')"><span>💬</span>کامنت‌های مدیر پروژه${counts.pmoUnseen ? ' ('+counts.pmoUnseen+')' : ''}</button>
       <button class="${adminTab==='pmoMessages'?'active':''}" onclick="switchAdminTab('pmoMessages')"><span>✉️</span>ارتباط با مدیر${counts.pmMsgUnseen ? ' ('+counts.pmMsgUnseen+')' : ''}</button>
+      <button class="${adminTab==='panels'?'active':''}" onclick="switchAdminTab('panels')"><span>🖥️</span>پنل‌ها</button>
       <button id="installBtn" onclick="installApp()"><span>📲</span>نصب اپلیکیشن</button>
     </div>`;
   return '';
+}
+
+function renderAdminPanels(){
+  const body = document.getElementById('adminBody');
+  if(!body) return;
+  body.innerHTML = `
+    <div class="section-title" style="margin-top:14px;">🖥️ پنل‌ها</div>
+    <div class="viewer-report-note">هر پنل را انتخاب کنید تا محیط همان نقش را ببینید. نقش واقعی حساب شما تغییر نمی‌کند و با Refresh برنامه هم دوباره به پنل مدیر برمی‌گردید.</div>
+    <div class="admin-hub-grid" style="margin-top:12px;">
+      <button onclick="switchAdminTab('dashboard')"><span>👑</span>پنل مدیر</button>
+      <button onclick="openAdminPanelPreview('supervisor')"><span>🛠️</span>سرپرست نصب</button>
+      <button onclick="openAdminPanelPreview('viewer')"><span>📋</span>مدیر پروژه</button>
+      <button onclick="openAdminPanelPreview('afrachoobSupervisor')"><span>🪵</span>سرپرست افراچوب</button>
+      <button onclick="openAdminPanelPreview('pmoDeputy')"><span>📊</span>معاونت PMO</button>
+    </div>`;
 }
 
 function selectAdminKanbanStage(index){
