@@ -39,6 +39,16 @@ let adminFinancialSearch = ''; // جستجو در لیست «گزارش مالی
 let finSectionOpen = { top:false, variance:false, all:false }; // دکمه‌ای‌بودن بخش‌های گزارش مالی
 let finFilterMonths = new Set(); // فیلتر گزارش مالی: مجموعه‌ی ماه‌های انتخاب‌شده («۱۴۰۳/۰۲») — خالی یعنی فیلتری فعال نیست (همه نمایش داده می‌شه)
 let finFilterOpen = false; // باز/بسته بودن پنل فیلتر گزارش مالی
+// خرید متریال ماهانه — فقط پنل مدیر؛ داده‌ها در Collection مستقل materialPurchases نگهداری می‌شوند.
+let materialPurchases = [];
+let materialPurchasesLoaded = false;
+let materialPurchasesLoading = false;
+let materialPurchasesError = '';
+let materialPurchaseYearFilter = '';
+let materialPurchaseMonthFilter = 'all';
+let materialPurchaseFormOpen = false;
+let materialPurchaseEditId = null;
+let materialPurchaseSaving = false;
 let supervisorSearchQuery = '';
 let viewerOpenId = null;
 let viewerSearchQuery = '';
@@ -623,6 +633,12 @@ function initAuthAndData(){
     auth.onAuthStateChanged(async (user) => {
       currentUser = user;
       dataSubscribed = false;
+      materialPurchases = [];
+      materialPurchasesLoaded = false;
+      materialPurchasesLoading = false;
+      materialPurchasesError = '';
+      materialPurchaseFormOpen = false;
+      materialPurchaseEditId = null;
       stopPresenceHeartbeat();
       if(!user){ myRole = null; myPosition = ''; renderApp(); return; }
       const ref = db.collection('users').doc(user.uid);
@@ -1689,12 +1705,299 @@ function computeFinancialStats(){
            monthly, activeValue, closedValue, availableMonths, filterActive };
 }
 
+
+function materialPurchaseCurrentJalali(){
+  const raw = formatJalaliDate(new Date()).split('/').map(Number);
+  return { year: raw[0] || 1405, month: raw[1] || 1 };
+}
+function ensureMaterialPurchaseDefaultFilter(){
+  if(materialPurchaseYearFilter) return;
+  const now = materialPurchaseCurrentJalali();
+  materialPurchaseYearFilter = String(now.year);
+  materialPurchaseMonthFilter = String(now.month);
+}
+function sortMaterialPurchases(){
+  materialPurchases.sort((a,b) =>
+    (Number(b.year)||0) - (Number(a.year)||0) ||
+    (Number(b.month)||0) - (Number(a.month)||0) ||
+    (Number(b.updatedAt||b.createdAt)||0) - (Number(a.updatedAt||a.createdAt)||0)
+  );
+}
+async function ensureMaterialPurchasesLoaded(){
+  if(myRole !== 'admin' || !db || materialPurchasesLoaded || materialPurchasesLoading) return;
+  materialPurchasesLoading = true;
+  materialPurchasesError = '';
+  try{
+    const snap = await db.collection('materialPurchases').get();
+    materialPurchases = snap.docs.map(d => ({ id:d.id, ...d.data() }));
+    sortMaterialPurchases();
+    materialPurchasesLoaded = true;
+  }catch(err){
+    materialPurchasesError = (err && err.message) ? err.message : String(err);
+  }finally{
+    materialPurchasesLoading = false;
+    if(myRole === 'admin' && adminTab === 'financial') renderAdminFinancial();
+  }
+}
+function materialPurchaseToEnglishDigits(v){
+  return String(v == null ? '' : v)
+    .replace(/[۰-۹]/g, d => '۰۱۲۳۴۵۶۷۸۹'.indexOf(d))
+    .replace(/[٠-٩]/g, d => '٠١٢٣٤٥٦٧٨٩'.indexOf(d));
+}
+function materialPurchaseAmountValue(v){
+  const normalized = materialPurchaseToEnglishDigits(v).replace(/[,\s٬،]/g,'');
+  const n = Number(normalized);
+  return Number.isFinite(n) ? Math.round(n) : 0;
+}
+function formatMaterialPurchaseAmountInput(el){
+  if(!el) return;
+  const raw = materialPurchaseAmountValue(el.value);
+  el.value = raw ? formatToman(raw) : '';
+}
+function materialPurchaseFilteredRows(){
+  ensureMaterialPurchaseDefaultFilter();
+  return materialPurchases.filter(p => {
+    const yOk = !materialPurchaseYearFilter || String(p.year) === String(materialPurchaseYearFilter);
+    const mOk = materialPurchaseMonthFilter === 'all' || String(p.month) === String(materialPurchaseMonthFilter);
+    return yOk && mOk;
+  });
+}
+function materialPurchaseAvailableYears(){
+  const now = materialPurchaseCurrentJalali();
+  const years = new Set([String(now.year)]);
+  materialPurchases.forEach(p => { if(p.year) years.add(String(p.year)); });
+  return Array.from(years).sort((a,b) => Number(b)-Number(a));
+}
+function materialPurchaseSupplierSummary(rows){
+  const map = {};
+  rows.forEach(p => {
+    const key = (p.supplierName || 'بدون نام').trim() || 'بدون نام';
+    map[key] = (map[key] || 0) + (Number(p.amount)||0);
+  });
+  return Object.entries(map).sort((a,b) => b[1]-a[1]);
+}
+function materialPurchaseMonthLabel(month){
+  const idx = Number(month)-1;
+  return JALALI_MONTHS[idx] || 'ماه نامشخص';
+}
+function openMaterialPurchaseForm(id){
+  if(myRole !== 'admin') return;
+  materialPurchaseEditId = id || null;
+  materialPurchaseFormOpen = true;
+  renderAdminFinancial();
+  setTimeout(() => {
+    const el = document.getElementById('materialPurchaseFormCard');
+    if(el) el.scrollIntoView({behavior:'smooth', block:'center'});
+  }, 0);
+}
+function closeMaterialPurchaseForm(){
+  materialPurchaseFormOpen = false;
+  materialPurchaseEditId = null;
+  renderAdminFinancial();
+}
+function setMaterialPurchaseYear(v){
+  materialPurchaseYearFilter = String(v || '');
+  renderAdminFinancial();
+}
+function setMaterialPurchaseMonth(v){
+  materialPurchaseMonthFilter = String(v || 'all');
+  renderAdminFinancial();
+}
+async function saveMaterialPurchase(){
+  if(myRole !== 'admin' || !db || !currentUser || materialPurchaseSaving) return;
+  const supplierName = (document.getElementById('materialSupplierInput')?.value || '').trim();
+  const amount = materialPurchaseAmountValue(document.getElementById('materialAmountInput')?.value || '');
+  const year = Number(materialPurchaseToEnglishDigits(document.getElementById('materialYearInput')?.value || ''));
+  const month = Number(document.getElementById('materialMonthInput')?.value || 0);
+  const note = (document.getElementById('materialNoteInput')?.value || '').trim();
+  if(!supplierName){ alert('نام تأمین‌کننده را وارد کنید.'); return; }
+  if(!amount || amount < 0){ alert('مبلغ خرید را به‌صورت عدد معتبر وارد کنید.'); return; }
+  if(!Number.isInteger(year) || year < 1300 || year > 1600){ alert('سال شمسی معتبر وارد کنید. مثال: 1405'); return; }
+  if(!Number.isInteger(month) || month < 1 || month > 12){ alert('ماه را انتخاب کنید.'); return; }
+
+  materialPurchaseSaving = true;
+  const saveBtn = document.getElementById('materialPurchaseSaveBtn');
+  if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = 'در حال ثبت...'; }
+  try{
+    const now = Date.now();
+    if(materialPurchaseEditId){
+      const patch = {
+        supplierName, amount, year, month, note,
+        updatedAt: now,
+        updatedBy: currentUser.uid
+      };
+      await db.collection('materialPurchases').doc(materialPurchaseEditId).update(patch);
+      const idx = materialPurchases.findIndex(p => p.id === materialPurchaseEditId);
+      if(idx >= 0) materialPurchases[idx] = { ...materialPurchases[idx], ...patch };
+    }else{
+      const data = {
+        supplierName, amount, year, month, note,
+        createdBy: currentUser.uid,
+        createdAt: now,
+        updatedBy: currentUser.uid,
+        updatedAt: now
+      };
+      const ref = await db.collection('materialPurchases').add(data);
+      materialPurchases.push({ id:ref.id, ...data });
+    }
+    sortMaterialPurchases();
+    materialPurchasesLoaded = true;
+    materialPurchaseYearFilter = String(year);
+    materialPurchaseMonthFilter = String(month);
+    materialPurchaseFormOpen = false;
+    materialPurchaseEditId = null;
+    renderAdminFinancial();
+    alert('ثبت شد ✓');
+  }catch(err){
+    alert('خطا در ثبت خرید متریال: ' + ((err && err.message) ? err.message : String(err)));
+  }finally{
+    materialPurchaseSaving = false;
+    const btn = document.getElementById('materialPurchaseSaveBtn');
+    if(btn){ btn.disabled = false; btn.textContent = 'ثبت خرید'; }
+  }
+}
+function renderMaterialPurchasesSection(){
+  if(myRole !== 'admin') return '';
+  ensureMaterialPurchaseDefaultFilter();
+
+  if(materialPurchasesLoading && !materialPurchasesLoaded){
+    return `
+      <div class="chart-box" style="margin-top:18px;">
+        <div class="chart-title">🧾 خرید متریال ماهانه</div>
+        <div class="empty">در حال دریافت خریدهای ثبت‌شده...</div>
+      </div>`;
+  }
+  if(materialPurchasesError && !materialPurchasesLoaded){
+    return `
+      <div class="chart-box" style="margin-top:18px;">
+        <div class="chart-title">🧾 خرید متریال ماهانه</div>
+        <div class="viewer-report-note" style="border-inline-start-color:var(--red);">
+          این بخش هنوز به Firestore دسترسی ندارد. ابتدا Rule مربوط به materialPurchases را منتشر کنید.<br>
+          <span style="font-size:10px; opacity:.8;">${escapeHtml(materialPurchasesError)}</span>
+        </div>
+      </div>`;
+  }
+
+  const rows = materialPurchaseFilteredRows();
+  const total = rows.reduce((s,p) => s + (Number(p.amount)||0), 0);
+  const suppliers = materialPurchaseSupplierSummary(rows);
+  const years = materialPurchaseAvailableYears();
+  const editing = materialPurchaseEditId ? materialPurchases.find(p => p.id === materialPurchaseEditId) : null;
+  const now = materialPurchaseCurrentJalali();
+  const formYear = editing ? Number(editing.year) : Number(materialPurchaseYearFilter || now.year);
+  const formMonth = editing ? Number(editing.month) : Number(materialPurchaseMonthFilter === 'all' ? now.month : materialPurchaseMonthFilter);
+  const monthTitle = materialPurchaseMonthFilter === 'all'
+    ? `کل سال ${materialPurchaseYearFilter}`
+    : `${materialPurchaseMonthLabel(materialPurchaseMonthFilter)} ${materialPurchaseYearFilter}`;
+
+  return `
+    <div class="chart-box" style="margin-top:18px;">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+        <div>
+          <div class="chart-title" style="margin-bottom:3px;">🧾 خرید متریال ماهانه</div>
+          <div style="font-size:10.5px; color:var(--ink-soft);">ثبت تجمیعی خرید از تأمین‌کننده‌ها — فقط مدیر</div>
+        </div>
+        <button class="btn-primary" style="width:auto; padding:9px 14px;" onclick="openMaterialPurchaseForm()">+ ثبت خرید جدید</button>
+      </div>
+
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:14px;">
+        <div>
+          <label style="display:block; font-size:10px; color:var(--ink-soft); margin-bottom:5px;">سال</label>
+          <select class="admin-select" style="width:100%;" onchange="setMaterialPurchaseYear(this.value)">
+            ${years.map(y => `<option value="${y}" ${String(materialPurchaseYearFilter)===String(y)?'selected':''}>${y}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label style="display:block; font-size:10px; color:var(--ink-soft); margin-bottom:5px;">ماه</label>
+          <select class="admin-select" style="width:100%;" onchange="setMaterialPurchaseMonth(this.value)">
+            <option value="all" ${materialPurchaseMonthFilter==='all'?'selected':''}>همه ماه‌ها</option>
+            ${JALALI_MONTHS.map((m,i) => `<option value="${i+1}" ${String(materialPurchaseMonthFilter)===String(i+1)?'selected':''}>${m}</option>`).join('')}
+          </select>
+        </div>
+      </div>
+
+      <div class="kpi-grid" style="grid-template-columns:repeat(2,1fr); margin-top:12px;">
+        <div class="kpi-card kpi-amber">
+          <div class="kpi-num" style="font-size:14px; word-break:break-all;">${formatToman(total)}</div>
+          <div class="kpi-label">جمع خرید ${escapeHtml(monthTitle)} (ریال)</div>
+        </div>
+        <div class="kpi-card">
+          <div class="kpi-num">${rows.length}</div>
+          <div class="kpi-label">تعداد ثبت‌ها</div>
+        </div>
+      </div>
+
+      ${suppliers.length ? `
+      <div style="margin-top:12px;">
+        <div style="font-size:10.5px; color:var(--ink-soft); margin-bottom:7px;">تفکیک تأمین‌کننده</div>
+        <div style="display:flex; flex-wrap:wrap; gap:7px;">
+          ${suppliers.map(([name,amount]) => `
+            <span style="border:1px solid var(--line); background:var(--panel-2); border-radius:999px; padding:6px 9px; font-size:10.5px;">
+              <b>${escapeHtml(name)}</b> · ${formatToman(amount)}
+            </span>`).join('')}
+        </div>
+      </div>` : ''}
+
+      ${materialPurchaseFormOpen ? `
+      <div id="materialPurchaseFormCard" style="margin-top:14px; border:1px solid var(--amber); background:var(--panel-2); border-radius:12px; padding:12px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; gap:8px; margin-bottom:10px;">
+          <b>${editing ? 'ویرایش خرید' : 'ثبت خرید جدید'}</b>
+          <button class="btn-secondary" style="width:auto; padding:6px 10px;" onclick="closeMaterialPurchaseForm()">انصراف</button>
+        </div>
+        <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px;">
+          <div style="grid-column:1 / -1;">
+            <label style="display:block; font-size:10px; color:var(--ink-soft); margin-bottom:5px;">تأمین‌کننده</label>
+            <input id="materialSupplierInput" class="auth-input" style="max-width:none; width:100%;" value="${editing?escapeHtml(editing.supplierName||''):''}" placeholder="مثلاً ملونی یا پارسیان چوب">
+          </div>
+          <div style="grid-column:1 / -1;">
+            <label style="display:block; font-size:10px; color:var(--ink-soft); margin-bottom:5px;">مبلغ کل خرید (ریال)</label>
+            <input id="materialAmountInput" inputmode="numeric" class="auth-input" style="max-width:none; width:100%; direction:ltr; text-align:right;" value="${editing?formatToman(editing.amount):''}" placeholder="مثلاً 320,000,000" oninput="formatMaterialPurchaseAmountInput(this)">
+          </div>
+          <div>
+            <label style="display:block; font-size:10px; color:var(--ink-soft); margin-bottom:5px;">سال</label>
+            <input id="materialYearInput" inputmode="numeric" class="auth-input" style="max-width:none; width:100%;" value="${formYear}">
+          </div>
+          <div>
+            <label style="display:block; font-size:10px; color:var(--ink-soft); margin-bottom:5px;">ماه</label>
+            <select id="materialMonthInput" class="admin-select" style="width:100%;">
+              ${JALALI_MONTHS.map((m,i) => `<option value="${i+1}" ${Number(formMonth)===i+1?'selected':''}>${m}</option>`).join('')}
+            </select>
+          </div>
+          <div style="grid-column:1 / -1;">
+            <label style="display:block; font-size:10px; color:var(--ink-soft); margin-bottom:5px;">توضیح (اختیاری)</label>
+            <input id="materialNoteInput" class="auth-input" style="max-width:none; width:100%;" value="${editing?escapeHtml(editing.note||''):''}" placeholder="مثلاً خرید ورق MDF">
+          </div>
+        </div>
+        <button id="materialPurchaseSaveBtn" class="btn-primary" style="width:100%; margin-top:10px;" onclick="saveMaterialPurchase()">${editing?'ذخیره تغییرات':'ثبت خرید'}</button>
+      </div>` : ''}
+
+      <div style="margin-top:14px;">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:7px;">
+          <b style="font-size:11.5px;">خریدهای ثبت‌شده</b>
+          <span style="font-size:10px; color:var(--ink-soft);">${escapeHtml(monthTitle)}</span>
+        </div>
+        ${rows.length ? rows.map(p => `
+          <div class="warn-item" style="border-inline-start-color:var(--amber); align-items:center;">
+            <div style="min-width:0;">
+              <div class="warn-name">${escapeHtml(p.supplierName || '—')}</div>
+              <div class="warn-sub">${materialPurchaseMonthLabel(p.month)} ${p.year}${p.note ? ' — '+escapeHtml(p.note) : ''}</div>
+            </div>
+            <div style="display:flex; align-items:center; gap:7px; flex-shrink:0;">
+              <span class="warn-tag">${formatToman(p.amount)} ریال</span>
+              <button class="btn-secondary" style="width:auto; padding:6px 9px; font-size:10px;" onclick="openMaterialPurchaseForm('${p.id}')">ویرایش</button>
+            </div>
+          </div>`).join('') : '<div class="empty">برای این بازه خریدی ثبت نشده است.</div>'}
+      </div>
+    </div>`;
+}
+
 function renderAdminFinancial(){
   // این تابع برای هر دو پنل مدیر و مدیر پروژه استفاده می‌شود؛ مدیر پروژه فقط‌خواندنی می‌بیند (بدون امکان باز کردن فرم ویرایش)
   const finEditable = (myRole === 'admin');
   const body = document.getElementById(finEditable ? 'adminBody' : 'viewerSectionBody');
   if(!body) return;
   const st = computeFinancialStats();
+  if(finEditable) ensureMaterialPurchasesLoaded();
   const finRowOpen = (id) => finEditable ? ` onclick="openContractDetail('${id}')"` : '';
   const topList = st.rows.slice().filter(r => r.fin.total > 0).sort((a,b) => b.fin.total - a.fin.total).slice(0,5);
   const maxMonth = st.monthly.length ? Math.max(...st.monthly.map(m => m.value)) : 0;
@@ -1760,6 +2063,8 @@ function renderAdminFinancial(){
       <div class="kpi-card"><div class="kpi-num" style="font-size:13px; word-break:break-all; white-space:normal; line-height:1.3;">${formatToman(st.closedValue)}</div><div class="kpi-label">ارزش قراردادهای خاتمه‌یافته</div></div>
       <div class="kpi-card ${st.avgVariancePct>0?'kpi-red':''}" style="grid-column:1 / -1;"><div class="kpi-num">${st.varianceRows.length ? (st.avgVariancePct>0?'+':'')+st.avgVariancePct+'٪' : '—'}</div><div class="kpi-label">میانگین اختلاف فاکتور نهایی با اولیه</div></div>
     </div>
+
+    ${finEditable ? renderMaterialPurchasesSection() : ''}
 
     ${st.monthly.length ? `
     <div class="chart-box">
