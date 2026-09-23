@@ -49,6 +49,15 @@ let materialPurchaseMonthFilter = 'all';
 let materialPurchaseFormOpen = false;
 let materialPurchaseEditId = null;
 let materialPurchaseSaving = false;
+// چیدمان کارت‌های گزارش مالی مدیر — روی Firestore و وابسته به UID مدیر ذخیره می‌شود.
+let financialCardLayout = [];
+let financialCardDraftLayout = [];
+let financialCardSettingsLoaded = false;
+let financialCardSettingsLoading = false;
+let financialCardSettingsSaving = false;
+let financialCardSettingsError = '';
+let financialCardEditMode = false;
+let financialCardDraggedId = null;
 let supervisorSearchQuery = '';
 let viewerOpenId = null;
 let viewerSearchQuery = '';
@@ -639,6 +648,14 @@ function initAuthAndData(){
       materialPurchasesError = '';
       materialPurchaseFormOpen = false;
       materialPurchaseEditId = null;
+      financialCardLayout = [];
+      financialCardDraftLayout = [];
+      financialCardSettingsLoaded = false;
+      financialCardSettingsLoading = false;
+      financialCardSettingsSaving = false;
+      financialCardSettingsError = '';
+      financialCardEditMode = false;
+      financialCardDraggedId = null;
       stopPresenceHeartbeat();
       if(!user){ myRole = null; myPosition = ''; renderApp(); return; }
       const ref = db.collection('users').doc(user.uid);
@@ -1282,8 +1299,8 @@ function renderViewerSectionBody(){
         <div class="pmo-fin-item">
           <div class="pmo-fin-name">${escapeHtml(c.name)}</div>
           <div class="pmo-fin-nums">
-            <div class="pmo-fin-line"><span>قیمت جنس</span><span>${formatToman(f.material)} ریال</span></div>
-            <div class="pmo-fin-line"><span>قیمت اجرت نصب</span><span>${formatToman(f.labor)} ریال</span></div>
+            <div class="pmo-fin-line"><span>ارزش متریال</span><span>${formatToman(f.material)} ریال</span></div>
+            <div class="pmo-fin-line"><span>اجرت نصب</span><span>${formatToman(f.labor)} ریال</span></div>
             <div class="pmo-fin-line total"><span>جمع قرارداد</span><span>${formatToman(f.total)} ریال</span></div>
           </div>
           <span class="pmo-fin-tag ${f.isFinal?'':'soft'}">${f.isFinal?'فاکتور نهایی':'فاکتور اولیه'}</span>
@@ -1301,9 +1318,9 @@ function renderViewerSectionBody(){
         <div class="pmo-fin-item pmo-fin-grand">
           <div class="pmo-fin-name">جمع کل</div>
           <div class="pmo-fin-nums">
-            <div class="pmo-fin-line"><span>جمع کل قیمت جنس</span><span>${formatToman(totalMaterial)} ریال</span></div>
-            <div class="pmo-fin-line"><span>جمع کل قیمت اجرت نصب</span><span>${formatToman(totalLabor)} ریال</span></div>
-            <div class="pmo-fin-line total"><span>جمع کل (جنس + اجرت)</span><span>${formatToman(totalMaterial+totalLabor)} ریال</span></div>
+            <div class="pmo-fin-line"><span>جمع کل ارزش متریال</span><span>${formatToman(totalMaterial)} ریال</span></div>
+            <div class="pmo-fin-line"><span>جمع کل اجرت نصب</span><span>${formatToman(totalLabor)} ریال</span></div>
+            <div class="pmo-fin-line total"><span>جمع کل (متریال + اجرت)</span><span>${formatToman(totalMaterial+totalLabor)} ریال</span></div>
           </div>
         </div>` : ''}
       </div>
@@ -2078,13 +2095,304 @@ function renderMaterialPurchasesSection(){
     </div>`;
 }
 
+
+/* ---------- Admin financial cards: cloud-synced layout ----------
+   فقط تنظیمات نمایشی گزارش مالی در userSettings/{uid} ذخیره می‌شود؛
+   هیچ داده‌ی قرارداد، خرید، کاربر یا Auth در این بخش تغییر نمی‌کند. */
+const FINANCIAL_CARD_STATIC_META = {
+  totalValue:       { label:'ارزش کل قراردادها', cls:'kpi-blue' },
+  contractMaterial: { label:'ارزش متریال قراردادها', cls:'' },
+  totalLabor:       { label:'اجرت نصب', cls:'' },
+  realizedValue:    { label:'ارزش تحقق‌یافته (بر اساس پیشرفت)', cls:'kpi-amber' },
+  avgValue:         { label:'میانگین ارزش هر قرارداد', cls:'kpi-blue' },
+  closedValue:      { label:'ارزش قراردادهای خاتمه‌یافته', cls:'' },
+  activeValue:      { label:'ارزش قراردادهای باز', cls:'' },
+  withFinalCount:   { label:'دارای فاکتور نهایی', cls:'' },
+  avgVariance:      { label:'میانگین اختلاف فاکتور نهایی با اولیه', cls:'' },
+  purchaseTotal:    { label:'جمع خرید متریال', cls:'kpi-amber' },
+  purchaseCount:    { label:'تعداد خریدهای ثبت‌شده', cls:'' }
+};
+function financialSupplierCardId(name){
+  return 'supplier:' + encodeURIComponent(String(name || '').trim()).replace(/'/g,'%27');
+}
+function financialSupplierNameFromCardId(id){
+  if(!String(id || '').startsWith('supplier:')) return '';
+  try{ return decodeURIComponent(String(id).slice('supplier:'.length)); }
+  catch(e){ return String(id).slice('supplier:'.length); }
+}
+function financialDefaultCardLayout(){
+  // ترتیب آرایه در گرید RTL به‌صورت راست، چپ، راست، چپ ... دیده می‌شود.
+  // بنابراین ستون راست دقیقاً مطابق ترتیب درخواستی مدیر چیده شده است.
+  return [
+    'totalValue', 'purchaseTotal',
+    'contractMaterial', financialSupplierCardId('پارسیان چوب'),
+    'totalLabor', financialSupplierCardId('ملونی'),
+    'realizedValue', 'withFinalCount',
+    'avgValue', 'activeValue',
+    'closedValue', 'avgVariance'
+  ];
+}
+function normalizeFinancialCardLayout(layout){
+  if(!Array.isArray(layout)) return financialDefaultCardLayout();
+  const seen = new Set();
+  const out = [];
+  layout.forEach(raw => {
+    const id = String(raw || '');
+    const valid = !!FINANCIAL_CARD_STATIC_META[id] || id.startsWith('supplier:');
+    if(valid && !seen.has(id)){
+      seen.add(id);
+      out.push(id);
+    }
+  });
+  return out;
+}
+function financialActiveCardLayout(){
+  if(financialCardSettingsLoaded) return financialCardLayout.slice();
+  if(financialCardLayout.length) return financialCardLayout.slice();
+  return financialDefaultCardLayout();
+}
+function financialCardLabel(id){
+  if(FINANCIAL_CARD_STATIC_META[id]) return FINANCIAL_CARD_STATIC_META[id].label;
+  const supplier = financialSupplierNameFromCardId(id);
+  return supplier ? ('جمع ' + supplier) : 'کارت مالی';
+}
+function financialAvailableCardIds(){
+  const ids = Object.keys(FINANCIAL_CARD_STATIC_META);
+  const suppliers = new Set(['پارسیان چوب','ملونی']);
+  materialPurchases.forEach(p => {
+    const name = String((p && p.supplierName) || '').trim();
+    if(name) suppliers.add(name);
+  });
+  Array.from(suppliers).sort((a,b) => a.localeCompare(b,'fa')).forEach(name => ids.push(financialSupplierCardId(name)));
+  return ids;
+}
+function materialPurchaseMonthKey(p){
+  const year = Number(p && p.year);
+  const month = Number(p && p.month);
+  if(!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) return null;
+  return year + '/' + String(month).padStart(2,'0');
+}
+function financialFilteredMaterialPurchases(){
+  if(!finFilterMonths.size) return materialPurchases.slice();
+  return materialPurchases.filter(p => {
+    const key = materialPurchaseMonthKey(p);
+    return key && finFilterMonths.has(key);
+  });
+}
+async function ensureFinancialCardSettingsLoaded(){
+  if(myRole !== 'admin' || !db || !currentUser || financialCardSettingsLoaded || financialCardSettingsLoading) return;
+  financialCardSettingsLoading = true;
+  financialCardSettingsError = '';
+  const ref = db.collection('userSettings').doc(currentUser.uid);
+  const apply = (snap) => {
+    if(snap && snap.exists && Array.isArray(snap.data().financialCardLayout)){
+      financialCardLayout = normalizeFinancialCardLayout(snap.data().financialCardLayout);
+    }else if(!financialCardSettingsLoaded){
+      financialCardLayout = financialDefaultCardLayout();
+    }
+    financialCardSettingsLoaded = true;
+  };
+  try{
+    // کش فقط برای نمایش سریع‌تر؛ نسخه‌ی سرور مرجع نهایی است تا چیدمان دستگاه دیگر هم بیاید.
+    try{
+      const cached = await ref.get({ source:'cache' });
+      apply(cached);
+      if(myRole === 'admin' && adminTab === 'financial') renderAppPreservingInputs();
+    }catch(e){}
+    const fresh = await ref.get({ source:'server' });
+    apply(fresh);
+  }catch(err){
+    if(!financialCardSettingsLoaded){
+      financialCardLayout = financialDefaultCardLayout();
+      financialCardSettingsLoaded = true;
+    }
+    financialCardSettingsError = (err && err.message) ? err.message : String(err);
+  }finally{
+    financialCardSettingsLoading = false;
+    if(myRole === 'admin' && adminTab === 'financial') renderAppPreservingInputs();
+  }
+}
+function openFinancialCardManager(){
+  if(myRole !== 'admin') return;
+  financialCardDraftLayout = financialActiveCardLayout();
+  financialCardEditMode = true;
+  financialCardSettingsError = '';
+  renderAdminFinancial();
+}
+function closeFinancialCardManager(){
+  financialCardEditMode = false;
+  financialCardDraftLayout = [];
+  financialCardDraggedId = null;
+  renderAdminFinancial();
+}
+function moveFinancialCard(id, delta){
+  if(!financialCardEditMode) return;
+  const idx = financialCardDraftLayout.indexOf(id);
+  const next = idx + Number(delta || 0);
+  if(idx < 0 || next < 0 || next >= financialCardDraftLayout.length) return;
+  const copy = financialCardDraftLayout.slice();
+  [copy[idx], copy[next]] = [copy[next], copy[idx]];
+  financialCardDraftLayout = copy;
+  renderAdminFinancial();
+}
+function removeFinancialCard(id){
+  if(!financialCardEditMode) return;
+  financialCardDraftLayout = financialCardDraftLayout.filter(x => x !== id);
+  renderAdminFinancial();
+}
+function addFinancialCard(id){
+  if(!financialCardEditMode || !id || financialCardDraftLayout.includes(id)) return;
+  financialCardDraftLayout = financialCardDraftLayout.concat(id);
+  renderAdminFinancial();
+}
+function addFinancialCardFromSelect(){
+  const el = document.getElementById('financialCardAddSelect');
+  if(el && el.value) addFinancialCard(el.value);
+}
+function resetFinancialCardDraft(){
+  if(!financialCardEditMode) return;
+  financialCardDraftLayout = financialDefaultCardLayout();
+  renderAdminFinancial();
+}
+function startFinancialCardDrag(ev, id){
+  if(!financialCardEditMode) return;
+  financialCardDraggedId = id;
+  try{ ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', id); }catch(e){}
+}
+function dropFinancialCard(ev, targetId){
+  if(!financialCardEditMode) return;
+  if(ev) ev.preventDefault();
+  const sourceId = financialCardDraggedId;
+  financialCardDraggedId = null;
+  if(!sourceId || sourceId === targetId) return;
+  const sourceIdx = financialCardDraftLayout.indexOf(sourceId);
+  const targetIdx = financialCardDraftLayout.indexOf(targetId);
+  if(sourceIdx < 0 || targetIdx < 0) return;
+  const copy = financialCardDraftLayout.slice();
+  copy.splice(sourceIdx, 1);
+  const adjustedTarget = copy.indexOf(targetId);
+  copy.splice(adjustedTarget, 0, sourceId);
+  financialCardDraftLayout = copy;
+  renderAdminFinancial();
+}
+async function saveFinancialCardLayout(){
+  if(myRole !== 'admin' || !db || !currentUser || financialCardSettingsSaving) return;
+  financialCardSettingsSaving = true;
+  financialCardSettingsError = '';
+  const layout = normalizeFinancialCardLayout(financialCardDraftLayout);
+  try{
+    await db.collection('userSettings').doc(currentUser.uid).set({
+      financialCardLayout: layout,
+      updatedAt: Date.now()
+    });
+    financialCardLayout = layout.slice();
+    financialCardSettingsLoaded = true;
+    financialCardEditMode = false;
+    financialCardDraftLayout = [];
+    renderAdminFinancial();
+  }catch(err){
+    financialCardSettingsError = (err && err.message) ? err.message : String(err);
+    renderAdminFinancial();
+  }finally{
+    financialCardSettingsSaving = false;
+  }
+}
+function financialCardValue(id, st, purchaseRows){
+  const money = (n) => formatToman(Number(n) || 0);
+  if(id === 'totalValue') return money(st.totalValue);
+  if(id === 'contractMaterial') return money(st.totalMaterial);
+  if(id === 'totalLabor') return money(st.totalLabor);
+  if(id === 'realizedValue') return money(st.realizedValue);
+  if(id === 'avgValue') return money(st.avgValue);
+  if(id === 'closedValue') return money(st.closedValue);
+  if(id === 'activeValue') return money(st.activeValue);
+  if(id === 'withFinalCount') return st.withFinalCount + ' / ' + st.totalCount;
+  if(id === 'avgVariance') return st.varianceRows.length ? ((st.avgVariancePct>0?'+':'') + st.avgVariancePct + '٪') : '—';
+  if(id === 'purchaseTotal'){
+    if(!materialPurchasesLoaded) return materialPurchasesError ? '—' : '…';
+    return money(purchaseRows.reduce((s,p) => s + (Number(p.amount)||0), 0));
+  }
+  if(id === 'purchaseCount'){
+    if(!materialPurchasesLoaded) return materialPurchasesError ? '—' : '…';
+    return String(purchaseRows.length);
+  }
+  const supplier = financialSupplierNameFromCardId(id);
+  if(supplier){
+    if(!materialPurchasesLoaded) return materialPurchasesError ? '—' : '…';
+    return money(purchaseRows.filter(p => String(p.supplierName||'').trim() === supplier).reduce((s,p) => s + (Number(p.amount)||0), 0));
+  }
+  return '—';
+}
+function renderFinancialCard(id, st, purchaseRows){
+  const meta = FINANCIAL_CARD_STATIC_META[id] || { label:financialCardLabel(id), cls:'' };
+  const extraCls = id === 'avgVariance' && st.avgVariancePct > 0 ? ' kpi-red' : (meta.cls ? ' ' + meta.cls : '');
+  return `<div class="kpi-card${extraCls}">
+    <div class="kpi-num" style="font-size:13px; word-break:break-all; white-space:normal; line-height:1.3;">${financialCardValue(id, st, purchaseRows)}</div>
+    <div class="kpi-label">${escapeHtml(meta.label || financialCardLabel(id))}</div>
+  </div>`;
+}
+function renderFinancialCards(st){
+  const layout = financialActiveCardLayout();
+  const purchaseRows = financialFilteredMaterialPurchases();
+  if(!layout.length) return '<div class="empty" style="margin-top:12px;">هیچ کارت مالی فعالی انتخاب نشده است. از «مدیریت کارت‌ها» کارت اضافه کنید.</div>';
+  return `<div class="kpi-grid" style="grid-template-columns:repeat(2,1fr);">${layout.map(id => renderFinancialCard(id, st, purchaseRows)).join('')}</div>`;
+}
+function renderViewerFinancialCards(st){
+  const ids = ['totalValue','avgValue','contractMaterial','totalLabor','realizedValue','withFinalCount','activeValue','closedValue','avgVariance'];
+  return `<div class="kpi-grid" style="grid-template-columns:repeat(2,1fr);">${ids.map(id => renderFinancialCard(id, st, [])).join('')}</div>`;
+}
+function renderFinancialCardManager(){
+  if(myRole !== 'admin' || !financialCardEditMode) return '';
+  const layout = financialCardDraftLayout.slice();
+  const hidden = financialAvailableCardIds().filter(id => !layout.includes(id));
+  return `
+    <div class="chart-box" style="margin-top:12px; border-color:var(--amber);">
+      <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
+        <div>
+          <div class="chart-title" style="margin-bottom:3px;">⚙️ مدیریت کارت‌های مالی</div>
+          <div style="font-size:10.5px; color:var(--ink-soft);">ترتیب از راست به چپ و سپس ردیف بعدی است. چیدمان روی حساب مدیر ذخیره می‌شود.</div>
+        </div>
+        <button class="btn-secondary" style="width:auto; padding:7px 10px;" onclick="closeFinancialCardManager()">انصراف</button>
+      </div>
+
+      <div style="margin-top:10px; display:grid; gap:7px;">
+        ${layout.length ? layout.map((id,idx) => `
+          <div draggable="true" ondragstart="startFinancialCardDrag(event,'${id}')" ondragover="event.preventDefault()" ondrop="dropFinancialCard(event,'${id}')"
+               style="display:flex; align-items:center; gap:7px; border:1px solid var(--line); border-radius:9px; padding:8px; background:var(--panel-2);">
+            <span style="font-family:'JetBrains Mono',monospace; font-size:10px; opacity:.65; min-width:24px;">${idx+1}</span>
+            <span style="flex:1; font-size:11px; font-weight:700;">↕ ${escapeHtml(financialCardLabel(id))}</span>
+            <button class="btn-secondary" style="width:auto; padding:5px 8px;" onclick="moveFinancialCard('${id}',-1)" ${idx===0?'disabled':''}>↑</button>
+            <button class="btn-secondary" style="width:auto; padding:5px 8px;" onclick="moveFinancialCard('${id}',1)" ${idx===layout.length-1?'disabled':''}>↓</button>
+            <button class="btn-secondary" style="width:auto; padding:5px 8px; color:var(--red);" onclick="removeFinancialCard('${id}')">مخفی</button>
+          </div>`).join('') : '<div class="empty">همه کارت‌ها مخفی شده‌اند.</div>'}
+      </div>
+
+      <div style="display:flex; gap:7px; margin-top:10px; align-items:center;">
+        <select id="financialCardAddSelect" class="admin-select" style="flex:1; min-width:0;">
+          <option value="">افزودن کارت...</option>
+          ${hidden.map(id => `<option value="${id}">${escapeHtml(financialCardLabel(id))}</option>`).join('')}
+        </select>
+        <button class="btn-secondary" style="width:auto; padding:8px 10px;" onclick="addFinancialCardFromSelect()" ${hidden.length?'':'disabled'}>+ افزودن</button>
+      </div>
+
+      ${financialCardSettingsError ? `<div class="viewer-report-note" style="margin-top:9px; border-inline-start-color:var(--red);">خطا در تنظیمات کارت‌ها: ${escapeHtml(financialCardSettingsError)}</div>` : ''}
+      <div style="display:flex; gap:7px; margin-top:10px;">
+        <button class="btn-secondary" style="flex:1;" onclick="resetFinancialCardDraft()">چیدمان پیش‌فرض</button>
+        <button class="btn-primary" style="flex:1;" onclick="saveFinancialCardLayout()" ${financialCardSettingsSaving?'disabled':''}>${financialCardSettingsSaving?'در حال ذخیره...':'ذخیره چیدمان'}</button>
+      </div>
+    </div>`;
+}
+
 function renderAdminFinancial(){
   // این تابع برای هر دو پنل مدیر و مدیر پروژه استفاده می‌شود؛ مدیر پروژه فقط‌خواندنی می‌بیند (بدون امکان باز کردن فرم ویرایش)
   const finEditable = (myRole === 'admin');
   const body = document.getElementById(finEditable ? 'adminBody' : 'viewerSectionBody');
   if(!body) return;
   const st = computeFinancialStats();
-  if(finEditable) ensureMaterialPurchasesLoaded();
+  if(finEditable){
+    ensureMaterialPurchasesLoaded();
+    ensureFinancialCardSettingsLoaded();
+  }
   const finRowOpen = (id) => finEditable ? ` onclick="openContractDetail('${id}')"` : '';
   const topList = st.rows.slice().filter(r => r.fin.total > 0).sort((a,b) => b.fin.total - a.fin.total).slice(0,5);
   const maxMonth = st.monthly.length ? Math.max(...st.monthly.map(m => m.value)) : 0;
@@ -2108,6 +2416,7 @@ function renderAdminFinancial(){
     <div class="toolbar" style="display:flex; gap:8px; flex-wrap:wrap;">
       <button id="finExcelBtn" class="btn-secondary" onclick="exportFinancialExcel()">📊 خروجی اکسل</button>
       <button id="finPdfBtn" class="btn-secondary" onclick="exportFinancialPdf()">🧾 خروجی PDF</button>
+      ${finEditable ? `<button class="btn-secondary" onclick="openFinancialCardManager()">⚙️ مدیریت کارت‌ها</button>` : ''}
     </div>
 
     <div class="section-title" style="margin-top:14px; cursor:pointer; justify-content:space-between;" onclick="toggleFinFilterPanel()">
@@ -2137,19 +2446,8 @@ function renderAdminFinancial(){
       }).join('')}
     </div>` : `<div class="empty">هیچ قراردادی تاریخ معتبر نداره تا بشه بر اساس ماه/سال فیلترش کرد.</div>`) : ''}
 
-    <div class="kpi-grid" style="grid-template-columns:repeat(2,1fr);">
-      <div class="kpi-card kpi-blue"><div class="kpi-num" style="font-size:13px; word-break:break-all; white-space:normal; line-height:1.3;">${formatToman(st.totalValue)}</div><div class="kpi-label">ارزش کل قراردادها (ریال)</div></div>
-      <div class="kpi-card kpi-blue"><div class="kpi-num" style="font-size:13px; word-break:break-all; white-space:normal; line-height:1.3;">${formatToman(st.avgValue)}</div><div class="kpi-label">میانگین ارزش هر قرارداد</div></div>
-      <div class="kpi-card"><div class="kpi-num" style="font-size:13px; word-break:break-all; white-space:normal; line-height:1.3;">${formatToman(st.totalMaterial)}</div><div class="kpi-label">جمع قیمت جنس</div></div>
-      <div class="kpi-card"><div class="kpi-num" style="font-size:13px; word-break:break-all; white-space:normal; line-height:1.3;">${formatToman(st.totalLabor)}</div><div class="kpi-label">جمع اجرت نصب</div></div>
-      <div class="kpi-card kpi-amber"><div class="kpi-num" style="font-size:13px; word-break:break-all; white-space:normal; line-height:1.3;">${formatToman(st.realizedValue)}</div><div class="kpi-label">ارزش تحقق‌یافته (بر اساس پیشرفت)</div></div>
-      <div class="kpi-card"><div class="kpi-num">${st.withFinalCount} / ${st.totalCount}</div><div class="kpi-label">دارای فاکتور نهایی</div></div>
-    </div>
-    <div class="kpi-grid" style="grid-template-columns:repeat(2,1fr); margin-top:8px;">
-      <div class="kpi-card"><div class="kpi-num" style="font-size:13px; word-break:break-all; white-space:normal; line-height:1.3;">${formatToman(st.activeValue)}</div><div class="kpi-label">ارزش قراردادهای باز</div></div>
-      <div class="kpi-card"><div class="kpi-num" style="font-size:13px; word-break:break-all; white-space:normal; line-height:1.3;">${formatToman(st.closedValue)}</div><div class="kpi-label">ارزش قراردادهای خاتمه‌یافته</div></div>
-      <div class="kpi-card ${st.avgVariancePct>0?'kpi-red':''}" style="grid-column:1 / -1;"><div class="kpi-num">${st.varianceRows.length ? (st.avgVariancePct>0?'+':'')+st.avgVariancePct+'٪' : '—'}</div><div class="kpi-label">میانگین اختلاف فاکتور نهایی با اولیه</div></div>
-    </div>
+    ${finEditable ? renderFinancialCardManager() : ''}
+    ${finEditable ? renderFinancialCards(st) : renderViewerFinancialCards(st)}
 
     ${finEditable ? renderMaterialPurchasesSection() : ''}
 
@@ -2228,7 +2526,7 @@ function renderAdminFinancialList(){
     <div class="warn-item" style="${finEditable?'cursor:pointer; ':''}border-inline-start-color:var(--teal);"${finEditable?` onclick="openContractDetail('${r.c.id}')"`:''}>
       <div>
         <div class="warn-name">${escapeHtml(r.c.name)}</div>
-        <div class="warn-sub">جنس: ${formatToman(r.fin.material)} — اجرت: ${formatToman(r.fin.labor)} ${r.fin.isFinal?'(نهایی)':'(اولیه)'}</div>
+        <div class="warn-sub">متریال: ${formatToman(r.fin.material)} — اجرت: ${formatToman(r.fin.labor)} ${r.fin.isFinal?'(نهایی)':'(اولیه)'}</div>
       </div>
       <span class="warn-tag">${formatToman(r.fin.total)} ریال</span>
     </div>`).join('');
@@ -2247,7 +2545,7 @@ async function exportFinancialExcel(){
       ['بازه‌ی فیلتر', st.filterActive ? Array.from(finFilterMonths).sort().join('، ') : 'همه‌ی قراردادها'],
       [],
       ['ارزش کل قراردادها (ریال)', st.totalValue],
-      ['جمع قیمت جنس (ریال)', st.totalMaterial],
+      ['جمع ارزش متریال (ریال)', st.totalMaterial],
       ['جمع اجرت نصب (ریال)', st.totalLabor],
       ['میانگین ارزش هر قرارداد (ریال)', st.avgValue],
       ['دارای فاکتور نهایی', st.withFinalCount + ' از ' + st.totalCount],
@@ -2262,7 +2560,7 @@ async function exportFinancialExcel(){
     const listRows = priced.map(r => ({
       'نام قرارداد': r.c.name || '',
       'کد قلم': r.c.itemCode || '',
-      'قیمت جنس (ریال)': r.fin.material,
+      'ارزش متریال (ریال)': r.fin.material,
       'اجرت نصب (ریال)': r.fin.labor,
       'مبلغ کل (ریال)': r.fin.total,
       'منبع محاسبه': r.fin.isFinal ? 'فاکتور نهایی' : 'فاکتور اولیه',
@@ -2295,11 +2593,11 @@ async function exportFinancialPdf(){
       <div style="font-size:10px; color:#555; margin-bottom:8px;">بازه‌ی فیلتر: ${st.filterActive ? escapeHtml(Array.from(finFilterMonths).sort().join('، ')) : 'همه‌ی قراردادها'}</div>
       <div style="display:flex; flex-wrap:wrap; gap:10px; margin-bottom:14px;">
         <div style="flex:1; min-width:140px; background:#f5f5f5; border-radius:8px; padding:8px 10px;"><div style="font-size:9px;color:#666;">ارزش کل (ریال)</div><div style="font-size:12px;font-weight:800;">${formatToman(st.totalValue)}</div></div>
-        <div style="flex:1; min-width:140px; background:#f5f5f5; border-radius:8px; padding:8px 10px;"><div style="font-size:9px;color:#666;">جمع جنس (ریال)</div><div style="font-size:12px;font-weight:800;">${formatToman(st.totalMaterial)}</div></div>
+        <div style="flex:1; min-width:140px; background:#f5f5f5; border-radius:8px; padding:8px 10px;"><div style="font-size:9px;color:#666;">جمع متریال (ریال)</div><div style="font-size:12px;font-weight:800;">${formatToman(st.totalMaterial)}</div></div>
         <div style="flex:1; min-width:140px; background:#f5f5f5; border-radius:8px; padding:8px 10px;"><div style="font-size:9px;color:#666;">جمع اجرت (ریال)</div><div style="font-size:12px;font-weight:800;">${formatToman(st.totalLabor)}</div></div>
         <div style="flex:1; min-width:140px; background:#f5f5f5; border-radius:8px; padding:8px 10px;"><div style="font-size:9px;color:#666;">ارزش تحقق‌یافته (ریال)</div><div style="font-size:12px;font-weight:800;">${formatToman(st.realizedValue)}</div></div>
       </div>`;
-    const headers = ['نام قرارداد','کد قلم','جنس (ریال)','اجرت (ریال)','کل (ریال)','منبع','پیشرفت'];
+    const headers = ['نام قرارداد','کد قلم','متریال (ریال)','اجرت (ریال)','کل (ریال)','منبع','پیشرفت'];
     const rows = priced.map(r => [
       r.c.name || '—', r.c.itemCode || '—', formatToman(r.fin.material), formatToman(r.fin.labor),
       formatToman(r.fin.total), r.fin.isFinal ? 'نهایی' : 'اولیه', r.pct + '٪'
@@ -3766,17 +4064,17 @@ function renderCard(c, isAdmin, forceOpen){
   const finInfo = getContractFinance(c);
   const priceFieldHtml = isAdmin ? `
     <div class="field-row">
-      <label>قیمت جنس (فاکتور اولیه):</label>
+      <label>ارزش متریال (فاکتور اولیه):</label>
       <input type="text" inputmode="numeric" id="matprice_${c.id}" placeholder="مثلاً 50000000" style="direction:ltr; text-align:left; font-family:'JetBrains Mono',monospace;" value="${c.materialPrice ? c.materialPrice : ''}">
       <button class="field-save" onclick="saveInitialPrices('${c.id}')">ثبت</button>
     </div>
     <div class="field-row">
-      <label>قیمت اجرت نصب (فاکتور اولیه):</label>
+      <label>اجرت نصب (فاکتور اولیه):</label>
       <input type="text" inputmode="numeric" id="laborprice_${c.id}" placeholder="مثلاً 20000000" style="direction:ltr; text-align:left; font-family:'JetBrains Mono',monospace;" value="${c.laborPrice ? c.laborPrice : ''}">
       <button class="field-save" onclick="saveInitialPrices('${c.id}')">ثبت</button>
     </div>
     <div class="field-row">
-      <label>فاکتور نهایی — جنس:</label>
+      <label>فاکتور نهایی — متریال:</label>
       <input type="text" inputmode="numeric" id="fmatprice_${c.id}" placeholder="در صورت وجود" style="direction:ltr; text-align:left; font-family:'JetBrains Mono',monospace;" value="${c.finalMaterialPrice ? c.finalMaterialPrice : ''}">
       <button class="field-save" onclick="saveFinalInvoice('${c.id}')">ثبت</button>
     </div>
@@ -3973,12 +4271,12 @@ async function saveInitialPrices(id){
   if(!db) return;
   const mRaw = document.getElementById(`matprice_${id}`).value.trim().replace(/,/g,'');
   const lRaw = document.getElementById(`laborprice_${id}`).value.trim().replace(/,/g,'');
-  if(mRaw && isNaN(Number(mRaw))){ alert('قیمت جنس باید عدد باشد.'); return; }
-  if(lRaw && isNaN(Number(lRaw))){ alert('قیمت اجرت نصب باید عدد باشد.'); return; }
+  if(mRaw && isNaN(Number(mRaw))){ alert('ارزش متریال باید عدد باشد.'); return; }
+  if(lRaw && isNaN(Number(lRaw))){ alert('اجرت نصب باید عدد باشد.'); return; }
   const materialPrice = mRaw ? Number(mRaw) : 0;
   const laborPrice = lRaw ? Number(lRaw) : 0;
   const c = findAnyContract(id);
-  const label = 'فاکتور اولیه ثبت شد — جنس: ' + formatToman(materialPrice) + ' — اجرت: ' + formatToman(laborPrice);
+  const label = 'فاکتور اولیه ثبت شد — متریال: ' + formatToman(materialPrice) + ' — اجرت: ' + formatToman(laborPrice);
   const history = (c.history||[]).concat([historyEntry(label)]);
   await db.collection('contracts').doc(id).update({ materialPrice, laborPrice, history });
   logActivity('ویرایش فاکتور اولیه', id, c && c.name, label);
@@ -3987,13 +4285,13 @@ async function saveFinalInvoice(id){
   if(!db) return;
   const mRaw = document.getElementById(`fmatprice_${id}`).value.trim().replace(/,/g,'');
   const lRaw = document.getElementById(`flaborprice_${id}`).value.trim().replace(/,/g,'');
-  if(mRaw && isNaN(Number(mRaw))){ alert('قیمت جنس فاکتور نهایی باید عدد باشد.'); return; }
-  if(lRaw && isNaN(Number(lRaw))){ alert('قیمت اجرت نصب فاکتور نهایی باید عدد باشد.'); return; }
+  if(mRaw && isNaN(Number(mRaw))){ alert('ارزش متریال فاکتور نهایی باید عدد باشد.'); return; }
+  if(lRaw && isNaN(Number(lRaw))){ alert('اجرت نصب فاکتور نهایی باید عدد باشد.'); return; }
   const finalMaterialPrice = mRaw ? Number(mRaw) : 0;
   const finalLaborPrice = lRaw ? Number(lRaw) : 0;
   const c = findAnyContract(id);
   const label = (finalMaterialPrice || finalLaborPrice)
-    ? 'فاکتور نهایی ثبت شد — جنس: ' + formatToman(finalMaterialPrice) + ' — اجرت: ' + formatToman(finalLaborPrice)
+    ? 'فاکتور نهایی ثبت شد — متریال: ' + formatToman(finalMaterialPrice) + ' — اجرت: ' + formatToman(finalLaborPrice)
     : 'فاکتور نهایی حذف شد (محاسبات به فاکتور اولیه برگشت)';
   const history = (c.history||[]).concat([historyEntry(label)]);
   await db.collection('contracts').doc(id).update({ finalMaterialPrice, finalLaborPrice, history });

@@ -114,5 +114,22 @@ service cloud.firestore {
 
       allow delete: if isAdmin();
     }
+
+    // تنظیمات شخصی رابط کاربری مدیر: فقط خود همان Admin می‌تواند تنظیمات خودش را بخواند/بنویسد.
+    // این سند صرفاً چیدمان کارت‌های گزارش مالی را نگه می‌دارد و به داده‌های قرارداد/خرید دست نمی‌زند.
+    match /userSettings/{userId} {
+      allow read: if isAdmin() && request.auth.uid == userId;
+
+      allow create, update: if isAdmin()
+                            && request.auth.uid == userId
+                            && request.resource.data.keys().hasOnly([
+                              'financialCardLayout', 'updatedAt'
+                            ])
+                            && request.resource.data.financialCardLayout is list
+                            && request.resource.data.financialCardLayout.size() <= 50
+                            && request.resource.data.updatedAt is int;
+
+      allow delete: if false;
+    }
   }
 }
