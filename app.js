@@ -802,6 +802,7 @@ function signOutUser(){ auth.signOut(); }
 /* ---------- Root render ---------- */
 function renderApp(){
   const el = document.getElementById('app');
+  if(!currentUser || myRole !== 'admin' || adminTab !== 'financial') stopMonthlyMaterials();
   const headerRight = document.getElementById('headerRight');
   hideSplash();
   refreshContractModal();
@@ -1761,6 +1762,8 @@ function renderAdminFinancial(){
       <div class="kpi-card ${st.avgVariancePct>0?'kpi-red':''}" style="grid-column:1 / -1;"><div class="kpi-num">${st.varianceRows.length ? (st.avgVariancePct>0?'+':'')+st.avgVariancePct+'٪' : '—'}</div><div class="kpi-label">میانگین اختلاف فاکتور نهایی با اولیه</div></div>
     </div>
 
+    ${myRole === 'admin' ? renderMonthlyMaterials() : ''}
+
     ${st.monthly.length ? `
     <div class="chart-box">
       <div class="chart-title">ارزش قراردادها بر اساس ماه ثبت (ریال)</div>
@@ -1806,6 +1809,7 @@ function renderAdminFinancial(){
       </div>`).join('')}` : ''}
   `;
   if(finSectionOpen.all) renderAdminFinancialList();
+  if(myRole === 'admin') subscribeMonthlyMaterials();
 }
 function toggleFinSection(key){ finSectionOpen[key] = !finSectionOpen[key]; renderAdminFinancial(); }
 function toggleFinFilterPanel(){ finFilterOpen = !finFilterOpen; renderAdminFinancial(); }
