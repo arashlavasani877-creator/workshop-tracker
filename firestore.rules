@@ -66,5 +66,53 @@ service cloud.firestore {
       allow update: if false;
       allow delete: if false;
     }
+
+    // خرید متریال ماهانه: داده‌ای مستقل از قراردادها؛ فقط مدیر اجازه خواندن/ثبت/ویرایش دارد.
+    // حذف عمداً غیرفعال است تا رکورد مالی به‌صورت تصادفی پاک نشود.
+    match /materialPurchases/{purchaseId} {
+      allow read: if isAdmin();
+
+      allow create: if isAdmin()
+                    && request.resource.data.keys().hasOnly([
+                      'supplierName', 'amount', 'year', 'month', 'note',
+                      'createdBy', 'createdAt', 'updatedBy', 'updatedAt'
+                    ])
+                    && request.resource.data.supplierName is string
+                    && request.resource.data.supplierName.size() > 0
+                    && (request.resource.data.amount is int || request.resource.data.amount is float)
+                    && request.resource.data.amount >= 0
+                    && request.resource.data.year is int
+                    && request.resource.data.year >= 1300
+                    && request.resource.data.year <= 1600
+                    && request.resource.data.month is int
+                    && request.resource.data.month >= 1
+                    && request.resource.data.month <= 12
+                    && request.resource.data.note is string
+                    && request.resource.data.createdBy == request.auth.uid
+                    && request.resource.data.updatedBy == request.auth.uid
+                    && request.resource.data.createdAt is int
+                    && request.resource.data.updatedAt is int;
+
+      allow update: if isAdmin()
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                      'supplierName', 'amount', 'year', 'month', 'note',
+                      'updatedBy', 'updatedAt'
+                    ])
+                    && request.resource.data.supplierName is string
+                    && request.resource.data.supplierName.size() > 0
+                    && (request.resource.data.amount is int || request.resource.data.amount is float)
+                    && request.resource.data.amount >= 0
+                    && request.resource.data.year is int
+                    && request.resource.data.year >= 1300
+                    && request.resource.data.year <= 1600
+                    && request.resource.data.month is int
+                    && request.resource.data.month >= 1
+                    && request.resource.data.month <= 12
+                    && request.resource.data.note is string
+                    && request.resource.data.updatedBy == request.auth.uid
+                    && request.resource.data.updatedAt is int;
+
+      allow delete: if false;
+    }
   }
 }
