@@ -67,8 +67,8 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // خرید متریال ماهانه: داده‌ای مستقل از قراردادها؛ فقط مدیر اجازه خواندن/ثبت/ویرایش دارد.
-    // حذف عمداً غیرفعال است تا رکورد مالی به‌صورت تصادفی پاک نشود.
+    // خرید متریال ماهانه: داده‌ای مستقل از قراردادها؛ فقط مدیر اجازه خواندن/ثبت/ویرایش/حذف دارد.
+    // حذف فقط برای نقش admin مجاز است.
     match /materialPurchases/{purchaseId} {
       allow read: if isAdmin();
 
@@ -112,7 +112,7 @@ service cloud.firestore {
                     && request.resource.data.updatedBy == request.auth.uid
                     && request.resource.data.updatedAt is int;
 
-      allow delete: if false;
+      allow delete: if isAdmin();
     }
   }
 }

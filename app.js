@@ -1856,6 +1856,28 @@ async function saveMaterialPurchase(){
     if(btn){ btn.disabled = false; btn.textContent = 'ثبت خرید'; }
   }
 }
+async function deleteMaterialPurchase(id){
+  if(myRole !== 'admin' || !db || !currentUser || !id) return;
+  const purchase = materialPurchases.find(p => p.id === id);
+  if(!purchase) return;
+
+  const supplier = (purchase.supplierName || 'بدون نام').trim() || 'بدون نام';
+  const amountLabel = formatToman(purchase.amount || 0);
+  if(!confirm(`خرید متریال از «${supplier}» به مبلغ ${amountLabel} ریال حذف شود؟`)) return;
+
+  try{
+    await db.collection('materialPurchases').doc(id).delete();
+    materialPurchases = materialPurchases.filter(p => p.id !== id);
+    if(materialPurchaseEditId === id){
+      materialPurchaseEditId = null;
+      materialPurchaseFormOpen = false;
+    }
+    renderAdminFinancial();
+    alert('حذف شد ✓');
+  }catch(err){
+    alert('خطا در حذف خرید متریال: ' + ((err && err.message) ? err.message : String(err)));
+  }
+}
 function renderMaterialPurchasesSection(){
   if(myRole !== 'admin') return '';
   ensureMaterialPurchaseDefaultFilter();
@@ -1985,6 +2007,7 @@ function renderMaterialPurchasesSection(){
             <div style="display:flex; align-items:center; gap:7px; flex-shrink:0;">
               <span class="warn-tag">${formatToman(p.amount)} ریال</span>
               <button class="btn-secondary" style="width:auto; padding:6px 9px; font-size:10px;" onclick="openMaterialPurchaseForm('${p.id}')">ویرایش</button>
+              <button class="btn-secondary" style="width:auto; padding:6px 9px; font-size:10px; color:var(--red);" onclick="deleteMaterialPurchase('${p.id}')">حذف</button>
             </div>
           </div>`).join('') : '<div class="empty">برای این بازه خریدی ثبت نشده است.</div>'}
       </div>
