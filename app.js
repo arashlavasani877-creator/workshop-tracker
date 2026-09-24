@@ -104,6 +104,9 @@ let afrFilterStatus = 'all';
 let archivedSectionOpen = {}; // per-panel: 'admin' | 'supervisor' | 'afr' | 'viewer'
 let importBusy = false;
 
+// ارتقای سریع Splash به محض شروع اجرای app.js؛ بدون وابستگی به Firebase/Auth.
+upgradeSplashExperience();
+
 function toggleTheme(){
   const isLight = document.documentElement.getAttribute('data-theme') === 'light';
   if(isLight){
@@ -928,6 +931,480 @@ function setLoginPageMode(on){
   document.body.classList.toggle('af-login-page', !!on);
 }
 
+/* ---------- Premium Splash + Pending approval experience ---------- */
+function ensureBrandExperienceStyles(){
+  if(document.getElementById('afBrandExperienceStyles')) return;
+  const style = document.createElement('style');
+  style.id = 'afBrandExperienceStyles';
+  style.textContent = `
+    /* Splash همیشه دارک و برندمحور است تا در Light/Dark یک ظاهر ثابت و سریع داشته باشد. */
+    #splashScreen.af-splash-pro{
+      position:fixed;
+      inset:0;
+      z-index:9999;
+      min-height:100svh;
+      overflow:hidden;
+      isolation:isolate;
+      color:#F4F1EA;
+      background:
+        radial-gradient(circle at 16% 6%, rgba(221,151,65,.18), transparent 31%),
+        radial-gradient(circle at 82% 82%, rgba(199,119,43,.10), transparent 34%),
+        linear-gradient(155deg,#18191C 0%,#101114 58%,#0B0C0E 100%);
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      justify-content:center;
+      gap:0;
+      padding:max(28px,env(safe-area-inset-top)) 22px max(24px,env(safe-area-inset-bottom));
+      transition:opacity .35s ease, visibility .35s ease;
+    }
+    #splashScreen.af-splash-pro::before{
+      content:"";
+      position:absolute;
+      z-index:-1;
+      right:-190px;
+      top:-90px;
+      width:min(78vw,620px);
+      height:118%;
+      opacity:.48;
+      transform:rotate(-7deg);
+      background:
+        repeating-radial-gradient(ellipse at 92% 42%,
+          rgba(232,165,83,.34) 0 1px,
+          rgba(96,58,26,.17) 2px 8px,
+          rgba(12,13,15,0) 9px 18px),
+        radial-gradient(ellipse at 96% 43%, rgba(130,72,29,.45), rgba(38,24,16,.10) 46%, transparent 67%);
+      filter:contrast(1.05);
+      pointer-events:none;
+    }
+    #splashScreen.af-splash-pro::after{
+      content:"";
+      position:absolute;
+      z-index:-1;
+      left:-16%;
+      right:-16%;
+      bottom:6%;
+      height:34%;
+      opacity:.45;
+      background:
+        radial-gradient(70% 44% at 36% 96%, transparent 61%, rgba(227,168,87,.85) 62% 62.5%, transparent 63.2%),
+        radial-gradient(84% 50% at 45% 100%, transparent 66%, rgba(184,104,41,.45) 67% 67.5%, transparent 68.2%);
+      pointer-events:none;
+    }
+    .af-splash-center{
+      width:min(100%,430px);
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      text-align:center;
+      transform:translateY(-2vh);
+    }
+    .af-splash-logo-wrap{
+      width:112px;
+      height:112px;
+      border-radius:30px;
+      padding:10px;
+      background:#FFF;
+      box-shadow:0 0 0 1px rgba(255,255,255,.32), 0 0 35px rgba(227,168,87,.28), 0 20px 44px rgba(0,0,0,.32);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      margin-bottom:24px;
+    }
+    #splashScreen.af-splash-pro .af-splash-logo-wrap img{
+      width:100%;
+      height:100%;
+      border-radius:22px;
+      padding:3px;
+      background:#fff;
+      object-fit:contain;
+      box-shadow:none;
+    }
+    .af-splash-brand{
+      direction:ltr;
+      font-family:Arial,'Vazirmatn',sans-serif;
+      font-size:clamp(25px,7vw,34px);
+      font-weight:700;
+      letter-spacing:.26em;
+      padding-left:.26em;
+      line-height:1.1;
+      text-shadow:0 2px 18px rgba(0,0,0,.34);
+    }
+    .af-splash-sub{
+      direction:ltr;
+      margin-top:8px;
+      color:#C79B69;
+      font-family:Arial,'Vazirmatn',sans-serif;
+      font-size:13px;
+      letter-spacing:.32em;
+      padding-left:.32em;
+    }
+    .af-splash-loader{
+      width:52px;
+      height:52px;
+      margin:34px 0 15px;
+      border-radius:50%;
+      border:5px solid rgba(255,255,255,.10);
+      border-top-color:#E3A857;
+      border-right-color:#E3A857;
+      position:relative;
+      animation:afBrandSpin .9s linear infinite;
+      box-shadow:0 0 22px rgba(227,168,87,.14);
+    }
+    .af-splash-loader::after{
+      content:"";
+      position:absolute;
+      width:7px;
+      height:7px;
+      border-radius:50%;
+      right:1px;
+      top:3px;
+      background:#FFF1C9;
+      box-shadow:0 0 10px #E3A857;
+    }
+    .af-splash-status{
+      color:#B9B6B1;
+      font-size:13px;
+      min-height:24px;
+      line-height:1.8;
+    }
+    .af-splash-features{
+      position:absolute;
+      left:50%;
+      bottom:max(30px,calc(18px + env(safe-area-inset-bottom)));
+      transform:translateX(-50%);
+      width:min(calc(100% - 44px),520px);
+      display:grid;
+      grid-template-columns:repeat(3,1fr);
+      direction:rtl;
+    }
+    .af-splash-feature{
+      display:flex;
+      flex-direction:column;
+      align-items:center;
+      gap:6px;
+      color:#A9A6A1;
+      font-size:10.5px;
+      position:relative;
+    }
+    .af-splash-feature + .af-splash-feature::after{
+      content:"";
+      position:absolute;
+      right:0;
+      top:5px;
+      height:34px;
+      width:1px;
+      background:linear-gradient(transparent,rgba(227,168,87,.48),transparent);
+    }
+    .af-splash-feature svg{
+      width:24px;
+      height:24px;
+      color:#D99A4A;
+      filter:drop-shadow(0 0 7px rgba(227,168,87,.16));
+    }
+    @keyframes afBrandSpin{ to{ transform:rotate(360deg); } }
+
+    body.af-pending-page{
+      min-height:100svh;
+      padding-bottom:0 !important;
+      background:#0F1012 !important;
+    }
+    body.af-pending-page > header{ display:none !important; }
+    body.af-pending-page #app{ max-width:none; padding:0; }
+    .af-pending-shell{
+      min-height:100svh;
+      width:100%;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:max(24px,env(safe-area-inset-top)) 14px max(24px,env(safe-area-inset-bottom));
+      position:relative;
+      isolation:isolate;
+      overflow:hidden;
+      color:#F3F1ED;
+      background:
+        radial-gradient(circle at 88% 8%, rgba(227,168,87,.12), transparent 26%),
+        radial-gradient(circle at 12% 84%, rgba(227,168,87,.08), transparent 25%),
+        linear-gradient(155deg,#18191C,#0F1012 62%,#0B0C0E);
+    }
+    .af-pending-shell::before{
+      content:"";
+      position:absolute;
+      z-index:-1;
+      right:-210px;
+      top:-110px;
+      width:min(90vw,680px);
+      height:122%;
+      opacity:.34;
+      transform:rotate(-8deg);
+      background:
+        repeating-radial-gradient(ellipse at 94% 40%, rgba(227,168,87,.33) 0 1px, rgba(88,51,24,.13) 2px 8px, transparent 9px 19px),
+        radial-gradient(ellipse at 96% 42%, rgba(108,60,26,.32), transparent 62%);
+      pointer-events:none;
+    }
+    .af-pending-shell::after{
+      content:"";
+      position:absolute;
+      z-index:-1;
+      inset:auto -14% 0 -14%;
+      height:28%;
+      background:radial-gradient(70% 50% at 38% 100%,transparent 66%,rgba(227,168,87,.30) 67% 67.5%,transparent 68.2%);
+      opacity:.65;
+      pointer-events:none;
+    }
+    .af-pending-card{
+      width:min(100%,480px);
+      border:1px solid rgba(227,168,87,.34);
+      border-radius:30px;
+      padding:clamp(24px,6vw,36px) clamp(18px,5vw,32px) 24px;
+      text-align:center;
+      background:linear-gradient(160deg,rgba(31,32,35,.95),rgba(15,16,18,.96));
+      box-shadow:0 24px 70px rgba(0,0,0,.40), inset 0 1px rgba(255,255,255,.035);
+      backdrop-filter:blur(10px);
+      -webkit-backdrop-filter:blur(10px);
+    }
+    .af-pending-logo{
+      width:86px;
+      height:86px;
+      display:block;
+      object-fit:contain;
+      margin:0 auto 17px;
+      border-radius:23px;
+      padding:8px;
+      background:#fff;
+      box-shadow:0 13px 34px rgba(0,0,0,.28),0 0 24px rgba(227,168,87,.10);
+    }
+    .af-pending-clock{
+      width:76px;
+      height:76px;
+      margin:2px auto 17px;
+      border-radius:50%;
+      border:5px solid rgba(227,168,87,.22);
+      box-shadow:0 0 0 10px rgba(227,168,87,.04),0 0 28px rgba(227,168,87,.14);
+      position:relative;
+    }
+    .af-pending-clock::before{
+      content:"";
+      position:absolute;
+      width:4px;
+      height:22px;
+      left:50%;
+      top:15px;
+      margin-left:-2px;
+      border-radius:4px;
+      background:#F1B761;
+      transform-origin:50% 100%;
+      animation:afPendingMinute 5s ease-in-out infinite alternate;
+      box-shadow:0 0 9px rgba(227,168,87,.30);
+    }
+    .af-pending-clock::after{
+      content:"";
+      position:absolute;
+      width:20px;
+      height:4px;
+      left:50%;
+      top:50%;
+      margin-top:-2px;
+      border-radius:4px;
+      background:#F1B761;
+      transform-origin:0 50%;
+      transform:rotate(35deg);
+      box-shadow:0 0 9px rgba(227,168,87,.30);
+    }
+    @keyframes afPendingMinute{ from{transform:rotate(-4deg)} to{transform:rotate(14deg)} }
+    .af-pending-title{
+      margin:0;
+      font-size:clamp(24px,6vw,33px);
+      line-height:1.35;
+      font-weight:900;
+      color:#F7F4EF;
+    }
+    .af-pending-copy{
+      max-width:390px;
+      margin:12px auto 16px;
+      color:#AAA7A2;
+      font-size:12.5px;
+      line-height:2;
+    }
+    .af-pending-email{
+      width:min(100%,360px);
+      min-height:45px;
+      margin:0 auto 12px;
+      border:1px solid rgba(255,255,255,.11);
+      border-radius:23px;
+      background:rgba(255,255,255,.025);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      gap:9px;
+      direction:ltr;
+      color:#C8C5C0;
+      font-family:'JetBrains Mono',monospace;
+      font-size:11px;
+      overflow:hidden;
+      padding:0 14px;
+    }
+    .af-pending-email span{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .af-pending-email svg{ width:18px; height:18px; flex:0 0 auto; color:#B8B4AE; }
+    .af-pending-badge{
+      display:inline-flex;
+      align-items:center;
+      gap:7px;
+      min-height:38px;
+      padding:7px 16px;
+      border:1px solid rgba(227,168,87,.38);
+      border-radius:21px;
+      background:rgba(227,168,87,.13);
+      color:#F1B761;
+      font-size:11.5px;
+      font-weight:800;
+    }
+    .af-pending-dot{
+      width:8px;
+      height:8px;
+      border-radius:50%;
+      background:#F1B761;
+      box-shadow:0 0 0 5px rgba(227,168,87,.08),0 0 13px rgba(227,168,87,.55);
+      animation:afPendingPulse 1.8s ease-in-out infinite;
+    }
+    @keyframes afPendingPulse{ 50%{ transform:scale(.72); opacity:.55; } }
+    .af-pending-steps{
+      margin:24px 0 18px;
+      display:grid;
+      grid-template-columns:repeat(3,minmax(0,1fr));
+      position:relative;
+      direction:rtl;
+    }
+    .af-pending-steps::before{
+      content:"";
+      position:absolute;
+      top:21px;
+      right:16.5%;
+      left:16.5%;
+      height:1px;
+      background:linear-gradient(to left,#E3A857 0 50%,rgba(255,255,255,.15) 50% 100%);
+    }
+    .af-pending-step{ position:relative; z-index:1; display:flex; flex-direction:column; align-items:center; min-width:0; }
+    .af-pending-step-node{
+      width:43px;
+      height:43px;
+      border-radius:50%;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      border:1px solid rgba(255,255,255,.16);
+      background:#191A1D;
+      color:#7F7F80;
+      margin-bottom:7px;
+      box-shadow:0 0 0 5px #151619;
+    }
+    .af-pending-step.done .af-pending-step-node,
+    .af-pending-step.active .af-pending-step-node{
+      border-color:rgba(227,168,87,.75);
+      color:#F6C16D;
+      background:linear-gradient(145deg,rgba(227,168,87,.28),rgba(117,70,25,.20));
+      box-shadow:0 0 0 5px #151619,0 0 18px rgba(227,168,87,.18);
+    }
+    .af-pending-step.active .af-pending-step-node{ box-shadow:0 0 0 5px #151619,0 0 22px rgba(227,168,87,.30); }
+    .af-pending-step-node svg{ width:21px; height:21px; }
+    .af-pending-step strong{ color:#EAE6E0; font-size:10.5px; line-height:1.5; }
+    .af-pending-step small{ color:#777574; font-size:8.8px; line-height:1.6; margin-top:2px; }
+    .af-pending-auto{
+      border-top:1px solid rgba(255,255,255,.08);
+      padding:15px 4px 0;
+      color:#8F8D89;
+      font-size:10.5px;
+      line-height:1.8;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      gap:7px;
+    }
+    .af-pending-auto svg{ width:17px; height:17px; flex:0 0 auto; }
+    .af-pending-logout{
+      min-width:190px;
+      min-height:44px;
+      margin-top:17px;
+      border:1px solid rgba(255,255,255,.22);
+      border-radius:24px;
+      background:rgba(255,255,255,.02);
+      color:#E7E3DD;
+      font-family:'Vazirmatn',sans-serif;
+      font-size:12px;
+      font-weight:800;
+      cursor:pointer;
+      transition:transform .08s ease,background .16s ease,border-color .16s ease;
+      touch-action:manipulation;
+    }
+    .af-pending-logout:active{ transform:translateY(2px) scale(.98); background:rgba(227,168,87,.08); border-color:rgba(227,168,87,.38); }
+    @media (max-width:380px){
+      .af-pending-card{ border-radius:23px; padding:22px 14px 20px; }
+      .af-pending-logo{ width:72px; height:72px; border-radius:19px; }
+      .af-pending-clock{ width:64px; height:64px; }
+      .af-pending-clock::before{ height:18px; top:12px; }
+      .af-pending-title{ font-size:23px; }
+      .af-pending-copy{ font-size:11.5px; }
+      .af-pending-step strong{ font-size:9.5px; }
+      .af-pending-step small{ font-size:8px; }
+    }
+    @media (max-height:720px){
+      .af-pending-shell{ align-items:flex-start; }
+      .af-pending-card{ margin:6px auto; padding-top:20px; }
+      .af-pending-logo{ width:66px; height:66px; margin-bottom:11px; }
+      .af-pending-clock{ width:58px; height:58px; margin-bottom:11px; }
+      .af-pending-clock::before{ height:16px; top:10px; }
+      .af-pending-title{ font-size:23px; }
+      .af-pending-copy{ margin:7px auto 10px; line-height:1.75; }
+      .af-pending-steps{ margin:17px 0 13px; }
+    }
+    @media (prefers-reduced-motion:reduce){
+      .af-splash-loader,.af-pending-clock::before,.af-pending-dot{ animation-duration:2.6s; }
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function upgradeSplashExperience(){
+  try{
+    ensureBrandExperienceStyles();
+    const splash = document.getElementById('splashScreen');
+    if(!splash || splash.dataset.pro === '1') return;
+    splash.dataset.pro = '1';
+    splash.classList.add('af-splash-pro');
+    splash.innerHTML = `
+      <div class="af-splash-center">
+        <div class="af-splash-logo-wrap"><img src="./icon-192.png" alt="لوگوی افراچوب"></div>
+        <div class="af-splash-brand">AFRACHOOB</div>
+        <div class="af-splash-sub">Control Center</div>
+        <div class="af-splash-loader" aria-hidden="true"></div>
+        <div class="af-splash-status" id="afSplashStatus">در حال آماده‌سازی محیط کار…</div>
+      </div>
+      <div class="af-splash-features" aria-hidden="true">
+        <div class="af-splash-feature">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="M12 3 4.8 6v5.2c0 4.5 3 7.9 7.2 9.8 4.2-1.9 7.2-5.3 7.2-9.8V6L12 3Z"></path><path d="m9 12 2 2 4-4"></path></svg>
+          <span>امن و پایدار</span>
+        </div>
+        <div class="af-splash-feature">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><path d="m13 2-7 12h6l-1 8 7-12h-6l1-8Z"></path></svg>
+          <span>سریع و مطمئن</span>
+        </div>
+        <div class="af-splash-feature">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="4" y="3" width="16" height="18" rx="3"></rect><path d="M8 16v-3M12 16V8M16 16v-5"></path></svg>
+          <span>مدیریت حرفه‌ای</span>
+        </div>
+      </div>`;
+    setTimeout(() => {
+      const status = document.getElementById('afSplashStatus');
+      if(status && !splashHidden) status.textContent = 'در حال اتصال به سرور…';
+    }, 3500);
+  }catch(e){}
+}
+
+function setPendingPageMode(on){
+  ensureBrandExperienceStyles();
+  document.body.classList.toggle('af-pending-page', !!on);
+}
+
 function isAdminLoginEmail(email){
   try{ return String(email || '').trim().toLowerCase() === String(ADMIN_EMAIL || '').trim().toLowerCase(); }
   catch(e){ return false; }
@@ -1406,6 +1883,7 @@ function renderApp(){
   refreshContractModal();
 
   if(!currentUser){
+    setPendingPageMode(false);
     setLoginPageMode(true);
     headerRight.innerHTML = '';
     el.innerHTML = `
@@ -1464,6 +1942,7 @@ function renderApp(){
     return;
   }
   setLoginPageMode(false);
+  setPendingPageMode(myRole === 'pending');
 
   const isProjectManagerPanel = (myRole === 'viewer') || (myRole === 'admin' && adminPreviewRole === 'viewer');
   const headerTitleEl = document.getElementById('headerTitle');
@@ -1505,13 +1984,42 @@ function renderApp(){
   }
 
   if(myRole === 'pending'){
+    headerRight.innerHTML = '';
     el.innerHTML = `
-      <div class="center-screen">
-        <img src="./icon-192.png" alt="افراچوب">
-        <h2>در انتظار تایید</h2>
-        <p>حساب شما (${escapeHtml(currentUser.email)}) ثبت شد. تا وقتی مدیر دسترسی شما را تایید نکند، امکان مشاهده یا ویرایش اطلاعات وجود ندارد.</p>
-        <span class="status-chip pending">در انتظار تایید مدیر</span>
-      </div>`;
+      <main class="af-pending-shell" aria-label="وضعیت تأیید حساب">
+        <section class="af-pending-card">
+          <img class="af-pending-logo" src="./icon-192.png" alt="لوگوی افراچوب">
+          <div class="af-pending-clock" aria-hidden="true"></div>
+          <h1 class="af-pending-title">در انتظار تأیید حساب</h1>
+          <p class="af-pending-copy">حساب شما با موفقیت ایجاد شد. پس از تأیید دسترسی توسط مدیر، به‌صورت خودکار وارد پنل خود خواهید شد.</p>
+          <div class="af-pending-email" title="${escapeHtml(currentUser.email || '')}">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"></rect><path d="m4 7 8 6 8-6"></path></svg>
+            <span>${escapeHtml(currentUser.email || '')}</span>
+          </div>
+          <div class="af-pending-badge"><span class="af-pending-dot"></span><span>در انتظار تأیید مدیر</span></div>
+
+          <div class="af-pending-steps" aria-label="مراحل فعال‌سازی حساب">
+            <div class="af-pending-step">
+              <div class="af-pending-step-node"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="4"></circle><path d="M4 21a8 8 0 0 1 16 0"></path></svg></div>
+              <strong>ورود به پنل</strong><small>پس از تأیید</small>
+            </div>
+            <div class="af-pending-step active">
+              <div class="af-pending-step-node"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"></circle><path d="M12 7v5l3 2"></path></svg></div>
+              <strong>تأیید مدیر</strong><small>در انتظار بررسی</small>
+            </div>
+            <div class="af-pending-step done">
+              <div class="af-pending-step-node"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 12 4 4 8-9"></path></svg></div>
+              <strong>ساخت حساب</strong><small>تکمیل شد</small>
+            </div>
+          </div>
+
+          <div class="af-pending-auto">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><circle cx="12" cy="12" r="9"></circle><path d="M12 11v6M12 7h.01"></path></svg>
+            <span>این صفحه به‌صورت خودکار وضعیت تأیید را بررسی می‌کند.</span>
+          </div>
+          <button class="af-pending-logout" type="button" onclick="signOutUser()">خروج از حساب</button>
+        </section>
+      </main>`;
     return;
   }
   if(myRole === 'blocked'){
@@ -5714,14 +6222,62 @@ function installApp(){
   const btn = document.getElementById('installBtn');
   if(btn) btn.style.display = 'none';
 }
+/* ---------- PWA self-update: دریافت خودکار نسخه تازه بدون پاک‌کردن Cache ---------- */
 if('serviceWorker' in navigator){
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('./service-worker.js').then((reg) => {
-      // هر بار اپ دوباره جلوی چشم کاربر بیاید (باز شدن مجدد تب/برنامه)،
-      // خودش چک می‌کند نسخه‌ی جدیدتری هست یا نه — بدون نیاز به خروج/ورود دوباره.
+    let pwaReloading = false;
+    let pwaUpdatePending = false;
+    const hadControllerAtStart = !!navigator.serviceWorker.controller;
+
+    const hasUnsafeActiveUi = () => {
+      const active = document.activeElement;
+      const editing = !!(active && ['INPUT','TEXTAREA','SELECT'].includes(active.tagName));
+      const modalOpen = !!document.querySelector('.modal-bg.open');
+      return editing || modalOpen || authActionBusy;
+    };
+    const reloadForUpdateWhenSafe = () => {
+      if(!pwaUpdatePending || pwaReloading) return;
+      if(document.visibilityState !== 'visible') return;
+      if(hasUnsafeActiveUi()) return;
+      pwaReloading = true;
+      // Reload نشست Firebase را پاک نمی‌کند؛ فقط فایل‌های تازه‌ی اپ را بارگذاری می‌کند.
+      window.location.reload();
+    };
+
+    navigator.serviceWorker.addEventListener('controllerchange', () => {
+      // در نصب خیلی اولِ Service Worker، Reload اجباری لازم نیست.
+      if(!hadControllerAtStart) return;
+      pwaUpdatePending = true;
+      setTimeout(reloadForUpdateWhenSafe, 350);
+    });
+
+    navigator.serviceWorker.addEventListener('message', (event) => {
+      if(event && event.data && event.data.type === 'AFRACHOOB_SW_ACTIVATED'){
+        pwaUpdatePending = true;
+        setTimeout(reloadForUpdateWhenSafe, 350);
+      }
+    });
+
+    navigator.serviceWorker.register('./service-worker.js', { updateViaCache:'none' }).then((reg) => {
+      const checkForUpdate = () => reg.update().catch(() => {});
+      checkForUpdate();
+
       document.addEventListener('visibilitychange', () => {
-        if(document.visibilityState === 'visible') reg.update().catch(() => {});
+        if(document.visibilityState === 'visible'){
+          checkForUpdate();
+          setTimeout(reloadForUpdateWhenSafe, 250);
+        }
       });
+      window.addEventListener('pageshow', () => {
+        checkForUpdate();
+        setTimeout(reloadForUpdateWhenSafe, 250);
+      });
+      document.addEventListener('focusout', () => setTimeout(reloadForUpdateWhenSafe, 250));
+
+      // برای اپ‌هایی که ساعت‌ها باز می‌مانند هم هر ۳۰ دقیقه نسخه جدید بررسی می‌شود.
+      setInterval(() => {
+        if(document.visibilityState === 'visible') checkForUpdate();
+      }, 30 * 60 * 1000);
     }).catch(() => {});
   });
 }
