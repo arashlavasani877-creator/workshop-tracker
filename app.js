@@ -928,9 +928,34 @@ function renderApp(){
     return;
   }
 
-  const badgeText = adminPreviewRole
-    ? `مدیر · مشاهده ${roleFa(adminPreviewRole)}`
-    : (myPosition ? escapeHtml(myPosition) : roleFa(myRole));
+  const isProjectManagerPanel = (myRole === 'viewer') || (myRole === 'admin' && adminPreviewRole === 'viewer');
+  const headerTitleEl = document.getElementById('headerTitle');
+  const headerSubEl = document.getElementById('headerSub');
+  if(headerTitleEl && headerSubEl){
+    if(isProjectManagerPanel){
+      // فقط در پنل مدیر پروژه: عنوان PMO مخفی/جایگزین می‌شود و کنار لوگو فقط این متن می‌ماند.
+      headerTitleEl.textContent = 'Afrachoob Dashboard';
+      headerTitleEl.style.fontSize = '13px';
+      headerTitleEl.style.direction = 'ltr';
+      headerTitleEl.style.textAlign = 'left';
+      headerSubEl.textContent = '';
+      headerSubEl.style.display = 'none';
+    }else{
+      // سایر پنل‌ها دقیقاً به هدر اصلی خودشان برمی‌گردند.
+      headerTitleEl.textContent = 'PMO – Arash Lavasani';
+      headerTitleEl.style.fontSize = '';
+      headerTitleEl.style.direction = '';
+      headerTitleEl.style.textAlign = '';
+      headerSubEl.textContent = 'افراچوب — تابلوی کنترل تولید و نصب';
+      headerSubEl.style.display = '';
+    }
+  }
+
+  const badgeText = isProjectManagerPanel
+    ? 'Project Manager'
+    : (adminPreviewRole
+      ? `مدیر · مشاهده ${roleFa(adminPreviewRole)}`
+      : (myPosition ? escapeHtml(myPosition) : roleFa(myRole)));
   headerRight.innerHTML = `<div style="display:flex;align-items:center;">
       <span class="role-badge">${badgeText}</span>
       <button class="signout-btn" onclick="signOutUser()">خروج</button>
@@ -1256,12 +1281,11 @@ function computeViewerStats(){
 // ---------- پنل جدید مدیر پروژه: داشبورد | قراردادها | قراردادهای خاص | گزارش مالی | بیشتر ----------
 function renderViewer(el){
   const s = computeViewerStats();
-  const displayTitle = (adminPreviewRole === 'viewer') ? 'مدیر پروژه' : (myPosition || 'مدیر پروژه');
   el.innerHTML = `
     <div class="admin-shell">
       <div class="viewer-hero" style="padding:9px 12px; min-height:0; margin-bottom:8px;">
         <div>
-          <div class="viewer-hero-title" style="margin:0;">${escapeHtml(displayTitle)} عزیز، خوش آمدید 👋</div>
+          <div class="viewer-hero-title" style="margin:0;">Welcome, Project Manager 👋</div>
         </div>
       </div>
       <div id="viewerInstallToolbar" class="toolbar" style="margin-bottom:8px;">
