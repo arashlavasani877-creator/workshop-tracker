@@ -66,7 +66,13 @@ let viewerOpenId = null;
 let viewerSearchQuery = '';
 let viewerFilterStage = 'all';
 let viewerFilterStatus = 'all';
-let viewerSection = null;     // null | 'critical' | 'panelwait' | 'waitingdelivery' | 'all' | 'contact'
+let viewerSection = null;     // Legacy: فقط برای پنل معاونت PMO نگه داشته شده
+// پنل جدید مدیر پروژه — Navigation پنج‌بخشی مستقل از پنل معاونت PMO
+let viewerTab = 'dashboard';          // dashboard | contracts | special | financial | more
+let viewerDashboardSection = null;    // critical | panelwait | waitingdelivery
+let viewerDashboardSearch = '';
+let viewerMoreSection = null;         // exports | contact | mycomments
+let viewerExportPanel = null;         // financial | contracts | special
 let viewerHistoryOpen = {};   // id -> bool — برای مدیر پروژه همیشه پیش‌فرض بسته
 let pmNotes = [];             // پیام‌های عمومی «ارتباط با کنترل پروژه» / «ارتباط با مدیر» — لیست ادغام‌شده‌ی نهایی
 let pmNotesA = [];            // نتیجه‌ی listener اول (برای مدیر پروژه: پیام‌های خودش)
@@ -660,6 +666,12 @@ function initAuthAndData(){
       financialCardEditMode = false;
       financialCardDraggedId = null;
       adminPreviewRole = null;
+      viewerTab = 'dashboard';
+      viewerDashboardSection = null;
+      viewerDashboardSearch = '';
+      viewerMoreSection = null;
+      viewerExportPanel = null;
+      viewerSection = null;
       stopPresenceHeartbeat();
       if(!user){ myRole = null; myPosition = ''; renderApp(); return; }
       const ref = db.collection('users').doc(user.uid);
@@ -954,7 +966,7 @@ function renderApp(){
   if(myRole === 'supervisor'){ renderSupervisor(el); return; }
   if(myRole === 'viewer'){ renderViewer(el); return; }
   if(myRole === 'afrachoobSupervisor'){ renderAfrachoobSupervisor(el); return; }
-  if(myRole === 'pmoDeputy'){ renderViewer(el); return; }
+  if(myRole === 'pmoDeputy'){ renderPmoDeputy(el); return; }
 
   el.innerHTML = `<div class="center-screen">
     <span class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">در حال بارگذاری…</span></span>
@@ -974,7 +986,15 @@ function openAdminPanelPreview(role){
   // هر پیش‌نمایش از صفحه‌ی اصلی همان پنل شروع می‌شود.
   if(role === 'supervisor') supervisorTab = 'contracts';
   if(role === 'afrachoobSupervisor') afrTab = 'dashboard';
-  if(role === 'viewer' || role === 'pmoDeputy') {
+  if(role === 'viewer') {
+    viewerTab = 'dashboard';
+    viewerDashboardSection = null;
+    viewerDashboardSearch = '';
+    viewerMoreSection = null;
+    viewerExportPanel = null;
+    viewerOpenId = null;
+  }
+  if(role === 'pmoDeputy') {
     viewerSection = null;
     viewerOpenId = null;
   }
@@ -1000,7 +1020,8 @@ function renderAdminRolePreview(el, role){
     myRole = role;
     if(role === 'supervisor') renderSupervisor(el);
     else if(role === 'afrachoobSupervisor') renderAfrachoobSupervisor(el);
-    else renderViewer(el); // viewer و pmoDeputy از همین View مشترک استفاده می‌کنند.
+    else if(role === 'viewer') renderViewer(el);
+    else renderPmoDeputy(el);
   }finally{
     myRole = actualRole;
   }
@@ -1232,7 +1253,383 @@ function computeViewerStats(){
   return { active, completed, avgProgress, criticalList, nearList, panelWaitList, waitingDeliveryList, pmSpecialList };
 }
 
+// ---------- پنل جدید مدیر پروژه: داشبورد | قراردادها | قراردادهای خاص | گزارش مالی | بیشتر ----------
 function renderViewer(el){
+  const s = computeViewerStats();
+  const displayTitle = (adminPreviewRole === 'viewer') ? 'مدیر پروژه' : (myPosition || 'مدیر پروژه');
+  el.innerHTML = `
+    <div class="admin-shell">
+      <div class="viewer-hero" style="padding:9px 12px; min-height:0; margin-bottom:8px;">
+        <div>
+          <div class="viewer-hero-title" style="margin:0;">${escapeHtml(displayTitle)} عزیز، خوش آمدید 👋</div>
+        </div>
+      </div>
+      <div id="viewerInstallToolbar" class="toolbar" style="margin-bottom:8px;">
+        <button id="installBtn" class="btn-secondary" onclick="installApp()">نصب اپلیکیشن روی گوشی</button>
+      </div>
+      <div id="viewerBody"></div>
+      <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
+      <nav class="admin-bottom-nav" aria-label="ناوبری پنل مدیر پروژه">
+        <button class="${viewerTab==='dashboard'?'active':''}" onclick="switchViewerTab('dashboard')"><span>⌂</span>داشبورد</button>
+        <button class="${viewerTab==='contracts'?'active':''}" onclick="switchViewerTab('contracts')"><span>▤</span>قراردادها</button>
+        <button class="${viewerTab==='special'?'active':''}" onclick="switchViewerTab('special')"><span>★</span>قراردادهای خاص</button>
+        <button class="${viewerTab==='financial'?'active':''}" onclick="switchViewerTab('financial')"><span>◈</span>گزارش مالی</button>
+        <button class="${viewerTab==='more'?'active':''}" onclick="switchViewerTab('more')"><span>•••</span>بیشتر</button>
+      </nav>
+    </div>`;
+
+  const installBtn = document.getElementById('installBtn');
+  const installToolbar = document.getElementById('viewerInstallToolbar');
+  const canInstall = !!window.__deferredPrompt;
+  if(installBtn) installBtn.style.display = canInstall ? 'block' : 'none';
+  if(installToolbar) installToolbar.style.display = canInstall ? 'flex' : 'none';
+  renderViewerTabBody();
+}
+
+function switchViewerTab(tab){
+  if(!['dashboard','contracts','special','financial','more'].includes(tab)) return;
+  viewerTab = tab;
+  if(tab !== 'dashboard'){
+    viewerDashboardSection = null;
+    viewerDashboardSearch = '';
+  }
+  if(tab === 'more'){
+    viewerMoreSection = null;
+    viewerExportPanel = null;
+  }
+  renderApp();
+}
+
+function renderViewerTabBody(){
+  const body = document.getElementById('viewerBody');
+  if(!body) return;
+  if(viewerTab === 'contracts'){ renderViewerContracts(); return; }
+  if(viewerTab === 'special'){ renderViewerSpecialContracts(); return; }
+  if(viewerTab === 'financial'){ renderAdminFinancial(); return; }
+  if(viewerTab === 'more'){ renderViewerMore(); return; }
+  renderViewerDashboard();
+}
+
+function openViewerContractsPreset(preset){
+  viewerTab = 'contracts';
+  viewerSearchQuery = '';
+  viewerFilterStage = 'all';
+  viewerFilterStatus = ({
+    all:'all', active:'active', closed:'closed', critical:'late', waitingdelivery:'waiting'
+  })[preset] || 'all';
+  viewerDashboardSection = null;
+  viewerDashboardSearch = '';
+  renderApp();
+}
+
+function renderViewerDashboard(){
+  const body = document.getElementById('viewerBody');
+  if(!body) return;
+  const s = computeViewerStats();
+  body.innerHTML = `
+    <div class="kpi-grid" style="margin-top:6px;">
+      <div class="kpi-card" style="cursor:pointer;" onclick="openViewerContractsPreset('all')"><div class="kpi-num">${contracts.length}</div><div class="kpi-label">کل قراردادها</div></div>
+      <div class="kpi-card" style="cursor:pointer;" onclick="openViewerContractsPreset('active')"><div class="kpi-num">${s.active.length}</div><div class="kpi-label">خاتمه نیافته</div></div>
+      <div class="kpi-card" style="cursor:pointer;" onclick="openViewerContractsPreset('closed')"><div class="kpi-num">${s.completed.length}</div><div class="kpi-label">خاتمه‌یافته</div></div>
+      <div class="kpi-card kpi-red" style="cursor:pointer;" onclick="openViewerContractsPreset('critical')"><div class="kpi-num">${s.criticalList.length}</div><div class="kpi-label">بحرانی</div></div>
+      <div class="kpi-card kpi-blue" style="cursor:pointer;" onclick="openViewerContractsPreset('waitingdelivery')"><div class="kpi-num">${s.waitingDeliveryList.length}</div><div class="kpi-label">در انتظار تحویل‌دهی به مالک</div></div>
+      <div class="kpi-card kpi-blue"><div class="kpi-num">${s.avgProgress}٪</div><div class="kpi-label">میانگین پیشرفت</div></div>
+    </div>
+
+    ${renderStageChartHtml()}
+
+    <div class="viewer-quicklinks">
+      <button class="${viewerDashboardSection==='critical'?'active':''}" onclick="switchViewerDashboardSection('critical')">🔴 قراردادهای بحرانی ${s.criticalList.length?('('+s.criticalList.length+')'):''}</button>
+      <button class="${viewerDashboardSection==='panelwait'?'active':''}" onclick="switchViewerDashboardSection('panelwait')">🛠 منتظر نصب صفحه کابینت ${s.panelWaitList.length?('('+s.panelWaitList.length+')'):''}</button>
+      <button class="${viewerDashboardSection==='waitingdelivery'?'active':''}" onclick="switchViewerDashboardSection('waitingdelivery')">📦 در انتظار تحویل‌دهی به مالک ${s.waitingDeliveryList.length?('('+s.waitingDeliveryList.length+')'):''}</button>
+    </div>
+    <div id="viewerDashboardSectionBody"></div>`;
+  renderViewerDashboardSection();
+}
+
+function switchViewerDashboardSection(sec){
+  viewerDashboardSection = (viewerDashboardSection === sec) ? null : sec;
+  viewerDashboardSearch = '';
+  renderViewerDashboard();
+}
+function viewerDashboardSectionContracts(){
+  const s = computeViewerStats();
+  if(viewerDashboardSection === 'critical') return s.criticalList;
+  if(viewerDashboardSection === 'panelwait') return s.panelWaitList;
+  if(viewerDashboardSection === 'waitingdelivery') return s.waitingDeliveryList;
+  return [];
+}
+function renderViewerDashboardSection(){
+  const body = document.getElementById('viewerDashboardSectionBody');
+  if(!body) return;
+  if(!viewerDashboardSection){ body.innerHTML = ''; return; }
+  const titles = {
+    critical:'قراردادهای بحرانی', panelwait:'منتظر نصب صفحه کابینت', waitingdelivery:'در انتظار تحویل‌دهی به مالک'
+  };
+  body.innerHTML = `
+    <div class="section-title" style="margin-top:18px;">${titles[viewerDashboardSection] || ''} <span class="cnt" id="viewerDashCount"></span></div>
+    <input type="text" id="viewerDashSearch" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(viewerDashboardSearch)}" class="auth-input" style="max-width:none;width:100%;margin-bottom:10px;" oninput="onViewerDashboardSearch(this.value)">
+    <div id="viewerDashList"></div>`;
+  renderViewerDashboardList();
+}
+function onViewerDashboardSearch(v){ viewerDashboardSearch = v; renderViewerDashboardList(); }
+function renderViewerDashboardList(){
+  const el = document.getElementById('viewerDashList');
+  if(!el) return;
+  const q = viewerDashboardSearch.trim().toLowerCase();
+  let items = viewerDashboardSectionContracts();
+  if(q) items = items.filter(c => (c.name||'').toLowerCase().includes(q) || (c.itemCode||'').toLowerCase().includes(q));
+  const cnt = document.getElementById('viewerDashCount');
+  if(cnt) cnt.textContent = items.length + ' مورد';
+  if(!items.length){ el.innerHTML = '<div class="empty">موردی یافت نشد.</div>'; return; }
+  el.innerHTML = items.map(c => renderViewerCard(c)).join('');
+}
+
+function renderViewerContracts(){
+  const body = document.getElementById('viewerBody');
+  if(!body) return;
+  body.innerHTML = `
+    <div class="section-title" style="margin-top:14px;">قراردادها <span class="cnt" id="viewerContractsCount"></span></div>
+    <input type="text" id="viewerContractsSearch" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(viewerSearchQuery)}" class="auth-input" style="max-width:none;width:100%;margin-bottom:10px;" oninput="onViewerContractsSearch(this.value)">
+    <div style="display:flex; gap:8px; margin-bottom:14px;">
+      <select id="viewerStageFilter" class="admin-select" onchange="onViewerContractsStageFilter(this.value)">
+        <option value="all">همه مراحل</option>
+        ${DISPLAY_STAGES.map((name,i) => `<option value="${i}" ${viewerFilterStage===String(i)?'selected':''}>${name}</option>`).join('')}
+      </select>
+      <select id="viewerStatusFilter" class="admin-select" onchange="onViewerContractsStatusFilter(this.value)">
+        <option value="all">همه وضعیت‌ها</option>
+        <option value="active" ${viewerFilterStatus==='active'?'selected':''}>خاتمه نیافته</option>
+        <option value="late" ${viewerFilterStatus==='late'?'selected':''}>عقب‌افتاده / بحرانی</option>
+        <option value="near" ${viewerFilterStatus==='near'?'selected':''}>نزدیک سررسید</option>
+        <option value="waiting" ${viewerFilterStatus==='waiting'?'selected':''}>در انتظار تحویل‌دهی به مالک</option>
+        <option value="stale" ${viewerFilterStatus==='stale'?'selected':''}>بروزرسانی نشده</option>
+        <option value="closed" ${viewerFilterStatus==='closed'?'selected':''}>خاتمه‌یافته</option>
+      </select>
+    </div>
+    <div id="viewerContractsList"></div>
+    ${archivedSectionHtml('viewer', false, true)}`;
+  renderViewerContractsList();
+}
+function onViewerContractsSearch(v){ viewerSearchQuery = v; renderViewerContractsList(); }
+function onViewerContractsStageFilter(v){ viewerFilterStage = v; renderViewerContractsList(); }
+function onViewerContractsStatusFilter(v){ viewerFilterStatus = v; renderViewerContractsList(); }
+function renderViewerContractsList(){
+  const el = document.getElementById('viewerContractsList');
+  if(!el) return;
+  const q = viewerSearchQuery.trim().toLowerCase();
+  let items = contracts.slice();
+  if(q) items = items.filter(c => (c.name||'').toLowerCase().includes(q) || (c.itemCode||'').toLowerCase().includes(q));
+  if(viewerFilterStage !== 'all') items = items.filter(c => getDisplayStageIndex(c) === parseInt(viewerFilterStage,10));
+  if(viewerFilterStatus === 'active') items = items.filter(c => !isCompleted(c));
+  else if(viewerFilterStatus === 'closed') items = items.filter(isCompleted);
+  else if(viewerFilterStatus === 'waiting') items = items.filter(c => !isCompleted(c) && getDisplayStageIndex(c) === DISPLAY_STAGES.length-2);
+  else if(viewerFilterStatus === 'stale') items = items.filter(c => !isCompleted(c) && isNotUpdated(c));
+  else if(viewerFilterStatus === 'late') items = items.filter(c => viewerCriticalStatus(c).critical);
+  else if(viewerFilterStatus === 'near') items = items.filter(c => !isCompleted(c) && viewerCriticalStatus(c).cls === 'warn');
+  items.sort((a,b) => { const ac=isCompleted(a), bc=isCompleted(b); return ac===bc ? 0 : (ac?1:-1); });
+  const cnt = document.getElementById('viewerContractsCount');
+  if(cnt) cnt.textContent = items.length + ' مورد';
+  if(!items.length){ el.innerHTML = '<div class="empty">موردی یافت نشد.</div>'; return; }
+  el.innerHTML = items.map(c => renderViewerCard(c)).join('');
+}
+
+function renderViewerSpecialContracts(){
+  const body = document.getElementById('viewerBody');
+  if(!body) return;
+  const items = computeViewerStats().pmSpecialList;
+  const totalMaterial = items.reduce((sum,c) => sum + getContractFinance(c).material, 0);
+  const totalLabor = items.reduce((sum,c) => sum + getContractFinance(c).labor, 0);
+  const totalAll = totalMaterial + totalLabor;
+  const finItemsHtml = items.map(c => {
+    const f = getContractFinance(c);
+    return `
+      <div class="pmo-fin-item">
+        <div class="pmo-fin-name">${escapeHtml(c.name)}</div>
+        <div class="pmo-fin-nums">
+          <div class="pmo-fin-line"><span>ارزش متریال</span><span>${formatToman(f.material)} ریال</span></div>
+          <div class="pmo-fin-line"><span>اجرت نصب</span><span>${formatToman(f.labor)} ریال</span></div>
+          <div class="pmo-fin-line total"><span>جمع قرارداد</span><span>${formatToman(f.total)} ریال</span></div>
+        </div>
+        <span class="pmo-fin-tag ${f.isFinal?'':'soft'}">${f.isFinal?'فاکتور نهایی':'فاکتور اولیه'}</span>
+      </div>`;
+  }).join('');
+
+  body.innerHTML = `
+    <div class="section-title" style="margin-top:14px;">🌟 قراردادهای خاص <span class="cnt">${items.length} مورد</span></div>
+    <div class="viewer-report-note">قراردادهایی که مدیر برای نمایش در این بخش انتخاب کرده — همراه خلاصه مالی و وضعیت پیشرفت هرکدام.</div>
+    <div class="chart-box" style="margin-bottom:14px;">
+      ${items.length ? `
+      <div class="pmo-fin-item pmo-fin-grand" style="margin-bottom:10px;">
+        <div class="pmo-fin-name">جمع کل</div>
+        <div class="pmo-fin-nums">
+          <div class="pmo-fin-line"><span>جمع کل ارزش متریال</span><span>${formatToman(totalMaterial)} ریال</span></div>
+          <div class="pmo-fin-line"><span>جمع کل اجرت نصب</span><span>${formatToman(totalLabor)} ریال</span></div>
+          <div class="pmo-fin-line total"><span>جمع کل (متریال + اجرت)</span><span>${formatToman(totalAll)} ریال</span></div>
+        </div>
+      </div>
+      ${finItemsHtml}` : '<div class="empty">موردی انتخاب نشده.</div>'}
+    </div>
+    <div class="section-title" style="margin-top:6px;">وضعیت پیشرفت</div>
+    <div id="viewerSpecialList">${items.length ? items.map(c => renderViewerCard(c)).join('') : '<div class="empty">موردی یافت نشد.</div>'}</div>`;
+}
+
+function openViewerMoreSection(section){
+  viewerMoreSection = section;
+  viewerExportPanel = null;
+  renderViewerMore();
+}
+function closeViewerMoreSection(){
+  viewerMoreSection = null;
+  viewerExportPanel = null;
+  renderViewerMore();
+}
+function renderViewerMore(){
+  const body = document.getElementById('viewerBody');
+  if(!body) return;
+  if(!viewerMoreSection){
+    body.innerHTML = `
+      <div class="section-title" style="margin-top:14px;">بیشتر</div>
+      <div class="admin-hub-grid">
+        <button onclick="openViewerMoreSection('exports')"><span>📤</span>خروجی‌ها</button>
+        <button onclick="openViewerMoreSection('contact')"><span>✉️</span>پیام‌ها${pmMessagesUnseenCountForViewer()?(' ('+pmMessagesUnseenCountForViewer()+')'):''}</button>
+        <button onclick="openViewerMoreSection('mycomments')"><span>💬</span>کامنت‌های من${myCommentsUnseenCount()?(' ('+myCommentsUnseenCount()+')'):''}</button>
+      </div>`;
+    return;
+  }
+
+  if(viewerMoreSection === 'exports'){
+    renderViewerExportsHub();
+    return;
+  }
+  if(viewerMoreSection === 'contact'){
+    markPmNotesSeen(n => n.byRole === 'admin' && currentUser && n.toUid === currentUser.uid);
+    body.innerHTML = `
+      <div class="toolbar"><button class="btn-secondary" onclick="closeViewerMoreSection()">↩ بازگشت</button></div>
+      <div class="section-title" style="margin-top:10px;">✉️ ارتباط با کنترل پروژه</div>
+      <div class="viewer-report-note">پیام‌هایی که اینجا می‌نویسید مستقیم برای مدیر (کنترل پروژه) ارسال می‌شود — مخصوص موضوعات کلی، نه یک قرارداد خاص.</div>
+      <div id="pmNotesList">${renderPmNotesFlatHtml()}</div>
+      <div class="comment-add-row" style="margin-top:12px;">
+        <input type="text" id="pmNoteInput" class="auth-input" style="max-width:none; flex:1;" placeholder="پیام خود را بنویسید...">
+        <button class="field-save" onclick="sendPmNote()">ارسال</button>
+      </div>`;
+    return;
+  }
+  if(viewerMoreSection === 'mycomments'){
+    body.innerHTML = `
+      <div class="toolbar"><button class="btn-secondary" onclick="closeViewerMoreSection()">↩ بازگشت</button></div>
+      <div class="section-title" style="margin-top:10px;">💬 کامنت‌های من</div>
+      <div class="viewer-report-note">کامنت‌هایی که روی هر قرارداد گذاشته‌اید و جواب‌هایی که به آن‌ها داده شده، اینجا نمایش داده می‌شود.</div>
+      ${renderMyCommentsHtml()}`;
+  }
+}
+
+function openViewerExportPanel(panel){
+  viewerExportPanel = panel;
+  renderViewerExportsHub();
+}
+function closeViewerExportPanel(){
+  viewerExportPanel = null;
+  renderViewerExportsHub();
+}
+function renderViewerExportsHub(){
+  const body = document.getElementById('viewerBody');
+  if(!body) return;
+  if(!viewerExportPanel){
+    body.innerHTML = `
+      <div class="toolbar"><button class="btn-secondary" onclick="closeViewerMoreSection()">↩ بازگشت به بیشتر</button></div>
+      <div class="section-title" style="margin-top:10px;">خروجی‌ها</div>
+      <div class="admin-hub-grid">
+        <button onclick="openViewerExportPanel('financial')"><span>💰</span>خروجی مالی</button>
+        <button onclick="openViewerExportPanel('contracts')"><span>📋</span>خروجی قراردادها</button>
+        <button onclick="openViewerExportPanel('special')"><span>🌟</span>خروجی قراردادهای خاص</button>
+      </div>`;
+    return;
+  }
+  if(viewerExportPanel === 'financial'){
+    renderViewerFinancialExports();
+    return;
+  }
+  if(viewerExportPanel === 'contracts'){
+    body.innerHTML = `
+      <div class="toolbar"><button class="btn-secondary" onclick="closeViewerExportPanel()">↩ بازگشت به خروجی‌ها</button></div>
+      <div class="section-title" style="margin-top:10px;">📋 خروجی قراردادها</div>
+      <div class="export-filters">
+        <div class="row1">
+          <select id="exportScopeSelect" class="admin-select" onchange="onExportScopeChange(this.value)">
+            <option value="all" ${exportScope==='all'?'selected':''}>همه قراردادها</option>
+            <option value="active" ${exportScope==='active'?'selected':''}>فقط خاتمه‌نیافته</option>
+            <option value="closed" ${exportScope==='closed'?'selected':''}>فقط خاتمه‌یافته</option>
+            <option value="waiting" ${exportScope==='waiting'?'selected':''}>فقط در انتظار تحویل‌دهی</option>
+          </select>
+        </div>
+        <div class="row2">
+          <div class="date-field"><label>از تاریخ قرارداد:</label><input type="text" placeholder="1405/01/01" value="${escapeHtml(exportDateFrom)}" oninput="onExportDateFrom(this.value)"></div>
+          <div class="date-field"><label>تا:</label><input type="text" placeholder="1405/12/29" value="${escapeHtml(exportDateTo)}" oninput="onExportDateTo(this.value)"></div>
+        </div>
+      </div>
+      <div class="export-row">
+        <button class="export-btn" id="exportExcelBtn" onclick="exportExcelViewer()">📊 خروجی اکسل</button>
+        <button class="export-btn" id="exportPdfBtn" onclick="exportPDFViewer()">📄 خروجی PDF</button>
+      </div>`;
+    return;
+  }
+  body.innerHTML = `
+    <div class="toolbar"><button class="btn-secondary" onclick="closeViewerExportPanel()">↩ بازگشت به خروجی‌ها</button></div>
+    <div class="section-title" style="margin-top:10px;">🌟 خروجی قراردادهای خاص</div>
+    <div class="viewer-report-note">بدون فیلتر — تمام قراردادهایی که در حال حاضر به‌عنوان «قرارداد خاص» تعریف شده‌اند در خروجی می‌آیند.</div>
+    <div class="export-row">
+      <button class="export-btn" id="specialExportExcelBtn" onclick="exportSpecialContractsExcel()">📊 خروجی اکسل</button>
+      <button class="export-btn" id="specialExportPdfBtn" onclick="exportSpecialContractsPdf()">📄 خروجی PDF</button>
+    </div>`;
+}
+
+function renderViewerFinancialExports(){
+  const body = document.getElementById('viewerBody');
+  if(!body) return;
+  const st = computeFinancialStats();
+  const monthsByYear = {};
+  st.availableMonths.forEach(mk => {
+    const y = mk.split('/')[0];
+    (monthsByYear[y] = monthsByYear[y] || []).push(mk);
+  });
+  const yearKeys = Object.keys(monthsByYear).sort();
+  const filterLabel = st.filterActive ? `${finFilterMonths.size} ماه انتخاب‌شده` : 'همه‌ی قراردادها';
+  body.innerHTML = `
+    <div class="toolbar"><button class="btn-secondary" onclick="closeViewerExportPanel()">↩ بازگشت به خروجی‌ها</button></div>
+    <div class="section-title" style="margin-top:10px;">💰 خروجی مالی</div>
+    <div class="section-title" style="margin-top:10px; cursor:pointer; justify-content:space-between;" onclick="toggleFinFilterPanel()">
+      <span>🔎 فیلتر گزارش <span class="cnt">(${filterLabel})</span></span>
+      <span>${finFilterOpen ? '▲ بستن' : '▼ نمایش'}</span>
+    </div>
+    ${finFilterOpen ? (yearKeys.length ? `
+    <div style="background:var(--panel-2); border:1px solid var(--line); border-radius:10px; padding:10px; margin-bottom:12px;">
+      <button class="btn-secondary" style="font-size:10.5px; padding:6px 10px; width:100%;" onclick="clearFinFilter()">نمایش همه (حذف فیلتر)</button>
+      ${yearKeys.map(y => {
+        const monthsOfYear = monthsByYear[y];
+        const allSelected = monthsOfYear.every(mk => finFilterMonths.has(mk));
+        return `
+        <div style="margin-top:12px;">
+          <label style="display:flex; align-items:center; gap:6px; font-weight:700; cursor:pointer;">
+            <input type="checkbox" ${allSelected ? 'checked' : ''} onchange="toggleFinFilterYear('${y}', this.checked)">
+            کل سال ${y}
+          </label>
+          <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;">
+            ${monthsOfYear.map(mk => `
+              <label style="display:flex; align-items:center; gap:4px; font-family:'JetBrains Mono',monospace; font-size:10.5px; border:1px solid var(--line); border-radius:8px; padding:4px 8px; cursor:pointer;">
+                <input type="checkbox" ${finFilterMonths.has(mk) ? 'checked' : ''} onchange="toggleFinFilterMonth('${mk}')" style="margin:0;">
+                ${mk}
+              </label>`).join('')}
+          </div>
+        </div>`;
+      }).join('')}
+    </div>` : '<div class="empty">هیچ قراردادی تاریخ معتبر ندارد.</div>') : ''}
+    <div class="export-row">
+      <button class="export-btn" id="finExcelBtn" onclick="exportFinancialExcel()">📊 خروجی اکسل مالی</button>
+      <button class="export-btn" id="finPdfBtn" onclick="exportFinancialPdf()">📄 خروجی PDF مالی</button>
+    </div>`;
+}
+
+function renderPmoDeputy(el){
   const s = computeViewerStats();
   const inFinancial = (viewerSection === 'financial');
   el.innerHTML = `
@@ -1873,7 +2270,7 @@ function sortMaterialPurchases(){
   );
 }
 async function ensureMaterialPurchasesLoaded(){
-  if(myRole !== 'admin' || !db || materialPurchasesLoaded || materialPurchasesLoading) return;
+  if((myRole !== 'admin' && myRole !== 'viewer') || !db || materialPurchasesLoaded || materialPurchasesLoading) return;
   materialPurchasesLoading = true;
   materialPurchasesError = '';
 
@@ -1889,7 +2286,7 @@ async function ensureMaterialPurchasesLoaded(){
     try{
       const cachedSnap = await db.collection('materialPurchases').get({ source:'cache' });
       applySnapshot(cachedSnap);
-      if(myRole === 'admin' && adminTab === 'financial') renderAppPreservingInputs();
+      rerenderFinancialSurface();
     }catch(e){}
 
     // سپس نسخه‌ی تازه‌ی سرور را می‌گیریم تا داده‌ی نمایش‌داده‌شده حتماً همگام باشد.
@@ -1902,7 +2299,7 @@ async function ensureMaterialPurchasesLoaded(){
     }
   }finally{
     materialPurchasesLoading = false;
-    if(myRole === 'admin' && adminTab === 'financial') renderAppPreservingInputs();
+    rerenderFinancialSurface();
   }
 }
 function materialPurchaseToEnglishDigits(v){
@@ -2230,6 +2627,7 @@ function normalizeFinancialCardLayout(layout){
   return out;
 }
 function financialActiveCardLayout(){
+  if(adminPreviewRole === 'viewer') return financialDefaultCardLayout();
   if(financialCardSettingsLoaded) return financialCardLayout.slice();
   if(financialCardLayout.length) return financialCardLayout.slice();
   return financialDefaultCardLayout();
@@ -2262,8 +2660,27 @@ function financialFilteredMaterialPurchases(){
     return key && finFilterMonths.has(key);
   });
 }
+function financialUiRole(){ return adminPreviewRole || myRole; }
+function canManageFinancialCardLayout(){
+  // در حالت Preview مدیر، تنظیمات نقش دیگر نباید روی حساب Admin ذخیره شود.
+  return !adminPreviewRole && (myRole === 'admin' || myRole === 'viewer');
+}
+function rerenderFinancialSurface(){
+  const role = financialUiRole();
+  if(role === 'viewer'){
+    if(viewerTab === 'financial') renderAdminFinancial();
+    else if(viewerTab === 'more' && viewerMoreSection === 'exports' && viewerExportPanel === 'financial') renderViewerFinancialExports();
+    return;
+  }
+  if(role === 'pmoDeputy' && viewerSection === 'financial'){
+    renderAdminFinancial();
+    return;
+  }
+  if(myRole === 'admin' && !adminPreviewRole && adminTab === 'financial') renderAdminFinancial();
+}
+
 async function ensureFinancialCardSettingsLoaded(){
-  if(myRole !== 'admin' || !db || !currentUser || financialCardSettingsLoaded || financialCardSettingsLoading) return;
+  if(!canManageFinancialCardLayout() || !db || !currentUser || financialCardSettingsLoaded || financialCardSettingsLoading) return;
   financialCardSettingsLoading = true;
   financialCardSettingsError = '';
   const ref = db.collection('userSettings').doc(currentUser.uid);
@@ -2280,7 +2697,7 @@ async function ensureFinancialCardSettingsLoaded(){
     try{
       const cached = await ref.get({ source:'cache' });
       apply(cached);
-      if(myRole === 'admin' && adminTab === 'financial') renderAppPreservingInputs();
+      rerenderFinancialSurface();
     }catch(e){}
     const fresh = await ref.get({ source:'server' });
     apply(fresh);
@@ -2292,11 +2709,11 @@ async function ensureFinancialCardSettingsLoaded(){
     financialCardSettingsError = (err && err.message) ? err.message : String(err);
   }finally{
     financialCardSettingsLoading = false;
-    if(myRole === 'admin' && adminTab === 'financial') renderAppPreservingInputs();
+    rerenderFinancialSurface();
   }
 }
 function openFinancialCardManager(){
-  if(myRole !== 'admin') return;
+  if(!canManageFinancialCardLayout()) return;
   financialCardDraftLayout = financialActiveCardLayout();
   financialCardEditMode = true;
   financialCardSettingsError = '';
@@ -2359,7 +2776,7 @@ function dropFinancialCard(ev, targetId){
   renderAdminFinancial();
 }
 async function saveFinancialCardLayout(){
-  if(myRole !== 'admin' || !db || !currentUser || financialCardSettingsSaving) return;
+  if(!canManageFinancialCardLayout() || !db || !currentUser || financialCardSettingsSaving) return;
   financialCardSettingsSaving = true;
   financialCardSettingsError = '';
   const layout = normalizeFinancialCardLayout(financialCardDraftLayout);
@@ -2425,7 +2842,7 @@ function renderViewerFinancialCards(st){
   return `<div class="kpi-grid" style="grid-template-columns:repeat(2,1fr);">${ids.map(id => renderFinancialCard(id, st, [])).join('')}</div>`;
 }
 function renderFinancialCardManager(){
-  if(myRole !== 'admin' || !financialCardEditMode) return '';
+  if(!canManageFinancialCardLayout() || !financialCardEditMode) return '';
   const layout = financialCardDraftLayout.slice();
   const hidden = financialAvailableCardIds().filter(id => !layout.includes(id));
   return `
@@ -2433,7 +2850,7 @@ function renderFinancialCardManager(){
       <div style="display:flex; align-items:center; justify-content:space-between; gap:8px; flex-wrap:wrap;">
         <div>
           <div class="chart-title" style="margin-bottom:3px;">⚙️ مدیریت کارت‌های مالی</div>
-          <div style="font-size:10.5px; color:var(--ink-soft);">ترتیب از راست به چپ و سپس ردیف بعدی است. چیدمان روی حساب مدیر ذخیره می‌شود.</div>
+          <div style="font-size:10.5px; color:var(--ink-soft);">ترتیب از راست به چپ و سپس ردیف بعدی است. چیدمان روی حساب خود شما ذخیره می‌شود.</div>
         </div>
         <button class="btn-secondary" style="width:auto; padding:7px 10px;" onclick="closeFinancialCardManager()">انصراف</button>
       </div>
@@ -2467,15 +2884,16 @@ function renderFinancialCardManager(){
 }
 
 function renderAdminFinancial(){
-  // این تابع برای هر دو پنل مدیر و مدیر پروژه استفاده می‌شود؛ مدیر پروژه فقط‌خواندنی می‌بیند (بدون امکان باز کردن فرم ویرایش)
-  const finEditable = (myRole === 'admin');
-  const body = document.getElementById(finEditable ? 'adminBody' : 'viewerSectionBody');
+  // داده‌ی قراردادها برای مدیر پروژه فقط‌خواندنی است؛ مدیریت کارت‌ها فقط تنظیم UI حساب خودش است.
+  const uiRole = financialUiRole();
+  const finEditable = (myRole === 'admin' && !adminPreviewRole);
+  const viewerFinancial = (uiRole === 'viewer');
+  const pmoFinancial = (uiRole === 'pmoDeputy');
+  const body = finEditable ? document.getElementById('adminBody') : (document.getElementById('viewerBody') || document.getElementById('viewerSectionBody'));
   if(!body) return;
   const st = computeFinancialStats();
-  if(finEditable){
-    ensureMaterialPurchasesLoaded();
-    ensureFinancialCardSettingsLoaded();
-  }
+  if(finEditable || viewerFinancial) ensureMaterialPurchasesLoaded();
+  if(canManageFinancialCardLayout()) ensureFinancialCardSettingsLoaded();
   const finRowOpen = (id) => finEditable ? ` onclick="openContractDetail('${id}')"` : '';
   const topList = st.rows.slice().filter(r => r.fin.total > 0).sort((a,b) => b.fin.total - a.fin.total).slice(0,5);
   const maxMonth = st.monthly.length ? Math.max(...st.monthly.map(m => m.value)) : 0;
@@ -2497,9 +2915,9 @@ function renderAdminFinancial(){
   body.innerHTML = `
     <div class="section-title" style="margin-top:14px;">💰 گزارش مالی</div>
     <div class="toolbar" style="display:flex; gap:8px; flex-wrap:wrap;">
-      <button id="finExcelBtn" class="btn-secondary" onclick="exportFinancialExcel()">📊 خروجی اکسل</button>
-      <button id="finPdfBtn" class="btn-secondary" onclick="exportFinancialPdf()">🧾 خروجی PDF</button>
-      ${finEditable ? `<button class="btn-secondary" onclick="openFinancialCardManager()">⚙️ مدیریت کارت‌ها</button>` : ''}
+      ${(finEditable || pmoFinancial) ? `<button id="finExcelBtn" class="btn-secondary" onclick="exportFinancialExcel()">📊 خروجی اکسل</button>
+      <button id="finPdfBtn" class="btn-secondary" onclick="exportFinancialPdf()">🧾 خروجی PDF</button>` : ''}
+      ${canManageFinancialCardLayout() ? `<button class="btn-secondary" onclick="openFinancialCardManager()">⚙️ مدیریت کارت‌ها</button>` : ''}
     </div>
 
     <div class="section-title" style="margin-top:14px; cursor:pointer; justify-content:space-between;" onclick="toggleFinFilterPanel()">
@@ -2529,8 +2947,8 @@ function renderAdminFinancial(){
       }).join('')}
     </div>` : `<div class="empty">هیچ قراردادی تاریخ معتبر نداره تا بشه بر اساس ماه/سال فیلترش کرد.</div>`) : ''}
 
-    ${finEditable ? renderFinancialCardManager() : ''}
-    ${finEditable ? renderFinancialCards(st) : renderViewerFinancialCards(st)}
+    ${canManageFinancialCardLayout() ? renderFinancialCardManager() : ''}
+    ${(finEditable || viewerFinancial) ? renderFinancialCards(st) : renderViewerFinancialCards(st)}
 
     ${finEditable ? renderMaterialPurchasesSection() : ''}
 
@@ -2580,19 +2998,19 @@ function renderAdminFinancial(){
   `;
   if(finSectionOpen.all) renderAdminFinancialList();
 }
-function toggleFinSection(key){ finSectionOpen[key] = !finSectionOpen[key]; renderAdminFinancial(); }
-function toggleFinFilterPanel(){ finFilterOpen = !finFilterOpen; renderAdminFinancial(); }
-function clearFinFilter(){ finFilterMonths = new Set(); renderAdminFinancial(); }
+function toggleFinSection(key){ finSectionOpen[key] = !finSectionOpen[key]; rerenderFinancialSurface(); }
+function toggleFinFilterPanel(){ finFilterOpen = !finFilterOpen; rerenderFinancialSurface(); }
+function clearFinFilter(){ finFilterMonths = new Set(); rerenderFinancialSurface(); }
 function toggleFinFilterMonth(mk){
   if(finFilterMonths.has(mk)) finFilterMonths.delete(mk); else finFilterMonths.add(mk);
-  renderAdminFinancial();
+  rerenderFinancialSurface();
 }
 function toggleFinFilterYear(year, checked){
   const st = computeFinancialStats();
   st.availableMonths.filter(mk => mk.startsWith(year + '/')).forEach(mk => {
     if(checked) finFilterMonths.add(mk); else finFilterMonths.delete(mk);
   });
-  renderAdminFinancial();
+  rerenderFinancialSurface();
 }
 function onAdminFinancialSearch(v){ adminFinancialSearch = v; renderAdminFinancialList(); }
 function renderAdminFinancialList(){
@@ -3746,6 +4164,85 @@ async function exportPDFViewer(){
     alert('خطا در ساخت فایل PDF: ' + err.message);
   }finally{
     if(btn){ btn.disabled = false; btn.textContent = '📄 خروجی PDF (شامل نمودار)'; }
+  }
+}
+
+function specialContractsExportRows(){
+  return computeViewerStats().pmSpecialList.map(c => {
+    const f = getContractFinance(c);
+    return {
+      'نام قرارداد': c.name || '',
+      'کد قلم': c.itemCode || '',
+      'ارزش متریال (ریال)': f.material,
+      'اجرت نصب (ریال)': f.labor,
+      'جمع قرارداد (ریال)': f.total,
+      'نوع فاکتور': f.isFinal ? 'فاکتور نهایی' : 'فاکتور اولیه',
+      'پیشرفت': overallPercent(c) + '٪',
+      'مرحله فعلی': DISPLAY_STAGES[getDisplayStageIndex(c)],
+      'سررسید': c.revisedDueDate || c.dueDate || '—',
+      'وضعیت': isCompleted(c) ? 'خاتمه‌یافته' : viewerCriticalStatus(c).label
+    };
+  });
+}
+async function exportSpecialContractsExcel(){
+  const items = computeViewerStats().pmSpecialList;
+  if(!items.length){ alert('هیچ قرارداد خاصی تعریف نشده است.'); return; }
+  const btn = document.getElementById('specialExportExcelBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
+  try{
+    const totalMaterial = items.reduce((sum,c) => sum + getContractFinance(c).material, 0);
+    const totalLabor = items.reduce((sum,c) => sum + getContractFinance(c).labor, 0);
+    const summary = [
+      ['خروجی قراردادهای خاص', ''],
+      ['تاریخ گزارش', todayJalaliLabel()],
+      ['تعداد قراردادهای خاص', items.length],
+      ['جمع ارزش متریال (ریال)', totalMaterial],
+      ['جمع اجرت نصب (ریال)', totalLabor],
+      ['جمع کل (ریال)', totalMaterial + totalLabor]
+    ];
+    const wsSummary = XLSX.utils.aoa_to_sheet(summary);
+    wsSummary['!cols'] = [{wch:30},{wch:24}];
+    const wsList = XLSX.utils.json_to_sheet(specialContractsExportRows());
+    wsList['!cols'] = [{wch:24},{wch:14},{wch:20},{wch:18},{wch:20},{wch:16},{wch:12},{wch:24},{wch:16},{wch:28}];
+    const wb = XLSX.utils.book_new();
+    wb.Workbook = { Views: [{ RTL:true }] };
+    XLSX.utils.book_append_sheet(wb, wsSummary, 'جمع کل');
+    XLSX.utils.book_append_sheet(wb, wsList, 'قراردادهای خاص');
+    XLSX.writeFile(wb, `قراردادهای خاص - ${todayJalaliFileLabel()}.xlsx`);
+  }catch(err){
+    alert('خطا در ساخت اکسل قراردادهای خاص: ' + err.message);
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '📊 خروجی اکسل'; }
+  }
+}
+async function exportSpecialContractsPdf(){
+  const items = computeViewerStats().pmSpecialList;
+  if(!items.length){ alert('هیچ قرارداد خاصی تعریف نشده است.'); return; }
+  const btn = document.getElementById('specialExportPdfBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
+  try{
+    const totalMaterial = items.reduce((sum,c) => sum + getContractFinance(c).material, 0);
+    const totalLabor = items.reduce((sum,c) => sum + getContractFinance(c).labor, 0);
+    const extraHeaderHtml = `
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;">
+        <div style="border:1px solid #ddd;border-radius:8px;padding:8px;"><div style="font-size:9px;color:#666;">جمع ارزش متریال</div><b>${formatToman(totalMaterial)} ریال</b></div>
+        <div style="border:1px solid #ddd;border-radius:8px;padding:8px;"><div style="font-size:9px;color:#666;">جمع اجرت نصب</div><b>${formatToman(totalLabor)} ریال</b></div>
+        <div style="border:1px solid #0f766e;border-radius:8px;padding:8px;"><div style="font-size:9px;color:#666;">جمع کل</div><b>${formatToman(totalMaterial+totalLabor)} ریال</b></div>
+      </div>`;
+    const rows = specialContractsExportRows();
+    const headers = ['نام قرارداد','کد قلم','متریال','اجرت','جمع','فاکتور','پیشرفت','مرحله','سررسید','وضعیت'];
+    const tableRows = rows.map(r => [
+      r['نام قرارداد'], r['کد قلم'], formatToman(r['ارزش متریال (ریال)']), formatToman(r['اجرت نصب (ریال)']),
+      formatToman(r['جمع قرارداد (ریال)']), r['نوع فاکتور'], r['پیشرفت'], r['مرحله فعلی'], r['سررسید'], r['وضعیت']
+    ]);
+    await renderPaginatedReportPdf({
+      reportTitle:'خروجی قراردادهای خاص', extraHeaderHtml, headers, rows:tableRows,
+      filename:`قراردادهای خاص - ${todayJalaliFileLabel()}.pdf`
+    });
+  }catch(err){
+    alert('خطا در ساخت PDF قراردادهای خاص: ' + err.message);
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '📄 خروجی PDF'; }
   }
 }
 

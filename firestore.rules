@@ -67,10 +67,9 @@ service cloud.firestore {
       allow delete: if false;
     }
 
-    // خرید متریال ماهانه: داده‌ای مستقل از قراردادها؛ فقط مدیر اجازه خواندن/ثبت/ویرایش/حذف دارد.
-    // حذف فقط برای نقش admin مجاز است.
+    // خرید متریال ماهانه: مدیر امکان کامل دارد؛ مدیر پروژه فقط برای کارت‌های گزارش مالی اجازه‌ی خواندن دارد.
     match /materialPurchases/{purchaseId} {
-      allow read: if isAdmin();
+      allow read: if isAdmin() || (isSignedIn() && myRole() == 'viewer');
 
       allow create: if isAdmin()
                     && request.resource.data.keys().hasOnly([
@@ -115,13 +114,16 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
-    // تنظیمات شخصی رابط کاربری مدیر: فقط خود همان Admin می‌تواند تنظیمات خودش را بخواند/بنویسد.
+    // تنظیمات شخصی رابط کاربری: Admin و مدیر پروژه فقط تنظیمات حساب خودشان را می‌خوانند/می‌نویسند.
     // این سند صرفاً چیدمان کارت‌های گزارش مالی را نگه می‌دارد و به داده‌های قرارداد/خرید دست نمی‌زند.
     match /userSettings/{userId} {
-      allow read: if isAdmin() && request.auth.uid == userId;
+      allow read: if isSignedIn()
+                  && request.auth.uid == userId
+                  && (myRole() == 'admin' || myRole() == 'viewer');
 
-      allow create, update: if isAdmin()
+      allow create, update: if isSignedIn()
                             && request.auth.uid == userId
+                            && (myRole() == 'admin' || myRole() == 'viewer')
                             && request.resource.data.keys().hasOnly([
                               'financialCardLayout', 'updatedAt'
                             ])
