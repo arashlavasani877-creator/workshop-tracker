@@ -33,6 +33,10 @@ let dataSubscribed = false;
 let historyOpen = {};         // id -> bool
 let approveTargetUid = null;
 let authErrorMsg = '';
+let authActionBusy = '';
+const REMEMBERED_LOGIN_STORAGE_KEY = 'afrachoob-remembered-login-v2';
+const REMEMBERED_LOGIN_DB = 'afrachoob-secure-login';
+const REMEMBERED_LOGIN_KEY_ID = 'remember-key-v1';
 let adminSearchQuery = '';
 let adminFilterStage = 'all';
 let adminFilterStatus = 'all';
@@ -623,6 +627,477 @@ function renderPmConversationsHtml(){
 }
 
 
+/* ---------- Login experience / remember me ---------- */
+function ensureLoginStyles(){
+  if(document.getElementById('afLoginStyles')) return;
+  const style = document.createElement('style');
+  style.id = 'afLoginStyles';
+  style.textContent = `
+    body.af-login-page{
+      min-height:100svh;
+      padding-bottom:0 !important;
+      background:
+        radial-gradient(circle at 18% 8%, rgba(227,168,87,.18) 0, rgba(227,168,87,0) 30%),
+        radial-gradient(circle at 88% 24%, rgba(79,209,197,.10) 0, rgba(79,209,197,0) 28%),
+        var(--bg);
+    }
+    body.af-login-page > header{ display:none !important; }
+    .af-login-shell{
+      min-height:100svh;
+      width:100%;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      padding:max(20px, env(safe-area-inset-top)) 14px max(20px, env(safe-area-inset-bottom));
+      position:relative;
+      isolation:isolate;
+      overflow:hidden;
+    }
+    .af-login-shell::before,
+    .af-login-shell::after{
+      content:"";
+      position:absolute;
+      z-index:-1;
+      border-radius:50%;
+      pointer-events:none;
+      filter:blur(2px);
+    }
+    .af-login-shell::before{
+      width:min(58vw,360px);
+      aspect-ratio:1;
+      top:-14%;
+      left:-16%;
+      background:rgba(227,168,87,.10);
+    }
+    .af-login-shell::after{
+      width:min(52vw,320px);
+      aspect-ratio:1;
+      right:-18%;
+      bottom:-10%;
+      background:rgba(79,209,197,.07);
+    }
+    .af-login-card{
+      width:min(100%,430px);
+      background:var(--panel);
+      border:1px solid var(--line);
+      border-radius:26px;
+      box-shadow:0 22px 60px rgba(0,0,0,.14);
+      padding:clamp(22px,5vw,34px);
+      text-align:center;
+    }
+    html[data-theme="light"] .af-login-card{ box-shadow:0 22px 60px rgba(38,38,30,.10); }
+    .af-login-logo{
+      width:84px;
+      height:84px;
+      border-radius:22px;
+      object-fit:contain;
+      background:#fff;
+      padding:9px;
+      box-shadow:0 10px 26px rgba(0,0,0,.10);
+      margin:0 auto 18px;
+      display:block;
+    }
+    .af-login-title{
+      margin:0;
+      direction:ltr;
+      color:var(--ink);
+      font-family:Arial,'Vazirmatn',sans-serif;
+      font-size:clamp(23px,6vw,30px);
+      line-height:1.18;
+      font-weight:900;
+      letter-spacing:-.5px;
+    }
+    .af-login-subtitle{
+      margin:10px 0 24px;
+      color:var(--ink-soft);
+      font-size:13px;
+      line-height:1.8;
+    }
+    .af-login-field{ text-align:right; margin-bottom:12px; }
+    .af-login-field-label{
+      display:block;
+      margin:0 3px 6px;
+      color:var(--ink-soft);
+      font-size:11.5px;
+      font-weight:700;
+    }
+    .af-login-input-wrap{
+      min-height:54px;
+      display:flex;
+      align-items:center;
+      gap:10px;
+      border:1.5px solid var(--line);
+      border-radius:14px;
+      background:var(--panel-2);
+      padding:0 13px;
+      transition:border-color .18s ease, box-shadow .18s ease, transform .18s ease;
+    }
+    .af-login-input-wrap:focus-within{
+      border-color:var(--amber);
+      box-shadow:0 0 0 3px var(--amber-dim);
+    }
+    .af-login-field-icon{
+      width:22px;
+      height:22px;
+      flex:0 0 22px;
+      color:var(--ink-faint);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+    }
+    .af-login-field-icon svg,
+    .af-login-eye svg{ width:21px; height:21px; display:block; }
+    .af-login-input{
+      width:100%;
+      min-width:0;
+      border:0;
+      outline:0;
+      background:transparent;
+      color:var(--ink);
+      font-family:'Vazirmatn',sans-serif;
+      font-size:14px;
+      padding:15px 0;
+      direction:ltr;
+      text-align:left;
+    }
+    .af-login-input::placeholder{ color:var(--ink-faint); }
+    .af-login-eye{
+      width:34px;
+      height:34px;
+      flex:0 0 34px;
+      border:0;
+      border-radius:9px;
+      background:transparent;
+      color:var(--ink-soft);
+      padding:6px;
+      cursor:pointer;
+      touch-action:manipulation;
+    }
+    .af-login-eye:active{ transform:scale(.92); background:var(--amber-dim); }
+    .af-login-remember-row{
+      display:flex;
+      align-items:flex-start;
+      justify-content:space-between;
+      gap:10px;
+      margin:10px 2px 18px;
+      text-align:right;
+    }
+    .af-login-remember{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      color:var(--ink-soft);
+      font-size:12.5px;
+      cursor:pointer;
+      user-select:none;
+    }
+    .af-login-remember input{
+      width:18px;
+      height:18px;
+      accent-color:var(--amber);
+      margin:0;
+      flex:0 0 auto;
+    }
+    .af-login-remember input:disabled + span{ opacity:.55; }
+    .af-login-admin-note{
+      display:none;
+      color:var(--ink-faint);
+      font-size:9.5px;
+      line-height:1.5;
+      max-width:150px;
+    }
+    .af-login-actions{ display:grid; gap:10px; }
+    .af-login-btn{
+      width:100%;
+      min-height:52px;
+      border-radius:14px;
+      border:1px solid transparent;
+      font-family:'Vazirmatn',sans-serif;
+      font-size:14px;
+      font-weight:900;
+      cursor:pointer;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      gap:9px;
+      touch-action:manipulation;
+      transition:transform .08s ease, box-shadow .08s ease, opacity .18s ease, background .18s ease;
+      -webkit-user-select:none;
+      user-select:none;
+    }
+    .af-login-btn-primary{
+      background:var(--amber);
+      color:#191300;
+      box-shadow:0 8px 18px rgba(185,121,30,.24), inset 0 1px rgba(255,255,255,.25);
+    }
+    .af-login-btn-secondary{
+      background:var(--panel-2);
+      color:var(--ink);
+      border-color:var(--line);
+      box-shadow:0 5px 12px rgba(0,0,0,.06);
+    }
+    .af-login-btn:not(:disabled):active{
+      transform:translateY(2px) scale(.985);
+      box-shadow:0 2px 7px rgba(0,0,0,.10);
+    }
+    .af-login-btn:disabled{ opacity:.62; cursor:wait; }
+    .af-login-spinner{
+      width:16px;
+      height:16px;
+      border-radius:50%;
+      border:2px solid currentColor;
+      border-inline-start-color:transparent;
+      animation:afLoginSpin .75s linear infinite;
+    }
+    @keyframes afLoginSpin{ to{ transform:rotate(360deg); } }
+    @media (prefers-reduced-motion:reduce){
+      .af-login-btn,.af-login-input-wrap,.af-login-spinner{ transition:none; animation-duration:1.4s; }
+    }
+    .af-login-vpn{
+      margin-top:16px;
+      display:flex;
+      gap:10px;
+      align-items:center;
+      text-align:right;
+      border:1px solid rgba(227,168,87,.34);
+      border-radius:13px;
+      background:var(--amber-dim);
+      padding:11px 12px;
+      color:var(--ink-soft);
+      font-size:10.5px;
+      line-height:1.65;
+    }
+    .af-login-vpn-icon{
+      width:32px;
+      height:32px;
+      border-radius:9px;
+      background:var(--panel);
+      color:var(--amber);
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      flex:0 0 32px;
+      font-size:16px;
+    }
+    .af-login-vpn b{ display:block; color:var(--amber); font-size:11.5px; }
+    .af-login-help{
+      margin:13px 2px 0;
+      color:var(--ink-faint);
+      font-size:10.5px;
+      line-height:1.75;
+    }
+    .af-login-error{
+      display:none;
+      margin:12px 0 0;
+      border-radius:11px;
+      background:var(--red-dim);
+      color:var(--red);
+      padding:9px 11px;
+      font-size:11px;
+      line-height:1.65;
+      text-align:right;
+    }
+    .af-login-error.show{ display:block; }
+    @media (max-width:380px){
+      .af-login-shell{ padding-inline:10px; }
+      .af-login-card{ border-radius:20px; padding:20px 16px; }
+      .af-login-logo{ width:70px; height:70px; border-radius:18px; margin-bottom:14px; }
+      .af-login-subtitle{ margin-bottom:18px; font-size:12px; }
+      .af-login-input-wrap{ min-height:50px; }
+      .af-login-btn{ min-height:49px; }
+    }
+    @media (max-height:700px) and (min-width:381px){
+      .af-login-shell{ align-items:flex-start; }
+      .af-login-card{ margin:8px 0; padding-block:20px; }
+      .af-login-logo{ width:66px; height:66px; margin-bottom:12px; }
+      .af-login-subtitle{ margin:7px 0 16px; }
+      .af-login-field{ margin-bottom:9px; }
+      .af-login-remember-row{ margin-bottom:12px; }
+      .af-login-vpn{ margin-top:12px; }
+      .af-login-help{ margin-top:9px; }
+    }
+    @media (min-width:760px){
+      .af-login-card{ width:min(100%,460px); }
+    }
+  `;
+  document.head.appendChild(style);
+}
+
+function setLoginPageMode(on){
+  ensureLoginStyles();
+  document.body.classList.toggle('af-login-page', !!on);
+}
+
+function isAdminLoginEmail(email){
+  try{ return String(email || '').trim().toLowerCase() === String(ADMIN_EMAIL || '').trim().toLowerCase(); }
+  catch(e){ return false; }
+}
+
+function bytesToBase64(bytes){
+  let binary = '';
+  const chunk = 0x8000;
+  for(let i=0;i<bytes.length;i+=chunk){
+    binary += String.fromCharCode.apply(null, bytes.subarray(i, i+chunk));
+  }
+  return btoa(binary);
+}
+function base64ToBytes(value){
+  const binary = atob(value || '');
+  const bytes = new Uint8Array(binary.length);
+  for(let i=0;i<binary.length;i++) bytes[i] = binary.charCodeAt(i);
+  return bytes;
+}
+function openRememberKeyDb(){
+  return new Promise((resolve,reject) => {
+    if(!window.indexedDB){ reject(new Error('indexeddb-unavailable')); return; }
+    const req = indexedDB.open(REMEMBERED_LOGIN_DB, 1);
+    req.onupgradeneeded = () => {
+      const dbi = req.result;
+      if(!dbi.objectStoreNames.contains('keys')) dbi.createObjectStore('keys');
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error || new Error('indexeddb-open-failed'));
+  });
+}
+async function getRememberCryptoKey(){
+  if(!window.crypto || !crypto.subtle) throw new Error('webcrypto-unavailable');
+  const dbi = await openRememberKeyDb();
+  try{
+    const existing = await new Promise((resolve,reject) => {
+      const tx = dbi.transaction('keys','readonly');
+      const req = tx.objectStore('keys').get(REMEMBERED_LOGIN_KEY_ID);
+      req.onsuccess = () => resolve(req.result || null);
+      req.onerror = () => reject(req.error || new Error('remember-key-read-failed'));
+    });
+    if(existing) return existing;
+    const key = await crypto.subtle.generateKey({ name:'AES-GCM', length:256 }, false, ['encrypt','decrypt']);
+    await new Promise((resolve,reject) => {
+      const tx = dbi.transaction('keys','readwrite');
+      tx.objectStore('keys').put(key, REMEMBERED_LOGIN_KEY_ID);
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error || new Error('remember-key-write-failed'));
+    });
+    return key;
+  } finally {
+    try{ dbi.close(); }catch(e){}
+  }
+}
+async function saveRememberedLogin(email, pass){
+  if(!email || !pass || isAdminLoginEmail(email)){ clearRememberedLogin(); return; }
+  try{
+    const key = await getRememberCryptoKey();
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const plain = new TextEncoder().encode(JSON.stringify({ email:String(email), pass:String(pass) }));
+    const encrypted = new Uint8Array(await crypto.subtle.encrypt({ name:'AES-GCM', iv }, key, plain));
+    localStorage.setItem(REMEMBERED_LOGIN_STORAGE_KEY, JSON.stringify({ v:2, iv:bytesToBase64(iv), data:bytesToBase64(encrypted) }));
+  }catch(e){
+    // برای امنیت، در مرورگری که Web Crypto/IndexedDB ندارد رمز را به‌صورت متن ساده ذخیره نمی‌کنیم.
+    try{ localStorage.setItem(REMEMBERED_LOGIN_STORAGE_KEY, JSON.stringify({ v:2, email:String(email), noPassword:true })); }catch(_){}
+  }
+}
+function clearRememberedLogin(){
+  try{ localStorage.removeItem(REMEMBERED_LOGIN_STORAGE_KEY); }catch(e){}
+}
+async function loadRememberedLogin(){
+  let raw = null;
+  try{ raw = localStorage.getItem(REMEMBERED_LOGIN_STORAGE_KEY); }catch(e){}
+  if(!raw) return null;
+  try{
+    const payload = JSON.parse(raw);
+    if(payload && payload.noPassword){
+      if(payload.email && !isAdminLoginEmail(payload.email)) return { email:String(payload.email), pass:'' };
+      clearRememberedLogin();
+      return null;
+    }
+    if(!payload || payload.v !== 2 || !payload.iv || !payload.data) return null;
+    const key = await getRememberCryptoKey();
+    const plainBuf = await crypto.subtle.decrypt({ name:'AES-GCM', iv:base64ToBytes(payload.iv) }, key, base64ToBytes(payload.data));
+    const data = JSON.parse(new TextDecoder().decode(plainBuf));
+    if(!data || !data.email || isAdminLoginEmail(data.email)){ clearRememberedLogin(); return null; }
+    return { email:String(data.email), pass:String(data.pass || '') };
+  }catch(e){
+    clearRememberedLogin();
+    return null;
+  }
+}
+async function storeNativePasswordCredential(email, pass){
+  if(!email || !pass || isAdminLoginEmail(email)) return;
+  try{
+    if(window.PasswordCredential && navigator.credentials && navigator.credentials.store){
+      await navigator.credentials.store(new PasswordCredential({ id:email, password:pass, name:'Afrachoob' }));
+    }
+  }catch(e){}
+}
+async function applyRememberPreference(email, pass, remember){
+  if(!remember || isAdminLoginEmail(email)){
+    clearRememberedLogin();
+    return;
+  }
+  await saveRememberedLogin(email, pass);
+  storeNativePasswordCredential(email, pass);
+}
+async function hydrateRememberedLogin(){
+  const emailEl = document.getElementById('authEmail');
+  const passEl = document.getElementById('authPass');
+  const rememberEl = document.getElementById('authRemember');
+  if(!emailEl || !passEl || !rememberEl) return;
+  const saved = await loadRememberedLogin();
+  if(!saved) return;
+  if(!document.getElementById('authEmail')) return;
+  if(!emailEl.value) emailEl.value = saved.email || '';
+  if(!passEl.value && saved.pass) passEl.value = saved.pass;
+  rememberEl.checked = !!(saved.email && saved.pass);
+  syncRememberAvailability();
+}
+function syncRememberAvailability(){
+  const emailEl = document.getElementById('authEmail');
+  const rememberEl = document.getElementById('authRemember');
+  const note = document.getElementById('authAdminRememberNote');
+  if(!emailEl || !rememberEl) return;
+  const admin = isAdminLoginEmail(emailEl.value);
+  rememberEl.disabled = admin;
+  if(admin) rememberEl.checked = false;
+  if(note) note.style.display = admin ? 'block' : 'none';
+}
+function toggleAuthPassword(){
+  const input = document.getElementById('authPass');
+  const btn = document.getElementById('authPassToggle');
+  if(!input) return;
+  const showing = input.type === 'text';
+  input.type = showing ? 'password' : 'text';
+  if(btn){
+    btn.setAttribute('aria-label', showing ? 'نمایش رمز عبور' : 'مخفی کردن رمز عبور');
+    btn.title = showing ? 'نمایش رمز عبور' : 'مخفی کردن رمز عبور';
+  }
+}
+function setAuthError(message){
+  authErrorMsg = message || '';
+  const box = document.getElementById('authErrorBox');
+  if(box){
+    box.textContent = authErrorMsg;
+    box.classList.toggle('show', !!authErrorMsg);
+  }
+}
+function setAuthBusy(action, busy){
+  authActionBusy = busy ? action : '';
+  const signInBtn = document.getElementById('authSignInBtn');
+  const signUpBtn = document.getElementById('authSignUpBtn');
+  if(signInBtn){
+    signInBtn.disabled = !!busy;
+    signInBtn.innerHTML = (busy && action === 'signin') ? '<span class="af-login-spinner"></span><span>در حال ورود…</span>' : '<span>ورود</span>';
+  }
+  if(signUpBtn){
+    signUpBtn.disabled = !!busy;
+    signUpBtn.innerHTML = (busy && action === 'signup') ? '<span class="af-login-spinner"></span><span>در حال ساخت حساب…</span>' : '<span>ساخت حساب جدید</span>';
+  }
+}
+function authPasswordKeydown(event){
+  if(event && event.key === 'Enter' && !authActionBusy){
+    event.preventDefault();
+    signIn();
+  }
+}
+
 /* ---------- Auth ---------- */
 function initAuthAndData(){
   try{
@@ -874,26 +1349,48 @@ function mapAuthError(e){
   };
   return map[code] || ((code?code+' — ':'') + (e && e.message ? e.message : String(e)));
 }
-function signIn(){
-  authErrorMsg = '';
-  const email = document.getElementById('authEmail').value.trim();
-  const pass = document.getElementById('authPass').value;
-  if(!email || !pass){ authErrorMsg = 'ایمیل و رمز عبور را وارد کنید.'; renderApp(); return; }
-  auth.signInWithEmailAndPassword(email, pass).catch((e) => {
-    authErrorMsg = mapAuthError(e);
-    renderApp();
-  });
+async function signIn(){
+  if(authActionBusy || !auth) return;
+  const emailEl = document.getElementById('authEmail');
+  const passEl = document.getElementById('authPass');
+  const rememberEl = document.getElementById('authRemember');
+  if(!emailEl || !passEl) return;
+  const email = emailEl.value.trim();
+  const pass = passEl.value;
+  const remember = !!(rememberEl && rememberEl.checked && !isAdminLoginEmail(email));
+  setAuthError('');
+  if(!email || !pass){ setAuthError('ایمیل و رمز عبور را وارد کنید.'); return; }
+  setAuthBusy('signin', true);
+  try{
+    await auth.signInWithEmailAndPassword(email, pass);
+    await applyRememberPreference(email, pass, remember);
+  }catch(e){
+    setAuthError(mapAuthError(e));
+  }finally{
+    setAuthBusy('', false);
+  }
 }
-function signUp(){
-  authErrorMsg = '';
-  const email = document.getElementById('authEmail').value.trim();
-  const pass = document.getElementById('authPass').value;
-  if(!email || !pass){ authErrorMsg = 'ایمیل و رمز عبور را وارد کنید.'; renderApp(); return; }
-  if(pass.length < 6){ authErrorMsg = 'رمز عبور باید حداقل ۶ کاراکتر باشد.'; renderApp(); return; }
-  auth.createUserWithEmailAndPassword(email, pass).catch((e) => {
-    authErrorMsg = mapAuthError(e);
-    renderApp();
-  });
+async function signUp(){
+  if(authActionBusy || !auth) return;
+  const emailEl = document.getElementById('authEmail');
+  const passEl = document.getElementById('authPass');
+  const rememberEl = document.getElementById('authRemember');
+  if(!emailEl || !passEl) return;
+  const email = emailEl.value.trim();
+  const pass = passEl.value;
+  const remember = !!(rememberEl && rememberEl.checked && !isAdminLoginEmail(email));
+  setAuthError('');
+  if(!email || !pass){ setAuthError('ایمیل و رمز عبور را وارد کنید.'); return; }
+  if(pass.length < 6){ setAuthError('رمز عبور باید حداقل ۶ کاراکتر باشد.'); return; }
+  setAuthBusy('signup', true);
+  try{
+    await auth.createUserWithEmailAndPassword(email, pass);
+    await applyRememberPreference(email, pass, remember);
+  }catch(e){
+    setAuthError(mapAuthError(e));
+  }finally{
+    setAuthBusy('', false);
+  }
 }
 function signOutUser(){
   if(!auth) return;
@@ -909,24 +1406,64 @@ function renderApp(){
   refreshContractModal();
 
   if(!currentUser){
+    setLoginPageMode(true);
     headerRight.innerHTML = '';
     el.innerHTML = `
-      <div class="center-screen">
-        <img src="./icon-192.png" alt="افراچوب">
-        <h2>ورود به افراچوب</h2>
-        <p>برای مشاهده و مدیریت وضعیت قراردادها، با ایمیل و رمز عبور خود وارد شوید.</p>
-        <input class="auth-input" type="email" id="authEmail" placeholder="ایمیل" autocomplete="username">
-        <input class="auth-input" type="password" id="authPass" placeholder="رمز عبور" autocomplete="current-password">
-        <div class="auth-btn-row">
-          <button class="google-btn" onclick="signIn()">ورود</button>
-          <button class="google-btn auth-btn-secondary" onclick="signUp()">ساخت حساب جدید</button>
-        </div>
-        <p class="vpn-note">لطفا جهت ورود VPN خود را روشن کنید</p>
-        <p class="auth-help-note">اگر تا الان وارد برنامه نشدین لطفا ایمیل رو وارد کنید و رمز دلخواه ۶ رقمی بگذارید و روی دکمه ایجاد حساب جدید بزنید، در غیر این صورت ایمیل و رمز رو بزنید و دکمه ورود رو بفشارید.</p>
-        ${authErrorMsg ? `<p style="color:var(--red); font-size:12px; max-width:320px;">${escapeHtml(authErrorMsg)}</p>` : ''}
+      <div class="af-login-shell">
+        <section class="af-login-card" aria-label="ورود به افراچوب">
+          <img class="af-login-logo" src="./icon-192.png" alt="لوگوی افراچوب">
+          <h1 class="af-login-title">Afrachoob Control Center</h1>
+          <p class="af-login-subtitle">سامانه مدیریت تولید، نصب و قراردادها</p>
+
+          <div class="af-login-field">
+            <label class="af-login-field-label" for="authEmail">ایمیل</label>
+            <div class="af-login-input-wrap">
+              <span class="af-login-field-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="5" width="18" height="14" rx="3"></rect><path d="m4 7 8 6 8-6"></path></svg>
+              </span>
+              <input class="af-login-input" type="email" inputmode="email" id="authEmail" placeholder="name@example.com" autocomplete="username" autocapitalize="none" spellcheck="false" oninput="syncRememberAvailability()">
+            </div>
+          </div>
+
+          <div class="af-login-field">
+            <label class="af-login-field-label" for="authPass">رمز عبور</label>
+            <div class="af-login-input-wrap">
+              <span class="af-login-field-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="5" y="10" width="14" height="10" rx="3"></rect><path d="M8 10V7a4 4 0 0 1 8 0v3"></path></svg>
+              </span>
+              <input class="af-login-input" type="password" id="authPass" placeholder="••••••••" autocomplete="current-password" onkeydown="authPasswordKeydown(event)">
+              <button class="af-login-eye" type="button" id="authPassToggle" onclick="toggleAuthPassword()" aria-label="نمایش رمز عبور" title="نمایش رمز عبور">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M2.5 12s3.5-6 9.5-6 9.5 6 9.5 6-3.5 6-9.5 6S2.5 12 2.5 12Z"></path><circle cx="12" cy="12" r="2.7"></circle></svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="af-login-remember-row">
+            <label class="af-login-remember">
+              <input type="checkbox" id="authRemember">
+              <span>مرا به خاطر بسپار</span>
+            </label>
+            <span class="af-login-admin-note" id="authAdminRememberNote">برای حساب مدیر اطلاعات ورود ذخیره نمی‌شود.</span>
+          </div>
+
+          <div class="af-login-actions">
+            <button class="af-login-btn af-login-btn-primary" id="authSignInBtn" type="button" onclick="signIn()"><span>ورود</span></button>
+            <button class="af-login-btn af-login-btn-secondary" id="authSignUpBtn" type="button" onclick="signUp()"><span>ساخت حساب جدید</span></button>
+          </div>
+
+          <div class="af-login-vpn">
+            <div class="af-login-vpn-icon" aria-hidden="true">🔐</div>
+            <div><b>برای ورود VPN را روشن کنید</b>جهت دسترسی به سامانه، VPN دستگاه فعال باشد.</div>
+          </div>
+          <p class="af-login-help">اگر قبلاً حساب ساخته‌اید «ورود» را بزنید؛ در غیر این صورت ایمیل و یک رمز حداقل ۶ کاراکتری وارد کنید و «ساخت حساب جدید» را انتخاب کنید.</p>
+          <div id="authErrorBox" class="af-login-error ${authErrorMsg?'show':''}" role="alert">${authErrorMsg?escapeHtml(authErrorMsg):''}</div>
+        </section>
       </div>`;
+    hydrateRememberedLogin();
+    syncRememberAvailability();
     return;
   }
+  setLoginPageMode(false);
 
   const isProjectManagerPanel = (myRole === 'viewer') || (myRole === 'admin' && adminPreviewRole === 'viewer');
   const headerTitleEl = document.getElementById('headerTitle');
