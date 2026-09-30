@@ -3940,8 +3940,8 @@ function renderFinancialCard(id, st, purchaseRows){
   const meta = FINANCIAL_CARD_STATIC_META[id] || { label:financialCardLabel(id), cls:'' };
   const extraCls = id === 'avgVariance' && st.avgVariancePct > 0 ? ' kpi-red' : (meta.cls ? ' ' + meta.cls : '');
   return `<div class="kpi-card${extraCls}">
-    <div class="kpi-num" style="font-size:13px; word-break:break-all; white-space:normal; line-height:1.3;">${financialCardValue(id, st, purchaseRows)}</div>
-    <div class="kpi-label">${escapeHtml(meta.label || financialCardLabel(id))}</div>
+    <div class="kpi-num" style="font-size:clamp(18px, 4.8vw, 22px); font-weight:800; word-break:normal; overflow-wrap:anywhere; white-space:normal; line-height:1.45; letter-spacing:0;">${financialCardValue(id, st, purchaseRows)}</div>
+    <div class="kpi-label" style="line-height:1.55;">${escapeHtml(meta.label || financialCardLabel(id))}</div>
   </div>`;
 }
 function renderFinancialCards(st){
@@ -4070,9 +4070,9 @@ function renderAdminFinancial(){
       <div class="chart-title">ارزش قراردادها بر اساس ماه ثبت (ریال)</div>
       ${st.monthly.map(m => `
         <div class="chart-row">
-          <span class="chart-label">${m.label}</span>
+          <span class="chart-label" style="font-size:12px; font-weight:700;">${m.label}</span>
           <div class="chart-bar-track"><div class="chart-bar-fill" style="width:${maxMonth ? Math.round(m.value/maxMonth*100) : 0}%"></div></div>
-          <span class="chart-count" style="width:auto; max-width:92px; white-space:normal; word-break:break-all; text-align:left; font-size:10px; line-height:1.25;">${formatToman(m.value)}</span>
+          <span class="chart-count" style="width:auto; min-width:118px; max-width:148px; white-space:nowrap; word-break:normal; overflow-wrap:normal; text-align:left; font-size:13px; font-weight:700; line-height:1.35;">${formatToman(m.value)}</span>
         </div>`).join('')}
     </div>` : ''}
 
