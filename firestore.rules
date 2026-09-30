@@ -32,7 +32,10 @@ service cloud.firestore {
       allow create: if isSignedIn() && request.auth.uid == userId
                     && request.resource.data.role in ['pending', 'admin']
                     && (request.resource.data.role != 'admin'
-                        || request.resource.data.email == 'arashlavasani891@gmail.com');
+                        || (
+                             request.auth.token.email == 'arashlavasani891@gmail.com'
+                             && request.resource.data.email == request.auth.token.email
+                           ));
       allow update: if isAdmin() || (
                       isSignedIn() && request.auth.uid == userId &&
                       request.resource.data.diff(resource.data).affectedKeys().hasOnly(['lastSeen'])

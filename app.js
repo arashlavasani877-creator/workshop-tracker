@@ -53,6 +53,7 @@ let materialPurchasesLoading = false;
 let materialPurchasesError = '';
 let materialPurchaseYearFilter = '';
 let materialPurchaseMonthFilter = 'all';
+let materialPurchaseSectionOpen = false;
 let materialPurchaseFormOpen = false;
 let materialPurchaseEditId = null;
 let materialPurchaseSaving = false;
@@ -223,6 +224,18 @@ function isCompleted(c){ return overallPercent(c) === 100; }
 function formatToman(n){
   n = Math.round(Number(n) || 0);
   return n.toLocaleString('en-US');
+}
+// فقط برای نمایش در UI مالی؛ مقدارهای واقعی، Firestore و خروجی Excel دست‌نخورده می‌مانند.
+function financialFaText(value){
+  return String(value == null ? '' : value)
+    .replace(/([0-9]),(?=[0-9])/g, '$1٬')
+    .replace(/[0-9]/g, d => '۰۱۲۳۴۵۶۷۸۹'[Number(d)]);
+}
+function localizeFinancialDigits(root){
+  if(!root || typeof document === 'undefined') return;
+  const walker = document.createTreeWalker(root, 4); // 4 = SHOW_TEXT
+  let node;
+  while((node = walker.nextNode())) node.nodeValue = financialFaText(node.nodeValue);
 }
 function getContractFinance(c){
   const initMaterial = Number(c.materialPrice) || 0;
@@ -2526,7 +2539,7 @@ function renderViewerSpecialContracts(){
   body.innerHTML = `
     <div class="section-title" style="margin-top:14px;">🌟 قراردادهای خاص <span class="cnt">${items.length} مورد</span></div>
     <div class="viewer-report-note">قراردادهایی که مدیر برای نمایش در این بخش انتخاب کرده — همراه خلاصه مالی و وضعیت پیشرفت هرکدام.</div>
-    <div class="chart-box" style="margin-bottom:14px;">
+    <div id="viewerSpecialFinance" class="chart-box" style="margin-bottom:14px;">
       ${items.length ? `
       <div class="pmo-fin-item pmo-fin-grand" style="margin-bottom:10px;">
         <div class="pmo-fin-name">جمع کل</div>
@@ -2540,6 +2553,7 @@ function renderViewerSpecialContracts(){
     </div>
     <div class="section-title" style="margin-top:6px;">وضعیت پیشرفت</div>
     <div id="viewerSpecialList">${items.length ? items.map(c => renderViewerCard(c)).join('') : '<div class="empty">موردی یافت نشد.</div>'}</div>`;
+  localizeFinancialDigits(document.getElementById('viewerSpecialFinance'));
 }
 
 function openViewerMoreSection(section){
@@ -3384,7 +3398,7 @@ function materialPurchaseAmountValue(v){
 function formatMaterialPurchaseAmountInput(el){
   if(!el) return;
   const raw = materialPurchaseAmountValue(el.value);
-  el.value = raw ? formatToman(raw) : '';
+  el.value = raw ? financialFaText(formatToman(raw)) : '';
 }
 function materialPurchaseFilteredRows(){
   ensureMaterialPurchaseDefaultFilter();
@@ -3411,6 +3425,14 @@ function materialPurchaseSupplierSummary(rows){
 function materialPurchaseMonthLabel(month){
   const idx = Number(month)-1;
   return JALALI_MONTHS[idx] || 'ماه نامشخص';
+}
+function toggleMaterialPurchaseSection(){
+  materialPurchaseSectionOpen = !materialPurchaseSectionOpen;
+  if(!materialPurchaseSectionOpen){
+    materialPurchaseFormOpen = false;
+    materialPurchaseEditId = null;
+  }
+  renderAdminFinancial();
 }
 function openMaterialPurchaseForm(id){
   if(myRole !== 'admin') return;
@@ -3493,7 +3515,7 @@ async function deleteMaterialPurchase(id){
   if(!purchase) return;
 
   const supplier = (purchase.supplierName || 'بدون نام').trim() || 'بدون نام';
-  const amountLabel = formatToman(purchase.amount || 0);
+  const amountLabel = financialFaText(formatToman(purchase.amount || 0));
   if(!confirm(`خرید متریال از «${supplier}» به مبلغ ${amountLabel} ریال حذف شود؟`)) return;
 
   try{
@@ -3512,17 +3534,36 @@ function renderMaterialPurchasesSection(){
   if(myRole !== 'admin') return '';
   ensureMaterialPurchaseDefaultFilter();
 
+  if(!materialPurchaseSectionOpen){
+    return `
+      <div class="chart-box" style="margin-top:18px; cursor:pointer;" onclick="toggleMaterialPurchaseSection()">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+          <div>
+            <div class="chart-title" style="margin-bottom:3px;">🧾 خرید متریال ماهانه</div>
+            <div style="font-size:10.5px; color:var(--ink-soft);">برای نمایش جزئیات کلیک کنید</div>
+          </div>
+          <span class="btn-secondary" style="width:auto; padding:7px 11px; pointer-events:none;">▼ نمایش</span>
+        </div>
+      </div>`;
+  }
+
   if(materialPurchasesLoading && !materialPurchasesLoaded){
     return `
       <div class="chart-box" style="margin-top:18px;">
-        <div class="chart-title">🧾 خرید متریال ماهانه</div>
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+          <div class="chart-title">🧾 خرید متریال ماهانه</div>
+          <button class="btn-secondary" style="width:auto; padding:7px 11px;" onclick="toggleMaterialPurchaseSection()">▲ جمع کردن</button>
+        </div>
         <div class="empty">در حال دریافت خریدهای ثبت‌شده...</div>
       </div>`;
   }
   if(materialPurchasesError && !materialPurchasesLoaded){
     return `
       <div class="chart-box" style="margin-top:18px;">
-        <div class="chart-title">🧾 خرید متریال ماهانه</div>
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px;">
+          <div class="chart-title">🧾 خرید متریال ماهانه</div>
+          <button class="btn-secondary" style="width:auto; padding:7px 11px;" onclick="toggleMaterialPurchaseSection()">▲ جمع کردن</button>
+        </div>
         <div class="viewer-report-note" style="border-inline-start-color:var(--red);">
           این بخش هنوز به Firestore دسترسی ندارد. ابتدا Rule مربوط به materialPurchases را منتشر کنید.<br>
           <span style="font-size:10px; opacity:.8;">${escapeHtml(materialPurchasesError)}</span>
@@ -3549,7 +3590,10 @@ function renderMaterialPurchasesSection(){
           <div class="chart-title" style="margin-bottom:3px;">🧾 خرید متریال ماهانه</div>
           <div style="font-size:10.5px; color:var(--ink-soft);">ثبت تجمیعی خرید از تأمین‌کننده‌ها — فقط مدیر</div>
         </div>
-        <button class="btn-primary" style="width:auto; padding:9px 14px;" onclick="openMaterialPurchaseForm()">+ ثبت خرید جدید</button>
+        <div style="display:flex; gap:7px; flex-wrap:wrap;">
+          <button class="btn-primary" style="width:auto; padding:9px 14px;" onclick="openMaterialPurchaseForm()">+ ثبت خرید جدید</button>
+          <button class="btn-secondary" style="width:auto; padding:9px 12px;" onclick="toggleMaterialPurchaseSection()">▲ جمع کردن</button>
+        </div>
       </div>
 
       <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-top:14px;">
@@ -3603,11 +3647,11 @@ function renderMaterialPurchasesSection(){
           </div>
           <div style="grid-column:1 / -1;">
             <label style="display:block; font-size:10px; color:var(--ink-soft); margin-bottom:5px;">مبلغ کل خرید (ریال)</label>
-            <input id="materialAmountInput" inputmode="numeric" class="auth-input" style="max-width:none; width:100%; direction:ltr; text-align:right;" value="${editing?formatToman(editing.amount):''}" placeholder="مثلاً 320,000,000" oninput="formatMaterialPurchaseAmountInput(this)">
+            <input id="materialAmountInput" inputmode="numeric" class="auth-input" style="max-width:none; width:100%; direction:ltr; text-align:right;" value="${editing?financialFaText(formatToman(editing.amount)):''}" placeholder="مثلاً ۳۲۰٬۰۰۰٬۰۰۰" oninput="formatMaterialPurchaseAmountInput(this)">
           </div>
           <div>
             <label style="display:block; font-size:10px; color:var(--ink-soft); margin-bottom:5px;">سال</label>
-            <input id="materialYearInput" inputmode="numeric" class="auth-input" style="max-width:none; width:100%;" value="${formYear}">
+            <input id="materialYearInput" inputmode="numeric" class="auth-input" style="max-width:none; width:100%;" value="${financialFaText(formYear)}">
           </div>
           <div>
             <label style="display:block; font-size:10px; color:var(--ink-soft); margin-bottom:5px;">ماه</label>
@@ -4066,6 +4110,7 @@ function renderAdminFinancial(){
       </div>`).join('')}` : ''}
   `;
   if(finSectionOpen.all) renderAdminFinancialList();
+  localizeFinancialDigits(body);
 }
 function toggleFinSection(key){ finSectionOpen[key] = !finSectionOpen[key]; rerenderFinancialSurface(); }
 function toggleFinFilterPanel(){ finFilterOpen = !finFilterOpen; rerenderFinancialSurface(); }
@@ -4100,6 +4145,7 @@ function renderAdminFinancialList(){
       </div>
       <span class="warn-tag">${formatToman(r.fin.total)} ریال</span>
     </div>`).join('');
+  localizeFinancialDigits(el);
 }
 
 async function exportFinancialExcel(){
@@ -4435,23 +4481,8 @@ async function exportPlanExcel(){
 
 function renderAdminContracts(){
   const body = document.getElementById('adminBody');
-  const batches = computeImportBatches();
   body.innerHTML = `
     <div class="section-title" style="margin-top:14px;">مدیریت قراردادها <span class="cnt" id="mgmtCount"></span></div>
-    <div class="toolbar" style="display:flex; gap:8px; flex-wrap:wrap;">
-      <input type="file" id="bulkImportFile" accept=".xlsx,.xls" style="display:none" onchange="handleBulkImportFile(this)">
-      <button id="bulkImportBtn" class="btn-secondary" onclick="triggerBulkImport()">📥 ورود گروهی از اکسل</button>
-      <button class="btn-secondary" onclick="migrateArchivedField()">🔧 آماده‌سازی قراردادهای قدیمی</button>
-    </div>
-    ${batches.length ? `
-    <div class="admin-only-note" style="margin-bottom:10px;">
-      دسته‌های ایمپورت‌شده:
-      ${batches.map(b => `
-        <div style="display:flex; align-items:center; justify-content:space-between; margin-top:6px;">
-          <span>${importBatchLabel(b.id)} — ${b.count} قرارداد</span>
-          <button class="field-save" style="background:var(--red-dim,#5c1e1e); color:var(--red,#ff8080);" onclick="deleteImportBatch('${b.id}')">حذف این دسته</button>
-        </div>`).join('')}
-    </div>` : ''}
     <div class="export-filters">
       <div class="row1">
         <select id="exportScopeSelect" class="admin-select" onchange="onExportScopeChange(this.value)">
