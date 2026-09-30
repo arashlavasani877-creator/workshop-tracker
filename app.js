@@ -3179,7 +3179,7 @@ function renderStageChartHtml(){
     <div class="chart-box">
       <div class="chart-title">پراکندگی قراردادها بر اساس مرحله</div>
       ${DISPLAY_STAGES.map((name,i) => `
-        <div class="chart-row">
+        <div class="chart-row" style="gap:2px; align-items:center;">
           <span class="chart-label">${name}</span>
           <div class="chart-bar-track"><div class="chart-bar-fill" style="width:${(counts[i]/max*100)}%"></div></div>
           <span class="chart-count">${counts[i]}</span>
@@ -3940,8 +3940,8 @@ function renderFinancialCard(id, st, purchaseRows){
   const meta = FINANCIAL_CARD_STATIC_META[id] || { label:financialCardLabel(id), cls:'' };
   const extraCls = id === 'avgVariance' && st.avgVariancePct > 0 ? ' kpi-red' : (meta.cls ? ' ' + meta.cls : '');
   return `<div class="kpi-card${extraCls}">
-    <div class="kpi-num" style="font-size:clamp(18px, 4.8vw, 22px); font-weight:800; word-break:normal; overflow-wrap:anywhere; white-space:normal; line-height:1.45; letter-spacing:0;">${financialCardValue(id, st, purchaseRows)}</div>
-    <div class="kpi-label" style="line-height:1.55;">${escapeHtml(meta.label || financialCardLabel(id))}</div>
+    <div class="kpi-num" style="font-size:clamp(22px, 6vw, 28px); font-weight:800; word-break:normal; overflow-wrap:anywhere; white-space:normal; line-height:1.52; letter-spacing:0;">${financialCardValue(id, st, purchaseRows)}</div>
+    <div class="kpi-label" style="line-height:1.55; font-size:13px;">${escapeHtml(meta.label || financialCardLabel(id))}</div>
   </div>`;
 }
 function renderFinancialCards(st){
@@ -4069,10 +4069,10 @@ function renderAdminFinancial(){
     <div class="chart-box">
       <div class="chart-title">ارزش قراردادها بر اساس ماه ثبت (ریال)</div>
       ${st.monthly.map(m => `
-        <div class="chart-row">
-          <span class="chart-label" style="font-size:12px; font-weight:700;">${m.label}</span>
+        <div class="chart-row" style="gap:0; align-items:center;">
+          <span class="chart-label" style="font-size:14px; font-weight:800; width:68px; margin:0; padding:0; line-height:1.2;">${m.label}</span>
           <div class="chart-bar-track"><div class="chart-bar-fill" style="width:${maxMonth ? Math.round(m.value/maxMonth*100) : 0}%"></div></div>
-          <span class="chart-count" style="width:auto; min-width:118px; max-width:148px; white-space:nowrap; word-break:normal; overflow-wrap:normal; text-align:left; font-size:13px; font-weight:700; line-height:1.35;">${formatToman(m.value)}</span>
+          <span class="chart-count" style="width:auto; min-width:150px; max-width:182px; white-space:nowrap; word-break:normal; overflow-wrap:normal; text-align:left; font-size:17px; font-weight:800; line-height:1.45;">${formatToman(m.value)}</span>
         </div>`).join('')}
     </div>` : ''}
 
