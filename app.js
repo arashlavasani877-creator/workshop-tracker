@@ -89,7 +89,7 @@ let adminDashSection = null;  // null | 'critical' | 'waitingdelivery' | 'panelw
 let adminDashSearch = '';
 let adminPlanContractId = '';
 let adminPlanSearchQuery = '';
-let exportScope = 'all';   // 'all' | 'active' | 'closed' | 'waiting'
+let exportScope = 'all';   // 'all' | 'active' | 'closed' | 'critical' | 'near' | 'waiting' | 'pmoSpecial'
 let exportDateFrom = '';
 let exportDateTo = '';
 let logDateFrom = '';
@@ -2617,53 +2617,31 @@ function closeViewerExportPanel(){
 function renderViewerExportsHub(){
   const body = document.getElementById('viewerBody');
   if(!body) return;
-  if(!viewerExportPanel){
-    body.innerHTML = `
-      <div class="toolbar"><button class="btn-secondary" onclick="closeViewerMoreSection()">↩ بازگشت به بیشتر</button></div>
-      <div class="section-title" style="margin-top:10px;">خروجی‌ها</div>
-      <div class="admin-hub-grid">
-        <button onclick="openViewerExportPanel('financial')"><span>💰</span>خروجی مالی</button>
-        <button onclick="openViewerExportPanel('contracts')"><span>📋</span>خروجی قراردادها</button>
-        <button onclick="openViewerExportPanel('special')"><span>🌟</span>خروجی قراردادهای خاص</button>
-      </div>`;
-    return;
-  }
-  if(viewerExportPanel === 'financial'){
-    renderViewerFinancialExports();
-    return;
-  }
-  if(viewerExportPanel === 'contracts'){
-    body.innerHTML = `
-      <div class="toolbar"><button class="btn-secondary" onclick="closeViewerExportPanel()">↩ بازگشت به خروجی‌ها</button></div>
-      <div class="section-title" style="margin-top:10px;">📋 خروجی قراردادها</div>
-      <div class="export-filters">
-        <div class="row1">
-          <select id="exportScopeSelect" class="admin-select" onchange="onExportScopeChange(this.value)">
-            <option value="all" ${exportScope==='all'?'selected':''}>همه قراردادها</option>
-            <option value="active" ${exportScope==='active'?'selected':''}>فقط خاتمه‌نیافته</option>
-            <option value="closed" ${exportScope==='closed'?'selected':''}>فقط خاتمه‌یافته</option>
-            <option value="waiting" ${exportScope==='waiting'?'selected':''}>فقط در انتظار تحویل‌دهی</option>
-          </select>
-        </div>
-        <div class="row2">
-          <div class="date-field"><label>از تاریخ قرارداد:</label><input type="text" placeholder="1405/01/01" value="${escapeHtml(exportDateFrom)}" oninput="onExportDateFrom(this.value)"></div>
-          <div class="date-field"><label>تا:</label><input type="text" placeholder="1405/12/29" value="${escapeHtml(exportDateTo)}" oninput="onExportDateTo(this.value)"></div>
-        </div>
-      </div>
-      <div class="export-row">
-        <button class="export-btn" id="exportExcelBtn" onclick="exportExcelViewer()">📊 خروجی اکسل</button>
-        <button class="export-btn" id="exportPdfBtn" onclick="exportPDFViewer()">📄 خروجی PDF</button>
-      </div>`;
-    return;
-  }
+  viewerExportPanel = null;
+  const managementCards = [
+    outputPairCard('همه قراردادها','خروجی فهرست کامل قراردادها با بازه تاریخ انتخاب‌شده',"runContractOutputPreset('all','pdf')","runContractOutputPreset('all','excel')",'📋'),
+    outputPairCard('قراردادهای بحرانی','فقط قراردادهای خاتمه‌نیافته با وضعیت بحرانی',"runContractOutputPreset('critical','pdf')","runContractOutputPreset('critical','excel')",'🔴'),
+    outputPairCard('نزدیک سررسید','قراردادهای خاتمه‌نیافته نزدیک سررسید',"runContractOutputPreset('near','pdf')","runContractOutputPreset('near','excel')",'🟡'),
+    outputPairCard('در انتظار تحویل‌دهی','قراردادهای رسیده به مرحله تحویل به مالک',"runContractOutputPreset('waiting','pdf')","runContractOutputPreset('waiting','excel')",'📦'),
+    outputPairCard('قراردادهای خاص','تمام قراردادهای علامت‌گذاری‌شده به‌عنوان قرارداد خاص','exportSpecialContractsPdf()','exportSpecialContractsExcel()','🌟'),
+    outputPairCard('خلاصه مدیریتی','خلاصه مدیریتی کل وضعیت قراردادها','exportManagementSummaryPdf()','exportManagementSummaryExcel()','📱')
+  ];
+  const financialCards = [
+    outputPairCard('گزارش مالی خلاصه','شاخص‌های کلیدی مالی در بازه انتخاب‌شده','exportFinancialSummaryPdf()','exportFinancialSummaryExcel()','💰'),
+    outputPairCard('گزارش مالی ماهانه','جمع ارزش قراردادها به تفکیک ماه ثبت','exportFinancialMonthlyPdf()','exportFinancialMonthlyExcel()','📅'),
+    outputPairCard('ریز قراردادهای مالی','جزئیات متریال، اجرت، مبلغ کل و پیشرفت','exportFinancialPdf()','exportFinancialExcel()','🧾')
+  ];
   body.innerHTML = `
-    <div class="toolbar"><button class="btn-secondary" onclick="closeViewerExportPanel()">↩ بازگشت به خروجی‌ها</button></div>
-    <div class="section-title" style="margin-top:10px;">🌟 خروجی قراردادهای خاص</div>
-    <div class="viewer-report-note">بدون فیلتر — تمام قراردادهایی که در حال حاضر به‌عنوان «قرارداد خاص» تعریف شده‌اند در خروجی می‌آیند.</div>
-    <div class="export-row">
-      <button class="export-btn" id="specialExportExcelBtn" onclick="exportSpecialContractsExcel()">📊 خروجی اکسل</button>
-      <button class="export-btn" id="specialExportPdfBtn" onclick="exportSpecialContractsPdf()">📄 خروجی PDF</button>
-    </div>`;
+    <div class="toolbar"><button class="btn-secondary" onclick="closeViewerMoreSection()">↩ بازگشت به بیشتر</button></div>
+    <div class="section-title" style="margin-top:10px;">خروجی</div>
+    <div class="viewer-report-note">تمام خروجی‌های مدیر پروژه فقط در همین بخش قرار دارند. برای هر گزارش PDF و Excel جداگانه در دسترس است.</div>
+    ${renderOutputDateFilterHtml(true)}
+    <div class="section-title" style="margin-top:18px;">خروجی‌های مدیریتی</div>
+    ${outputReportGrid(managementCards)}
+    ${renderFinancialOutputFilterHtml()}
+    <div class="section-title" style="margin-top:18px;">خروجی‌های مالی</div>
+    ${outputReportGrid(financialCards)}`;
+  localizeFinancialDigits(body);
 }
 
 function renderViewerFinancialExports(){
@@ -3003,6 +2981,7 @@ function renderAdmin(el){
   else if(adminTab === 'kanban') renderAdminKanban();
   else if(adminTab === 'financial') renderAdminFinancial();
   else if(adminTab === 'exports') renderAdminExports();
+  else if(adminTab === 'backup') renderAdminBackup();
   else if(adminTab === 'contracts') renderAdminContracts();
   else if(adminTab === 'plans') renderAdminPlans();
   else if(adminTab === 'log') renderAdminLog();
@@ -3024,7 +3003,8 @@ function adminSectionForTab(tab){
   if(tab === 'dashboard') return 'home';
   if(tab === 'contracts' || tab === 'plans') return 'contracts';
   if(tab === 'kanban') return 'kanban';
-  if(tab === 'financial' || tab === 'exports') return 'reports';
+  if(tab === 'financial') return 'reports';
+  if(tab === 'exports' || tab === 'backup') return 'more';
   return 'more';
 }
 function switchAdminSection(section){
@@ -3036,7 +3016,6 @@ function renderAdminSectionNav(section, counts){
     <div class="admin-home-actions">
       <button class="admin-action-primary" onclick="openAddModal()"><span>＋</span><b>قرارداد جدید</b></button>
       <button onclick="openNotifications()"><span>🔔</span><b>هشدارها${counts.alertCount ? ' ('+counts.alertCount+')' : ''}</b></button>
-      <button id="mgmtSummaryBtn" onclick="exportManagementSummaryPdf()"><span>📱</span><b>خلاصه مدیریتی</b></button>
     </div>`;
   if(section === 'contracts') return `
     <div class="admin-section-nav">
@@ -3046,11 +3025,11 @@ function renderAdminSectionNav(section, counts){
   if(section === 'reports') return `
     <div class="admin-section-nav admin-report-actions">
       <button class="${adminTab==='financial'?'active':''}" onclick="switchAdminTab('financial')">گزارش مالی</button>
-      <button class="${adminTab==='exports'?'active':''}" onclick="switchAdminTab('exports')">خروجی‌ها</button>
-      <button id="mgmtSummaryBtn" onclick="exportManagementSummaryPdf()">خلاصه مدیریتی</button>
     </div>`;
   if(section === 'more') return `
     <div class="admin-hub-grid">
+      <button class="${adminTab==='exports'?'active':''}" onclick="switchAdminTab('exports')"><span>📤</span>خروجی‌ها</button>
+      <button class="${adminTab==='backup'?'active':''}" onclick="switchAdminTab('backup')"><span>🗂️</span>پشتیبان‌گیری</button>
       <button class="${adminTab==='users'?'active':''}" onclick="switchAdminTab('users')"><span>👥</span>کاربران${counts.pendingCount ? ' ('+counts.pendingCount+')' : ''}</button>
       <button class="${adminTab==='log'?'active':''}" onclick="switchAdminTab('log')"><span>🧾</span>لاگ سیستم</button>
       <button class="${adminTab==='pmoComments'?'active':''}" onclick="switchAdminTab('pmoComments')"><span>💬</span>کامنت‌های مدیر پروژه${counts.pmoUnseen ? ' ('+counts.pmoUnseen+')' : ''}</button>
@@ -3059,6 +3038,129 @@ function renderAdminSectionNav(section, counts){
       <button id="installBtn" onclick="installApp()"><span>📲</span>نصب اپلیکیشن</button>
     </div>`;
   return '';
+}
+
+
+const AFRACHOOB_BACKUP_CORE_COLLECTIONS = ['contracts','users','materialPurchases','activityLog','pmNotes'];
+const AFRACHOOB_FULL_BACKUP_FILES = ['index.html','app.js','firebase-config.js','firestore.rules','service-worker.js','manifest.json','icon-192.png','icon-512.png','icon-maskable-512.png','README.md'];
+function serializeAfrachoobBackupValue(value){
+  if(value == null || typeof value !== 'object') return value;
+  if(typeof firebase !== 'undefined' && firebase.firestore?.Timestamp && value instanceof firebase.firestore.Timestamp){
+    return {__type:'timestamp',seconds:value.seconds,nanoseconds:value.nanoseconds};
+  }
+  if(value instanceof Date) return {__type:'date',iso:value.toISOString()};
+  if(Array.isArray(value)) return value.map(serializeAfrachoobBackupValue);
+  const out={}; Object.entries(value).forEach(([k,v])=>out[k]=serializeAfrachoobBackupValue(v)); return out;
+}
+async function readAfrachoobBackupCollection(name){
+  let snap;
+  try{ snap = await db.collection(name).get({source:'server'}); }
+  catch(e){ snap = await db.collection(name).get(); }
+  return snap.docs.map(d=>({id:d.id,data:serializeAfrachoobBackupValue(d.data())}));
+}
+async function collectAfrachoobBackupData(){
+  if(myRole !== 'admin' || adminPreviewRole) throw new Error('این بکاپ فقط از پنل مدیر قابل تهیه است.');
+  if(!db) throw new Error('ارتباط با Firestore برقرار نیست.');
+  const collections={}, warnings=[];
+  for(const name of AFRACHOOB_BACKUP_CORE_COLLECTIONS){
+    try{ collections[name]=await readAfrachoobBackupCollection(name); }
+    catch(err){
+      if(name==='pmNotes' && Array.isArray(pmNotes) && pmNotes.length){
+        collections[name]=pmNotes.map(n=>({id:n.id||'',data:serializeAfrachoobBackupValue(Object.fromEntries(Object.entries(n).filter(([k])=>k!=='id')))}));
+        warnings.push('pmNotes از داده‌ی بارگذاری‌شده‌ی داخل اپ ذخیره شد چون خواندن مستقیم کالکشن مجاز نبود.');
+      }else{
+        collections[name]=[];
+        warnings.push(`${name}: ${err?.message||String(err)}`);
+      }
+    }
+  }
+  try{
+    if(currentUser?.uid){
+      const ownSettings=await db.collection('userSettings').doc(currentUser.uid).get();
+      collections.userSettings = ownSettings.exists ? [{id:ownSettings.id,data:serializeAfrachoobBackupValue(ownSettings.data())}] : [];
+    }else collections.userSettings=[];
+  }catch(err){ collections.userSettings=[]; warnings.push(`userSettings: ${err?.message||String(err)}`); }
+  return {
+    format:'afrachoob-firestore-backup', schemaVersion:1,
+    projectId:(typeof firebaseConfig!=='undefined'&&firebaseConfig.projectId)||'',
+    exportedAt:new Date().toISOString(), exportedAtJalali:todayJalaliLabel(),
+    collections, warnings,
+    note:'Firebase Authentication passwords are not readable and are not included in this backup.'
+  };
+}
+function downloadAfrachoobBlob(blob, filename){
+  const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=filename; document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(a.href),2000);
+}
+async function downloadAfrachoobDataBackup(){
+  const btn=document.getElementById('afraDataBackupBtn');
+  if(btn){btn.disabled=true;btn.textContent='در حال تهیه بکاپ...';}
+  try{
+    const payload=await collectAfrachoobBackupData();
+    const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json;charset=utf-8'});
+    downloadAfrachoobBlob(blob,`Afrachoob-DATA-BACKUP-${todayJalaliFileLabel()}.json`);
+    if(payload.warnings.length) alert('بکاپ ساخته شد، اما برای بعضی بخش‌ها هشدار دسترسی وجود داشت. جزئیات داخل فایل backup ثبت شده است.');
+  }catch(err){ alert('خطا در تهیه بکاپ اطلاعات: '+(err?.message||err)); }
+  finally{ if(btn){btn.disabled=false;btn.textContent='🗃️ دانلود بکاپ اطلاعات';} }
+}
+function loadAfrachoobBackupScript(src){
+  return new Promise((resolve,reject)=>{
+    const existing=[...document.scripts].find(s=>s.src===src);
+    if(existing){ if(window.JSZip) return resolve(); existing.addEventListener('load',resolve,{once:true}); existing.addEventListener('error',reject,{once:true}); return; }
+    const sc=document.createElement('script'); sc.src=src; sc.async=true; sc.onload=resolve; sc.onerror=reject; document.head.appendChild(sc);
+  });
+}
+async function ensureAfrachoobJsZip(){
+  if(window.JSZip) return;
+  await loadAfrachoobBackupScript('https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js');
+  if(!window.JSZip) throw new Error('کتابخانه ساخت ZIP بارگذاری نشد. اتصال اینترنت را بررسی کنید.');
+}
+function afrachoobRestoreGuideText(payload, includedFiles, missingFiles){
+  return `AFRACHOOB FULL RECOVERY BACKUP\n\nتاریخ تهیه: ${payload.exportedAtJalali}\nFirebase projectId: ${payload.projectId}\n\nمحتویات:\n- پوشه app: فایل‌های کد و ظاهر نسخه‌ای که هنگام بکاپ روی سایت فعال بوده است.\n- data/firestore-backup.json: داده‌های Firestore قابل‌خواندن توسط حساب Admin.\n- backup-manifest.json: فهرست فایل‌ها و هشدارهای بکاپ.\n\nفایل‌های برنامه موجود:\n${includedFiles.map(x=>'- '+x).join('\n')}\n\nفایل‌های برنامه‌ای که دریافت نشدند:\n${missingFiles.length?missingFiles.map(x=>'- '+x).join('\n'):'- هیچ‌کدام'}\n\nنکات مهم بازیابی:\n1) فایل‌های پوشه app را روی هاست/GitHub Pages قرار دهید.\n2) firebase-config.js باید متعلق به پروژه Firebase صحیح باشد.\n3) داده‌های Firestore داخل JSON ذخیره شده‌اند؛ بازیابی خودکار عمداً داخل اپ فعال نشده تا داده Production ناخواسته overwrite نشود.\n4) firestore.rules موجود در پوشه app را قبل از Publish بازبینی کنید.\n5) رمز عبور و نشست کاربران Firebase Authentication داخل این بکاپ نیست و Firebase اجازه خواندن پسوردها را نمی‌دهد.\n6) اگر backup-manifest.json هشدار دارد، قبل از بازیابی آن بخش را بررسی کنید.\n`;
+}
+async function downloadAfrachoobFullBackup(){
+  const btn=document.getElementById('afraFullBackupBtn');
+  if(btn){btn.disabled=true;btn.textContent='در حال ساخت بکاپ کامل...';}
+  try{
+    await ensureAfrachoobJsZip();
+    const payload=await collectAfrachoobBackupData();
+    const zip=new window.JSZip(); const appFolder=zip.folder('app'); const dataFolder=zip.folder('data');
+    const included=[], missing=[];
+    for(const file of AFRACHOOB_FULL_BACKUP_FILES){
+      try{
+        const res=await fetch(`./${file}?backup=${Date.now()}`,{cache:'no-store'});
+        if(!res.ok) throw new Error(`HTTP ${res.status}`);
+        appFolder.file(file,await res.arrayBuffer()); included.push(file);
+      }catch(err){ missing.push(`${file} — ${err?.message||String(err)}`); }
+    }
+    dataFolder.file('firestore-backup.json',JSON.stringify(payload,null,2));
+    const manifest={format:'afrachoob-full-recovery-backup',schemaVersion:1,createdAt:new Date().toISOString(),projectId:payload.projectId,includedFiles:included,missingFiles:missing,dataWarnings:payload.warnings};
+    zip.file('backup-manifest.json',JSON.stringify(manifest,null,2));
+    zip.file('RESTORE-GUIDE.txt',afrachoobRestoreGuideText(payload,included,missing));
+    const blob=await zip.generateAsync({type:'blob',compression:'DEFLATE',compressionOptions:{level:6}});
+    downloadAfrachoobBlob(blob,`Afrachoob-FULL-BACKUP-${todayJalaliFileLabel()}.zip`);
+    if(missing.length||payload.warnings.length) alert('بکاپ کامل ساخته شد، اما چند هشدار داخل backup-manifest.json ثبت شده است.');
+  }catch(err){ alert('خطا در تهیه بکاپ کامل: '+(err?.message||err)); }
+  finally{ if(btn){btn.disabled=false;btn.textContent='📦 دانلود بکاپ کامل بازیابی';} }
+}
+function renderAdminBackup(){
+  const body=document.getElementById('adminBody'); if(!body)return;
+  body.innerHTML=`
+    <div class="section-title" style="margin-top:14px;">🗂️ پشتیبان‌گیری</div>
+    <div class="viewer-report-note">این بخش فقط اطلاعات را می‌خواند و دانلود می‌کند؛ هیچ قرارداد، کاربر یا داده‌ای حذف یا تغییر داده نمی‌شود.</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:10px;margin-top:12px;">
+      <div class="chart-box" style="margin:0;">
+        <div class="chart-title">بکاپ اطلاعات</div>
+        <div style="font-size:10.5px;color:var(--ink-soft);line-height:1.8;margin-bottom:10px;">قراردادها، کاربران و نقش‌ها، خرید متریال، لاگ فعالیت‌ها، پیام‌های قابل‌خواندن و تنظیمات حساب مدیر را در یک فایل JSON ذخیره می‌کند.</div>
+        <button id="afraDataBackupBtn" class="export-btn" style="width:100%;" onclick="downloadAfrachoobDataBackup()">🗃️ دانلود بکاپ اطلاعات</button>
+      </div>
+      <div class="chart-box" style="margin:0;">
+        <div class="chart-title">بکاپ کامل بازیابی</div>
+        <div style="font-size:10.5px;color:var(--ink-soft);line-height:1.8;margin-bottom:10px;">یک ZIP شامل کد و ظاهر اپ، فایل‌های تنظیمات، Rules قابل‌دریافت، اطلاعات Firestore و راهنمای بازیابی می‌سازد.</div>
+        <button id="afraFullBackupBtn" class="export-btn" style="width:100%;" onclick="downloadAfrachoobFullBackup()">📦 دانلود بکاپ کامل بازیابی</button>
+      </div>
+    </div>
+    <div class="admin-only-note" style="margin-top:12px;">رمز عبور و Session کاربران Firebase Auth قابل خواندن نیست و داخل هیچ بکاپی قرار نمی‌گیرد. بازیابی خودکار عمداً اضافه نشده تا اطلاعات Production ناخواسته overwrite نشود.</div>`;
 }
 
 function renderAdminPanels(){
@@ -3129,33 +3231,132 @@ function renderAdminKanbanCard(c){
     </button>`;
 }
 
+function outputPairCard(title, subtitle, pdfAction, excelAction, icon='📄'){
+  return `
+    <div class="chart-box" style="margin:0; padding:12px;">
+      <div style="display:flex; align-items:flex-start; gap:9px; margin-bottom:10px;">
+        <span style="font-size:22px; line-height:1;">${icon}</span>
+        <div style="min-width:0; flex:1;">
+          <div class="chart-title" style="margin:0 0 3px;">${escapeHtml(title)}</div>
+          ${subtitle ? `<div style="font-size:10.5px; color:var(--ink-soft); line-height:1.65;">${escapeHtml(subtitle)}</div>` : ''}
+        </div>
+      </div>
+      <div class="export-row" style="margin:0; gap:7px;">
+        <button class="export-btn" style="margin:0;" onclick="${pdfAction}">📄 PDF</button>
+        <button class="export-btn" style="margin:0;" onclick="${excelAction}">📊 Excel</button>
+      </div>
+    </div>`;
+}
+function renderOutputDateFilterHtml(includeScope=true){
+  return `
+    <div class="chart-box" style="margin-top:10px;">
+      <div class="chart-title">🔎 فیلتر خروجی قراردادها</div>
+      <div style="font-size:10.5px; color:var(--ink-soft); margin-bottom:9px;">این فیلتر روی خروجی‌های قراردادی اعمال می‌شود.</div>
+      ${includeScope ? `<select id="exportScopeSelect" class="admin-select" style="width:100%; margin-bottom:8px;" onchange="onExportScopeChange(this.value)">
+        <option value="all" ${exportScope==='all'?'selected':''}>همه قراردادها</option>
+        <option value="active" ${exportScope==='active'?'selected':''}>فقط خاتمه‌نیافته</option>
+        <option value="closed" ${exportScope==='closed'?'selected':''}>فقط خاتمه‌یافته</option>
+        <option value="critical" ${exportScope==='critical'?'selected':''}>قراردادهای بحرانی</option>
+        <option value="near" ${exportScope==='near'?'selected':''}>نزدیک سررسید</option>
+        <option value="waiting" ${exportScope==='waiting'?'selected':''}>در انتظار تحویل‌دهی به مالک</option>
+        <option value="pmoSpecial" ${exportScope==='pmoSpecial'?'selected':''}>قراردادهای خاص</option>
+      </select>` : ''}
+      <div class="export-filters" style="margin:0;">
+        <div class="row2">
+          <div class="date-field"><label>از تاریخ قرارداد:</label><input type="text" placeholder="1405/01/01" value="${escapeHtml(exportDateFrom)}" oninput="onExportDateFrom(this.value)"></div>
+          <div class="date-field"><label>تا:</label><input type="text" placeholder="1405/12/29" value="${escapeHtml(exportDateTo)}" oninput="onExportDateTo(this.value)"></div>
+        </div>
+      </div>
+      ${includeScope ? `<div class="export-row" style="margin:8px 0 0;">
+        <button class="export-btn" onclick="runCurrentContractOutput('pdf')">📄 PDF با فیلتر بالا</button>
+        <button class="export-btn" onclick="runCurrentContractOutput('excel')">📊 Excel با فیلتر بالا</button>
+      </div>` : ''}
+    </div>`;
+}
+function renderFinancialOutputFilterHtml(){
+  const st = computeFinancialStats();
+  const monthsByYear = {};
+  st.availableMonths.forEach(mk => {
+    const y = mk.split('/')[0];
+    (monthsByYear[y] = monthsByYear[y] || []).push(mk);
+  });
+  const yearKeys = Object.keys(monthsByYear).sort();
+  const filterLabel = st.filterActive ? `${finFilterMonths.size} ماه انتخاب‌شده` : 'همه‌ی قراردادها';
+  return `
+    <div class="section-title" style="margin-top:16px; cursor:pointer; justify-content:space-between;" onclick="toggleFinFilterPanel()">
+      <span>🔎 فیلتر خروجی مالی <span class="cnt">(${filterLabel})</span></span>
+      <span>${finFilterOpen ? '▲ بستن' : '▼ نمایش'}</span>
+    </div>
+    ${finFilterOpen ? (yearKeys.length ? `
+      <div style="background:var(--panel-2); border:1px solid var(--line); border-radius:10px; padding:10px; margin-bottom:12px;">
+        <button class="btn-secondary" style="font-size:10.5px; padding:6px 10px; width:100%;" onclick="clearFinFilter()">نمایش همه (حذف فیلتر)</button>
+        ${yearKeys.map(y => {
+          const monthsOfYear = monthsByYear[y];
+          const allSelected = monthsOfYear.every(mk => finFilterMonths.has(mk));
+          return `<div style="margin-top:12px;">
+            <label style="display:flex; align-items:center; gap:6px; font-weight:700; cursor:pointer;">
+              <input type="checkbox" ${allSelected ? 'checked' : ''} onchange="toggleFinFilterYear('${y}', this.checked)"> کل سال ${y}
+            </label>
+            <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;">
+              ${monthsOfYear.map(mk => `<label style="display:flex; align-items:center; gap:4px; font-family:'JetBrains Mono',monospace; font-size:10.5px; border:1px solid var(--line); border-radius:8px; padding:4px 8px; cursor:pointer;"><input type="checkbox" ${finFilterMonths.has(mk) ? 'checked' : ''} onchange="toggleFinFilterMonth('${mk}')" style="margin:0;">${mk}</label>`).join('')}
+            </div>
+          </div>`;
+        }).join('')}
+      </div>` : `<div class="empty">هیچ قراردادی تاریخ معتبر ندارد.</div>`) : ''}`;
+}
+function runContractOutputPreset(scope, format){
+  exportScope = scope || 'all';
+  const viewerMode = (myRole === 'viewer' && !adminPreviewRole);
+  if(format === 'excel') return viewerMode ? exportExcelViewer() : exportExcel();
+  return viewerMode ? exportPDFViewer() : exportPDF();
+}
+function runCurrentContractOutput(format){
+  const sel=document.getElementById('exportScopeSelect');
+  return runContractOutputPreset(sel ? sel.value : exportScope, format);
+}
+function setOutputPlanContract(id){ adminPlanContractId = id || ''; }
+function outputReportGrid(cards){
+  return `<div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:9px;">${cards.join('')}</div>`;
+}
 function renderAdminExports(){
   const body = document.getElementById('adminBody');
   if(!body) return;
+  const activeContracts = contracts.filter(c => !isCompleted(c));
+  if(!adminPlanContractId || !activeContracts.some(c => c.id === adminPlanContractId)) adminPlanContractId = activeContracts[0]?.id || '';
+  const managementCards = [
+    outputPairCard('همه قراردادها','خروجی فهرست کامل قراردادها با بازه تاریخ انتخاب‌شده',"runContractOutputPreset('all','pdf')","runContractOutputPreset('all','excel')",'📋'),
+    outputPairCard('قراردادهای بحرانی','فقط قراردادهای خاتمه‌نیافته با وضعیت بحرانی',"runContractOutputPreset('critical','pdf')","runContractOutputPreset('critical','excel')",'🔴'),
+    outputPairCard('نزدیک سررسید','قراردادهای خاتمه‌نیافته نزدیک سررسید',"runContractOutputPreset('near','pdf')","runContractOutputPreset('near','excel')",'🟡'),
+    outputPairCard('در انتظار تحویل‌دهی','قراردادهای رسیده به مرحله تحویل به مالک',"runContractOutputPreset('waiting','pdf')","runContractOutputPreset('waiting','excel')",'📦'),
+    outputPairCard('قراردادهای خاص','تمام قراردادهای علامت‌گذاری‌شده به‌عنوان قرارداد خاص','exportSpecialContractsPdf()','exportSpecialContractsExcel()','🌟'),
+    outputPairCard('خلاصه مدیریتی','خلاصه مدیریتی کل وضعیت قراردادها','exportManagementSummaryPdf()','exportManagementSummaryExcel()','📱')
+  ];
+  const financialCards = [
+    outputPairCard('گزارش مالی خلاصه','شاخص‌های کلیدی مالی در بازه انتخاب‌شده','exportFinancialSummaryPdf()','exportFinancialSummaryExcel()','💰'),
+    outputPairCard('گزارش مالی ماهانه','جمع ارزش قراردادها به تفکیک ماه ثبت','exportFinancialMonthlyPdf()','exportFinancialMonthlyExcel()','📅'),
+    outputPairCard('ریز قراردادهای مالی','جزئیات متریال، اجرت، مبلغ کل و پیشرفت','exportFinancialPdf()','exportFinancialExcel()','🧾')
+  ];
   body.innerHTML = `
-    <div class="section-title" style="margin-top:14px;">خروجی قراردادها</div>
-    <div class="export-filters">
-      <div class="row1">
-        <select id="exportScopeSelect" class="admin-select" onchange="onExportScopeChange(this.value)">
-          <option value="all" ${exportScope==='all'?'selected':''}>همه قراردادها</option>
-          <option value="active" ${exportScope==='active'?'selected':''}>فقط فعال (بدون خاتمه)</option>
-          <option value="closed" ${exportScope==='closed'?'selected':''}>فقط خاتمه‌یافته</option>
-          <option value="waiting" ${exportScope==='waiting'?'selected':''}>فقط در انتظار تحویل‌دهی</option>
-          <option value="pmoSpecial" ${exportScope==='pmoSpecial'?'selected':''}>🌟 فقط قراردادهای خاص</option>
-        </select>
+    <div class="section-title" style="margin-top:14px;">خروجی</div>
+    <div class="viewer-report-note">تمام خروجی‌های پنل مدیر در همین بخش قرار گرفته‌اند. PDF و Excel هر گزارش جدا و مشخص است.</div>
+    ${renderOutputDateFilterHtml(true)}
+    <div class="section-title" style="margin-top:18px;">خروجی‌های مدیریتی</div>
+    ${outputReportGrid(managementCards)}
+    ${renderFinancialOutputFilterHtml()}
+    <div class="section-title" style="margin-top:18px;">خروجی‌های مالی</div>
+    ${outputReportGrid(financialCards)}
+    <div class="section-title" style="margin-top:18px;">خروجی برنامه قرارداد</div>
+    <div class="chart-box" style="margin-top:0;">
+      <div style="font-size:10.5px; color:var(--ink-soft); margin-bottom:8px;">قرارداد موردنظر را انتخاب کنید؛ برنامه بدون تغییر در اطلاعات قرارداد خروجی گرفته می‌شود.</div>
+      <select class="admin-select" style="width:100%; margin-bottom:9px;" onchange="setOutputPlanContract(this.value)" ${activeContracts.length?'':'disabled'}>
+        ${activeContracts.length ? activeContracts.map(c => `<option value="${c.id}" ${c.id===adminPlanContractId?'selected':''}>${escapeHtml(c.name)}${c.itemCode?' — '+escapeHtml(c.itemCode):''}</option>`).join('') : '<option value="">قرارداد خاتمه‌نیافته‌ای وجود ندارد</option>'}
+      </select>
+      <div class="export-row" style="margin:0;">
+        <button class="export-btn" onclick="exportPlanPdf()" ${activeContracts.length?'':'disabled'}>📄 PDF برنامه قرارداد</button>
+        <button class="export-btn" onclick="exportPlanExcel()" ${activeContracts.length?'':'disabled'}>📊 Excel برنامه قرارداد</button>
       </div>
-      <div class="row2">
-        <div class="date-field"><label>از تاریخ قرارداد:</label>
-          <input type="text" id="exportFromInput" placeholder="1405/01/01" value="${escapeHtml(exportDateFrom)}" oninput="onExportDateFrom(this.value)"></div>
-        <div class="date-field"><label>تا:</label>
-          <input type="text" id="exportToInput" placeholder="1405/12/29" value="${escapeHtml(exportDateTo)}" oninput="onExportDateTo(this.value)"></div>
-      </div>
-    </div>
-    <div class="export-row">
-      <button class="export-btn" id="exportExcelBtn" onclick="exportExcel()">📊 خروجی اکسل</button>
-      <button class="export-btn" id="exportPdfBtn" onclick="exportPDF()">📄 خروجی PDF</button>
-    </div>
-    <div class="admin-only-note">این بخش از همان داده‌ها، فیلترها و توابع خروجی موجود استفاده می‌کند.</div>`;
+    </div>`;
+  localizeFinancialDigits(body);
 }
 
 function computeDashboardStats(){
@@ -3782,14 +3983,17 @@ function rerenderFinancialSurface(){
   const role = financialUiRole();
   if(role === 'viewer'){
     if(viewerTab === 'financial') renderAdminFinancial();
-    else if(viewerTab === 'more' && viewerMoreSection === 'exports' && viewerExportPanel === 'financial') renderViewerFinancialExports();
+    else if(viewerTab === 'more' && viewerMoreSection === 'exports') renderViewerExportsHub();
     return;
   }
   if(role === 'pmoDeputy' && viewerSection === 'financial'){
     renderAdminFinancial();
     return;
   }
-  if(myRole === 'admin' && !adminPreviewRole && adminTab === 'financial') renderAdminFinancial();
+  if(myRole === 'admin' && !adminPreviewRole){
+    if(adminTab === 'financial') renderAdminFinancial();
+    else if(adminTab === 'exports') renderAdminExports();
+  }
 }
 
 async function ensureFinancialCardSettingsLoaded(){
@@ -4028,8 +4232,6 @@ function renderAdminFinancial(){
   body.innerHTML = `
     <div class="section-title" style="margin-top:14px;">💰 گزارش مالی</div>
     <div class="toolbar" style="display:flex; gap:8px; flex-wrap:wrap;">
-      ${(finEditable || pmoFinancial) ? `<button id="finExcelBtn" class="btn-secondary" onclick="exportFinancialExcel()">📊 خروجی اکسل</button>
-      <button id="finPdfBtn" class="btn-secondary" onclick="exportFinancialPdf()">🧾 خروجی PDF</button>` : ''}
       ${canManageFinancialCardLayout() ? `<button class="btn-secondary" onclick="openFinancialCardManager()">⚙️ مدیریت کارت‌ها</button>` : ''}
     </div>
 
@@ -4232,6 +4434,78 @@ async function exportFinancialPdf(){
 }
 
 
+function financialOutputSummaryRows(st){
+  return [
+    ['ارزش کل قراردادها (ریال)', st.totalValue],
+    ['جمع ارزش متریال (ریال)', st.totalMaterial],
+    ['جمع اجرت نصب (ریال)', st.totalLabor],
+    ['میانگین ارزش هر قرارداد (ریال)', st.avgValue],
+    ['دارای فاکتور نهایی', `${st.withFinalCount} از ${st.totalCount}`],
+    ['ارزش تحقق‌یافته بر اساس پیشرفت (ریال)', st.realizedValue],
+    ['ارزش قراردادهای باز (ریال)', st.activeValue],
+    ['ارزش قراردادهای خاتمه‌یافته (ریال)', st.closedValue],
+    ['میانگین اختلاف فاکتور نهایی با اولیه', st.varianceRows.length ? st.avgVariancePct+'٪' : '—']
+  ];
+}
+async function exportFinancialSummaryExcel(){
+  const st = computeFinancialStats();
+  const rows = financialOutputSummaryRows(st);
+  if(!st.rows.length){ alert('داده‌ای برای گزارش مالی وجود ندارد.'); return; }
+  try{
+    const wb = XLSX.utils.book_new();
+    wb.Workbook = { Views: [{ RTL:true }] };
+    const ws = XLSX.utils.aoa_to_sheet([
+      ['گزارش مالی خلاصه افراچوب',''],
+      ['تاریخ گزارش', todayJalaliLabel()],
+      ['بازه‌ی فیلتر', st.filterActive ? Array.from(finFilterMonths).sort().join('، ') : 'همه‌ی قراردادها'],
+      [], ...rows
+    ]);
+    ws['!cols']=[{wch:40},{wch:24}];
+    XLSX.utils.book_append_sheet(wb,ws,'خلاصه مالی');
+    XLSX.writeFile(wb,`گزارش مالی خلاصه افراچوب - ${todayJalaliFileLabel()}.xlsx`);
+  }catch(err){ alert('خطا در ساخت فایل اکسل: '+err.message); }
+}
+async function exportFinancialSummaryPdf(){
+  const st = computeFinancialStats();
+  if(!st.rows.length){ alert('داده‌ای برای گزارش مالی وجود ندارد.'); return; }
+  try{
+    const rows = financialOutputSummaryRows(st).map(([label,value]) => [label, typeof value === 'number' ? formatToman(value) : value]);
+    const extraHeaderHtml = `<div style="font-size:10px;color:#555;margin-bottom:10px;">بازه‌ی فیلتر: ${st.filterActive ? escapeHtml(Array.from(finFilterMonths).sort().join('، ')) : 'همه‌ی قراردادها'}</div>`;
+    await renderPaginatedReportPdf({
+      reportTitle:'گزارش مالی خلاصه افراچوب', extraHeaderHtml,
+      headers:['شاخص','مقدار'], rows,
+      filename:`گزارش مالی خلاصه افراچوب - ${todayJalaliFileLabel()}.pdf`
+    });
+  }catch(err){ alert('خطا در ساخت PDF: '+err.message); }
+}
+async function exportFinancialMonthlyExcel(){
+  const st = computeFinancialStats();
+  if(!st.monthly.length){ alert('داده‌ی ماهانه‌ای برای گزارش مالی وجود ندارد.'); return; }
+  try{
+    const wb = XLSX.utils.book_new();
+    wb.Workbook = { Views: [{ RTL:true }] };
+    const rows = st.monthly.map(m => ({'ماه ثبت قرارداد':m.label,'ارزش قراردادها (ریال)':m.value}));
+    const ws = XLSX.utils.json_to_sheet(rows);
+    ws['!cols']=[{wch:18},{wch:24}];
+    XLSX.utils.book_append_sheet(wb,ws,'مالی ماهانه');
+    XLSX.writeFile(wb,`گزارش مالی ماهانه افراچوب - ${todayJalaliFileLabel()}.xlsx`);
+  }catch(err){ alert('خطا در ساخت فایل اکسل: '+err.message); }
+}
+async function exportFinancialMonthlyPdf(){
+  const st = computeFinancialStats();
+  if(!st.monthly.length){ alert('داده‌ی ماهانه‌ای برای گزارش مالی وجود ندارد.'); return; }
+  try{
+    const rows = st.monthly.map(m => [m.label, formatToman(m.value)]);
+    const extraHeaderHtml = `<div style="font-size:10px;color:#555;margin-bottom:10px;">بازه‌ی فیلتر: ${st.filterActive ? escapeHtml(Array.from(finFilterMonths).sort().join('، ')) : 'همه‌ی قراردادها'}</div>`;
+    await renderPaginatedReportPdf({
+      reportTitle:'گزارش مالی ماهانه افراچوب', extraHeaderHtml,
+      headers:['ماه ثبت قرارداد','ارزش قراردادها (ریال)'], rows,
+      filename:`گزارش مالی ماهانه افراچوب - ${todayJalaliFileLabel()}.pdf`
+    });
+  }catch(err){ alert('خطا در ساخت PDF: '+err.message); }
+}
+
+
 
 /* ---------- Admin-only: برنامه قراردادها ----------
    این بخش عمداً فقط داخل پنل مدیر است. از تاریخ قرارداد تا سررسید برنامه می‌سازد
@@ -4408,11 +4682,7 @@ function renderAdminPlanContent(c){
           </div>`).join('')}
       </div>
     </div>
-    <div style="display:flex;gap:8px;margin-top:12px;">
-      <button class="field-save" id="planExportPdfBtn" style="flex:1;" onclick="exportPlanPdf()">📄 خروجی PDF</button>
-      <button class="field-save" id="planExportExcelBtn" style="flex:1;background:var(--panel);" onclick="exportPlanExcel()">📊 خروجی اکسل</button>
-    </div>
-    <div class="viewer-report-note" style="margin-top:10px;">وزن‌ها قابل ویرایش نیستند و از درصددهی فعلی سیستم خوانده می‌شوند. هیچ تغییری در اطلاعات قرارداد ایجاد نمی‌شود.</div>`;
+    <div class="viewer-report-note" style="margin-top:10px;">وزن‌ها قابل ویرایش نیستند و از درصددهی فعلی سیستم خوانده می‌شوند. برای دریافت PDF یا Excel از «بیشتر ← خروجی‌ها ← برنامه قرارداد» استفاده کنید.</div>`;
 }
 
 /* ---------- خروجی‌های PDF/اکسل برنامه‌ی تک‌قراردادی، همراه با مقایسه‌ی پیشرفت واقعی/برنامه ---------- */
@@ -4483,27 +4753,6 @@ function renderAdminContracts(){
   const body = document.getElementById('adminBody');
   body.innerHTML = `
     <div class="section-title" style="margin-top:14px;">مدیریت قراردادها <span class="cnt" id="mgmtCount"></span></div>
-    <div class="export-filters">
-      <div class="row1">
-        <select id="exportScopeSelect" class="admin-select" onchange="onExportScopeChange(this.value)">
-          <option value="all" ${exportScope==='all'?'selected':''}>همه قراردادها</option>
-          <option value="active" ${exportScope==='active'?'selected':''}>فقط فعال (بدون خاتمه)</option>
-          <option value="closed" ${exportScope==='closed'?'selected':''}>فقط خاتمه‌یافته</option>
-          <option value="waiting" ${exportScope==='waiting'?'selected':''}>فقط در انتظار تحویل‌دهی</option>
-          <option value="pmoSpecial" ${exportScope==='pmoSpecial'?'selected':''}>🌟 فقط قراردادهای خاص</option>
-        </select>
-      </div>
-      <div class="row2">
-        <div class="date-field"><label>از تاریخ قرارداد:</label>
-          <input type="text" id="exportFromInput" placeholder="1405/01/01" value="${escapeHtml(exportDateFrom)}" oninput="onExportDateFrom(this.value)"></div>
-        <div class="date-field"><label>تا:</label>
-          <input type="text" id="exportToInput" placeholder="1405/12/29" value="${escapeHtml(exportDateTo)}" oninput="onExportDateTo(this.value)"></div>
-      </div>
-    </div>
-    <div class="export-row">
-      <button class="export-btn" id="exportExcelBtn" onclick="exportExcel()">📊 خروجی اکسل</button>
-      <button class="export-btn" id="exportPdfBtn" onclick="exportPDF()">📄 خروجی PDF</button>
-    </div>
     <input type="text" id="adminSearch" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(adminSearchQuery)}" class="auth-input" style="max-width:none; width:100%; margin-bottom:10px;" oninput="onAdminSearch(this.value)">
     <div style="display:flex; gap:8px; margin-bottom:14px;">
       <select id="stageFilter" class="admin-select" onchange="onStageFilter(this.value)">
@@ -4544,6 +4793,8 @@ function getExportContracts(){
   let list = contracts.slice();
   if(exportScope === 'active') list = list.filter(c => !isCompleted(c));
   else if(exportScope === 'closed') list = list.filter(isCompleted);
+  else if(exportScope === 'critical') list = list.filter(c => !isCompleted(c) && adminTimeStatus(c).cls === 'late');
+  else if(exportScope === 'near') list = list.filter(c => !isCompleted(c) && adminTimeStatus(c).cls === 'near');
   else if(exportScope === 'waiting') list = list.filter(c => !isCompleted(c) && getDisplayStageIndex(c) === DISPLAY_STAGES.length-2);
   else if(exportScope === 'pmoSpecial') list = list.filter(c => c.pmSpecial);
 
@@ -4597,7 +4848,7 @@ function reportFileName(ext){
 }
 
 function exportScopeLabel(){
-  const map = { all:'همه قراردادها', active:'فقط فعال (بدون خاتمه)', closed:'فقط خاتمه‌یافته', waiting:'فقط در انتظار تحویل‌دهی', pmoSpecial:'🌟 فقط قراردادهای خاص' };
+  const map = { all:'همه قراردادها', active:'فقط فعال (بدون خاتمه)', closed:'فقط خاتمه‌یافته', critical:'قراردادهای بحرانی', near:'قراردادهای نزدیک سررسید', waiting:'فقط در انتظار تحویل‌دهی', pmoSpecial:'🌟 فقط قراردادهای خاص' };
   let label = map[exportScope] || 'همه قراردادها';
   if(exportDateFrom || exportDateTo) label += ' — بازه‌ی تاریخ قرارداد: ' + (exportDateFrom||'ابتدا') + ' تا ' + (exportDateTo||'انتها');
   return label;
@@ -5110,6 +5361,42 @@ async function exportManagementSummaryPdf(){
   }finally{
     if(btn){ btn.disabled = false; btn.textContent = '📱 خلاصه مدیریتی (اشتراک‌گذاری)'; }
   }
+}
+
+
+async function exportManagementSummaryExcel(){
+  if(!contracts.length){ alert('هنوز قراردادی ثبت نشده است.'); return; }
+  try{
+    const active = contracts.filter(c => !isCompleted(c));
+    const critical = active.filter(c => adminTimeStatus(c).cls === 'late');
+    const near = active.filter(c => adminTimeStatus(c).cls === 'near');
+    const waiting = active.filter(c => getDisplayStageIndex(c) === DISPLAY_STAGES.length-2);
+    const stats = computeDashboardStats();
+    const wb = XLSX.utils.book_new();
+    wb.Workbook = { Views:[{RTL:true}] };
+    const summary = [
+      ['خلاصه مدیریتی افراچوب',''],
+      ['تاریخ گزارش',todayJalaliLabel()],
+      [],
+      ['کل قراردادها',stats.totalAll],
+      ['خاتمه‌یافته',stats.closedCount],
+      ['بحرانی',critical.length],
+      ['نزدیک سررسید',near.length],
+      ['در انتظار تحویل‌دهی به مالک',waiting.length],
+      ['بروزرسانی نشده',stats.notUpdated],
+      ['میانگین پیشرفت',stats.avgProgress+'٪']
+    ];
+    const wsSummary=XLSX.utils.aoa_to_sheet(summary); wsSummary['!cols']=[{wch:34},{wch:24}];
+    XLSX.utils.book_append_sheet(wb,wsSummary,'خلاصه');
+    const makeRows=list=>list.map(c=>({
+      'نام قرارداد':c.name||'', 'کد قلم':c.itemCode||'', 'مرحله فعلی':DISPLAY_STAGES[getDisplayStageIndex(c)]||'',
+      'پیشرفت':overallPercent(c)+'٪', 'سررسید اصلی':c.dueDate||'—', 'سررسید جبرانی':c.revisedDueDate||'—',
+      'وضعیت زمانی':adminTimeStatus(c).label
+    }));
+    const append=(name,list)=>{const ws=XLSX.utils.json_to_sheet(makeRows(list));ws['!cols']=[{wch:24},{wch:14},{wch:24},{wch:12},{wch:14},{wch:14},{wch:24}];XLSX.utils.book_append_sheet(wb,ws,name)};
+    append('بحرانی',critical); append('نزدیک سررسید',near); append('در انتظار تحویل',waiting);
+    XLSX.writeFile(wb,`خلاصه مدیریتی افراچوب - ${todayJalaliFileLabel()}.xlsx`);
+  }catch(err){ alert('خطا در ساخت اکسل خلاصه مدیریتی: '+err.message); }
 }
 
 async function exportPDF(){
