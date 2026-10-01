@@ -90,8 +90,10 @@ let adminDashSearch = '';
 let adminPlanContractId = '';
 let adminPlanSearchQuery = '';
 let exportScope = 'all';   // 'all' | 'active' | 'closed' | 'critical' | 'near' | 'waiting' | 'pmoSpecial'
-let exportDateFrom = '';
-let exportDateTo = '';
+let exportDateFrom = ''; // legacy compatibility; UI خروجی از فیلتر سال/ماه استفاده می‌کند
+let exportDateTo = '';   // legacy compatibility; UI خروجی از فیلتر سال/ماه استفاده می‌کند
+let exportFilterMonths = new Set(); // فیلتر مستقل خروجی قراردادها، مشابه فیلتر مالی
+let exportFilterOpen = false;
 let logDateFrom = '';
 let logDateTo = '';
 let splashHidden = false;
@@ -2619,7 +2621,7 @@ function renderViewerExportsHub(){
   if(!body) return;
   viewerExportPanel = null;
   const managementCards = [
-    outputPairCard('همه قراردادها','خروجی فهرست کامل قراردادها با بازه تاریخ انتخاب‌شده',"runContractOutputPreset('all','pdf')","runContractOutputPreset('all','excel')",'📋'),
+    outputPairCard('همه قراردادها','بدون فیلتر تاریخ شامل قراردادهای بایگانی‌شده هم می‌شود؛ با فیلتر فقط ماه‌های انتخابی',"runContractOutputPreset('all','pdf')","runContractOutputPreset('all','excel')",'📋'),
     outputPairCard('قراردادهای بحرانی','فقط قراردادهای خاتمه‌نیافته با وضعیت بحرانی',"runContractOutputPreset('critical','pdf')","runContractOutputPreset('critical','excel')",'🔴'),
     outputPairCard('نزدیک سررسید','قراردادهای خاتمه‌نیافته نزدیک سررسید',"runContractOutputPreset('near','pdf')","runContractOutputPreset('near','excel')",'🟡'),
     outputPairCard('در انتظار تحویل‌دهی','قراردادهای رسیده به مرحله تحویل به مالک',"runContractOutputPreset('waiting','pdf')","runContractOutputPreset('waiting','excel')",'📦'),
@@ -3231,6 +3233,23 @@ function renderAdminKanbanCard(c){
     </button>`;
 }
 
+async function runOutputAction(btn, action){
+  if(!btn || btn.disabled) return;
+  const originalHtml = btn.innerHTML;
+  btn.disabled = true;
+  btn.textContent = 'در حال ساخت...';
+  try{
+    // یک فریم فرصت بده تا کاربر قبل از شروع عملیات سنگین، وضعیت «در حال ساخت...» را واقعاً ببیند.
+    await new Promise(resolve => requestAnimationFrame(() => resolve()));
+    await Promise.resolve(action());
+  }catch(err){
+    console.error(err);
+    alert('خطا در ساخت خروجی: ' + (err?.message || err));
+  }finally{
+    btn.disabled = false;
+    btn.innerHTML = originalHtml;
+  }
+}
 function outputPairCard(title, subtitle, pdfAction, excelAction, icon='📄'){
   return `
     <div class="chart-box" style="margin:0; padding:12px;">
@@ -3242,18 +3261,57 @@ function outputPairCard(title, subtitle, pdfAction, excelAction, icon='📄'){
         </div>
       </div>
       <div class="export-row" style="margin:0; gap:7px;">
-        <button class="export-btn" style="margin:0;" onclick="${pdfAction}">📄 PDF</button>
-        <button class="export-btn" style="margin:0;" onclick="${excelAction}">📊 Excel</button>
+        <button class="export-btn" style="margin:0;" onclick="runOutputAction(this,()=>${pdfAction})">👁 پیش‌نمایش PDF</button>
+        <button class="export-btn" style="margin:0;" onclick="runOutputAction(this,()=>${excelAction})">📊 Excel</button>
       </div>
     </div>`;
 }
+function exportContractAvailableMonths(){
+  return Array.from(new Set(
+    contracts.concat(archivedContracts).map(c => contractMonthKey(c)).filter(Boolean)
+  )).sort();
+}
+function contractOutputFilterLabel(){
+  return exportFilterMonths.size ? `${exportFilterMonths.size} ماه انتخاب‌شده` : 'همه‌ی قراردادها';
+}
+function rerenderContractOutputSurface(){
+  if(currentAfraPdfPreview) closeAfraPdfPreview();
+  if(document.getElementById('viewerBody')) renderViewerExportsHub();
+  else if(document.getElementById('adminBody')) renderAdminExports();
+}
+function toggleExportFilterPanel(){
+  exportFilterOpen = !exportFilterOpen;
+  rerenderContractOutputSurface();
+}
+function clearExportFilter(){
+  exportFilterMonths = new Set();
+  rerenderContractOutputSurface();
+}
+function toggleExportFilterMonth(mk){
+  if(exportFilterMonths.has(mk)) exportFilterMonths.delete(mk); else exportFilterMonths.add(mk);
+  rerenderContractOutputSurface();
+}
+function toggleExportFilterYear(year, checked){
+  exportContractAvailableMonths().filter(mk => mk.startsWith(year + '/')).forEach(mk => {
+    if(checked) exportFilterMonths.add(mk); else exportFilterMonths.delete(mk);
+  });
+  rerenderContractOutputSurface();
+}
 function renderOutputDateFilterHtml(includeScope=true){
+  const availableMonths = exportContractAvailableMonths();
+  const monthsByYear = {};
+  availableMonths.forEach(mk => {
+    const y = mk.split('/')[0];
+    (monthsByYear[y] = monthsByYear[y] || []).push(mk);
+  });
+  const yearKeys = Object.keys(monthsByYear).sort();
+  const filterLabel = contractOutputFilterLabel();
   return `
     <div class="chart-box" style="margin-top:10px;">
       <div class="chart-title">🔎 فیلتر خروجی قراردادها</div>
-      <div style="font-size:10.5px; color:var(--ink-soft); margin-bottom:9px;">این فیلتر روی خروجی‌های قراردادی اعمال می‌شود.</div>
+      <div style="font-size:10.5px; color:var(--ink-soft); margin-bottom:9px;">فیلتر تاریخ بر اساس سال و ماه تاریخ قرارداد است؛ مثل فیلتر گزارش مالی. بدون فیلتر تاریخ، «همه قراردادها» شامل بایگانی‌شده‌ها هم می‌شود.</div>
       ${includeScope ? `<select id="exportScopeSelect" class="admin-select" style="width:100%; margin-bottom:8px;" onchange="onExportScopeChange(this.value)">
-        <option value="all" ${exportScope==='all'?'selected':''}>همه قراردادها</option>
+        <option value="all" ${exportScope==='all'?'selected':''}>همه قراردادها (شامل بایگانی)</option>
         <option value="active" ${exportScope==='active'?'selected':''}>فقط خاتمه‌نیافته</option>
         <option value="closed" ${exportScope==='closed'?'selected':''}>فقط خاتمه‌یافته</option>
         <option value="critical" ${exportScope==='critical'?'selected':''}>قراردادهای بحرانی</option>
@@ -3261,18 +3319,33 @@ function renderOutputDateFilterHtml(includeScope=true){
         <option value="waiting" ${exportScope==='waiting'?'selected':''}>در انتظار تحویل‌دهی به مالک</option>
         <option value="pmoSpecial" ${exportScope==='pmoSpecial'?'selected':''}>قراردادهای خاص</option>
       </select>` : ''}
-      <div class="export-filters" style="margin:0;">
-        <div class="row2">
-          <div class="date-field"><label>از تاریخ قرارداد:</label><input type="text" placeholder="1405/01/01" value="${escapeHtml(exportDateFrom)}" oninput="onExportDateFrom(this.value)"></div>
-          <div class="date-field"><label>تا:</label><input type="text" placeholder="1405/12/29" value="${escapeHtml(exportDateTo)}" oninput="onExportDateTo(this.value)"></div>
-        </div>
+      <div class="section-title" style="margin:8px 0 0; cursor:pointer; justify-content:space-between;" onclick="toggleExportFilterPanel()">
+        <span>📅 فیلتر تاریخ قرارداد <span class="cnt">(${filterLabel})</span></span>
+        <span>${exportFilterOpen ? '▲ بستن' : '▼ نمایش'}</span>
       </div>
+      ${exportFilterOpen ? (yearKeys.length ? `
+        <div style="background:var(--panel-2); border:1px solid var(--line); border-radius:10px; padding:10px; margin-top:8px;">
+          <button class="btn-secondary" style="font-size:10.5px; padding:6px 10px; width:100%;" onclick="clearExportFilter()">نمایش همه (حذف فیلتر تاریخ)</button>
+          ${yearKeys.map(y => {
+            const monthsOfYear = monthsByYear[y];
+            const allSelected = monthsOfYear.every(mk => exportFilterMonths.has(mk));
+            return `<div style="margin-top:12px;">
+              <label style="display:flex; align-items:center; gap:6px; font-weight:700; cursor:pointer;">
+                <input type="checkbox" ${allSelected ? 'checked' : ''} onchange="toggleExportFilterYear('${y}', this.checked)"> کل سال ${y}
+              </label>
+              <div style="display:flex; flex-wrap:wrap; gap:6px; margin-top:6px;">
+                ${monthsOfYear.map(mk => `<label style="display:flex; align-items:center; gap:4px; font-family:'JetBrains Mono',monospace; font-size:10.5px; border:1px solid var(--line); border-radius:8px; padding:4px 8px; cursor:pointer;"><input type="checkbox" ${exportFilterMonths.has(mk) ? 'checked' : ''} onchange="toggleExportFilterMonth('${mk}')" style="margin:0;">${mk}</label>`).join('')}
+              </div>
+            </div>`;
+          }).join('')}
+        </div>` : `<div class="empty" style="margin-top:8px;">هیچ قراردادی تاریخ معتبر ندارد.</div>`) : ''}
       ${includeScope ? `<div class="export-row" style="margin:8px 0 0;">
-        <button class="export-btn" onclick="runCurrentContractOutput('pdf')">📄 PDF با فیلتر بالا</button>
-        <button class="export-btn" onclick="runCurrentContractOutput('excel')">📊 Excel با فیلتر بالا</button>
+        <button class="export-btn" onclick="runOutputAction(this,()=>runCurrentContractOutput('pdf'))">👁 پیش‌نمایش PDF با فیلتر بالا</button>
+        <button class="export-btn" onclick="runOutputAction(this,()=>runCurrentContractOutput('excel'))">📊 Excel با فیلتر بالا</button>
       </div>` : ''}
     </div>`;
 }
+
 function renderFinancialOutputFilterHtml(){
   const st = computeFinancialStats();
   const monthsByYear = {};
@@ -3324,7 +3397,7 @@ function renderAdminExports(){
   const activeContracts = contracts.filter(c => !isCompleted(c));
   if(!adminPlanContractId || !activeContracts.some(c => c.id === adminPlanContractId)) adminPlanContractId = activeContracts[0]?.id || '';
   const managementCards = [
-    outputPairCard('همه قراردادها','خروجی فهرست کامل قراردادها با بازه تاریخ انتخاب‌شده',"runContractOutputPreset('all','pdf')","runContractOutputPreset('all','excel')",'📋'),
+    outputPairCard('همه قراردادها','بدون فیلتر تاریخ شامل قراردادهای بایگانی‌شده هم می‌شود؛ با فیلتر فقط ماه‌های انتخابی',"runContractOutputPreset('all','pdf')","runContractOutputPreset('all','excel')",'📋'),
     outputPairCard('قراردادهای بحرانی','فقط قراردادهای خاتمه‌نیافته با وضعیت بحرانی',"runContractOutputPreset('critical','pdf')","runContractOutputPreset('critical','excel')",'🔴'),
     outputPairCard('نزدیک سررسید','قراردادهای خاتمه‌نیافته نزدیک سررسید',"runContractOutputPreset('near','pdf')","runContractOutputPreset('near','excel')",'🟡'),
     outputPairCard('در انتظار تحویل‌دهی','قراردادهای رسیده به مرحله تحویل به مالک',"runContractOutputPreset('waiting','pdf')","runContractOutputPreset('waiting','excel')",'📦'),
@@ -3352,8 +3425,8 @@ function renderAdminExports(){
         ${activeContracts.length ? activeContracts.map(c => `<option value="${c.id}" ${c.id===adminPlanContractId?'selected':''}>${escapeHtml(c.name)}${c.itemCode?' — '+escapeHtml(c.itemCode):''}</option>`).join('') : '<option value="">قرارداد خاتمه‌نیافته‌ای وجود ندارد</option>'}
       </select>
       <div class="export-row" style="margin:0;">
-        <button class="export-btn" onclick="exportPlanPdf()" ${activeContracts.length?'':'disabled'}>📄 PDF برنامه قرارداد</button>
-        <button class="export-btn" onclick="exportPlanExcel()" ${activeContracts.length?'':'disabled'}>📊 Excel برنامه قرارداد</button>
+        <button class="export-btn" onclick="runOutputAction(this,()=>exportPlanPdf())" ${activeContracts.length?'':'disabled'}>👁 پیش‌نمایش PDF برنامه قرارداد</button>
+        <button class="export-btn" onclick="runOutputAction(this,()=>exportPlanExcel())" ${activeContracts.length?'':'disabled'}>📊 Excel برنامه قرارداد</button>
       </div>
     </div>`;
   localizeFinancialDigits(body);
@@ -4144,8 +4217,8 @@ function renderFinancialCard(id, st, purchaseRows){
   const meta = FINANCIAL_CARD_STATIC_META[id] || { label:financialCardLabel(id), cls:'' };
   const extraCls = id === 'avgVariance' && st.avgVariancePct > 0 ? ' kpi-red' : (meta.cls ? ' ' + meta.cls : '');
   return `<div class="kpi-card${extraCls}">
-    <div class="kpi-num" style="font-size:clamp(22px, 6vw, 28px); font-weight:800; word-break:normal; overflow-wrap:anywhere; white-space:normal; line-height:1.52; letter-spacing:0;">${financialCardValue(id, st, purchaseRows)}</div>
-    <div class="kpi-label" style="line-height:1.55; font-size:13px;">${escapeHtml(meta.label || financialCardLabel(id))}</div>
+    <div class="kpi-num" style="font-size:clamp(19px, 4.8vw, 23px); font-weight:800; word-break:normal; overflow-wrap:anywhere; white-space:normal; line-height:1.45; letter-spacing:0;">${financialCardValue(id, st, purchaseRows)}</div>
+    <div class="kpi-label" style="line-height:1.55; font-size:12px;">${escapeHtml(meta.label || financialCardLabel(id))}</div>
   </div>`;
 }
 function renderFinancialCards(st){
@@ -4790,7 +4863,12 @@ function onExportDateFrom(v){ exportDateFrom = v; }
 function onExportDateTo(v){ exportDateTo = v; }
 
 function getExportContracts(){
-  let list = contracts.slice();
+  // «همه قراردادها» باید قراردادهای جاری + بایگانی‌شده را پوشش دهد.
+  // برای «فقط خاتمه‌یافته» نیز بایگانی‌ها منطقی است که در خروجی حضور داشته باشند.
+  let list = (exportScope === 'all' || exportScope === 'closed')
+    ? contracts.concat(archivedContracts)
+    : contracts.slice();
+
   if(exportScope === 'active') list = list.filter(c => !isCompleted(c));
   else if(exportScope === 'closed') list = list.filter(isCompleted);
   else if(exportScope === 'critical') list = list.filter(c => !isCompleted(c) && adminTimeStatus(c).cls === 'late');
@@ -4798,20 +4876,11 @@ function getExportContracts(){
   else if(exportScope === 'waiting') list = list.filter(c => !isCompleted(c) && getDisplayStageIndex(c) === DISPLAY_STAGES.length-2);
   else if(exportScope === 'pmoSpecial') list = list.filter(c => c.pmSpecial);
 
-  const fromStr = (exportDateFrom||'').trim();
-  const toStr = (exportDateTo||'').trim();
-  const fromD = fromStr ? jalaliStrToDate(fromStr) : null;
-  const toD = toStr ? jalaliStrToDate(toStr) : null;
-  // فقط وقتی واقعاً یک تاریخ معتبر وارد شده باشد فیلتر تاریخ اعمال می‌شود؛
-  // اگر چیزی وارد نشده (یا نامعتبر بود)، این بخش کاملاً نادیده گرفته می‌شود.
-  if(fromD || toD){
+  // فیلتر تاریخ جدید مانند مالی: سال/ماه انتخابی. در حالت بدون فیلتر، همه‌ی بایگانی‌ها هم در «همه قراردادها» می‌آیند.
+  if(exportFilterMonths.size){
     list = list.filter(c => {
-      if(!c.contractDate) return false;
-      const d = jalaliStrToDate(c.contractDate);
-      if(!d) return false;
-      if(fromD && d < fromD) return false;
-      if(toD && d > toD) return false;
-      return true;
+      const mk = contractMonthKey(c);
+      return !!mk && exportFilterMonths.has(mk);
     });
   }
   return list;
@@ -4850,8 +4919,24 @@ function reportFileName(ext){
 function exportScopeLabel(){
   const map = { all:'همه قراردادها', active:'فقط فعال (بدون خاتمه)', closed:'فقط خاتمه‌یافته', critical:'قراردادهای بحرانی', near:'قراردادهای نزدیک سررسید', waiting:'فقط در انتظار تحویل‌دهی', pmoSpecial:'🌟 فقط قراردادهای خاص' };
   let label = map[exportScope] || 'همه قراردادها';
-  if(exportDateFrom || exportDateTo) label += ' — بازه‌ی تاریخ قرارداد: ' + (exportDateFrom||'ابتدا') + ' تا ' + (exportDateTo||'انتها');
+  if(exportScope === 'all' && !exportFilterMonths.size) label += ' (شامل بایگانی‌شده‌ها)';
+  if(exportFilterMonths.size) label += ' — ماه‌های قرارداد: ' + Array.from(exportFilterMonths).sort().join('، ');
   return label;
+}
+
+function computeExportListStats(list){
+  const rows = Array.isArray(list) ? list : [];
+  const active = rows.filter(c => !isCompleted(c));
+  const closed = rows.filter(isCompleted);
+  return {
+    totalAll: rows.length,
+    closedCount: closed.length,
+    delayed: active.filter(c => adminTimeStatus(c).cls === 'late').length,
+    nearDue: active.filter(c => adminTimeStatus(c).cls === 'near').length,
+    notUpdated: active.filter(isNotUpdated).length,
+    waitingDelivery: active.filter(c => getDisplayStageIndex(c) === DISPLAY_STAGES.length-2).length,
+    avgProgress: active.length ? Math.round(active.reduce((sum,c)=>sum+overallPercent(c),0)/active.length) : 0
+  };
 }
 
 async function exportExcel(){
@@ -4862,7 +4947,7 @@ async function exportExcel(){
   const btn = document.getElementById('exportExcelBtn');
   if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
   try{
-    const stats = computeDashboardStats();
+    const stats = computeExportListStats(getExportContracts());
     const summaryRows = [
       ['گزارش افراچوب — PMO', ''],
       ['تاریخ گزارش', todayJalaliLabel()],
@@ -4901,6 +4986,87 @@ async function exportExcel(){
 /* بررسی می‌کند خروجی html2canvas کاملاً سیاه/خالی نیست. علت اصلی باگ «صفحه سیاه»: در برخی گوشی‌ها
    (به‌خصوص با فونت گوگل‌فونت که از دامنه‌ی دیگری بارگذاری می‌شود) رندر foreignObjectRendering
    به‌جای متن، یک تصویر کاملاً مشکی برمی‌گرداند. */
+let currentAfraPdfPreview = null;
+function closeAfraPdfPreview(){
+  const panel = document.getElementById('afraPdfPreviewPanel');
+  if(panel) panel.remove();
+  if(currentAfraPdfPreview?.url){
+    try{ URL.revokeObjectURL(currentAfraPdfPreview.url); }catch(e){}
+  }
+  currentAfraPdfPreview = null;
+}
+function showAfraPdfPreview({ title, filename, blob, pages }){
+  closeAfraPdfPreview();
+  const host = (myRole === 'admin' && !adminPreviewRole)
+    ? document.getElementById('adminBody')
+    : (document.getElementById('viewerBody') || document.getElementById('viewerSectionBody'));
+  if(!host) return;
+  const url = URL.createObjectURL(blob);
+  currentAfraPdfPreview = { title, filename, blob, pages:pages||[], url };
+  const panel = document.createElement('div');
+  panel.id = 'afraPdfPreviewPanel';
+  panel.className = 'chart-box';
+  panel.style.cssText = 'margin-top:16px; overflow:hidden; border:1px solid var(--line);';
+  panel.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+      <div>
+        <div class="chart-title" style="margin:0 0 3px;">پیش‌نمایش گزارش — ${escapeHtml(title||'گزارش')}</div>
+        <div style="font-size:10.5px;color:var(--ink-soft);">این همان نسخه‌ای است که در PDF ذخیره می‌شود.</div>
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;">
+        <button class="btn-secondary" style="width:auto;padding:7px 10px;" onclick="shareOrPrintCurrentAfraPdf(this)">چاپ / Share</button>
+        <button class="btn-primary" style="width:auto;padding:7px 10px;" onclick="downloadCurrentAfraPdf(this)">دانلود PDF</button>
+        <button class="btn-secondary" style="width:auto;padding:7px 10px;" onclick="closeAfraPdfPreview()">بستن</button>
+      </div>
+    </div>
+    <div style="overflow:auto;background:#e5e7eb;padding:10px;border-radius:10px;direction:rtl;">
+      <div style="min-width:650px;max-width:880px;margin:0 auto;font-family:Tahoma,Arial,sans-serif;">
+        ${(pages||[]).map((src,i)=>`<div style="background:#fff;margin:0 auto ${i<(pages.length-1)?'12px':'0'};box-shadow:0 2px 10px rgba(0,0,0,.08);"><img alt="صفحه ${i+1}" src="${src}" style="display:block;width:100%;height:auto;"></div>`).join('')}
+      </div>
+    </div>`;
+  host.appendChild(panel);
+  panel.scrollIntoView({behavior:'smooth',block:'start'});
+}
+async function downloadCurrentAfraPdf(btn){
+  if(!currentAfraPdfPreview?.blob || !btn || btn.disabled) return;
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'در حال دانلود...';
+  try{
+    const a = document.createElement('a');
+    a.href = currentAfraPdfPreview.url || URL.createObjectURL(currentAfraPdfPreview.blob);
+    a.download = currentAfraPdfPreview.filename || 'Afrachoob-report.pdf';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    btn.textContent = 'دانلود شد ✓';
+    await new Promise(r=>setTimeout(r,900));
+  }finally{
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+async function shareOrPrintCurrentAfraPdf(btn){
+  if(!currentAfraPdfPreview?.blob || !btn || btn.disabled) return;
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'در حال آماده‌سازی...';
+  try{
+    const file = new File([currentAfraPdfPreview.blob], currentAfraPdfPreview.filename || 'Afrachoob-report.pdf', {type:'application/pdf'});
+    if(navigator.share && navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({title:currentAfraPdfPreview.title || 'گزارش افراچوب', files:[file]});
+      return;
+    }
+    const w = window.open(currentAfraPdfPreview.url, '_blank');
+    if(!w) alert('مرورگر اجازه باز کردن صفحه چاپ را نداد.');
+  }catch(err){
+    if(err?.name !== 'AbortError') alert('امکان Share/چاپ فراهم نشد: ' + (err?.message || err));
+  }finally{
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
 function isCanvasBlank(canvas){
   try{
     const ctx = canvas.getContext('2d');
@@ -4918,32 +5084,27 @@ function isCanvasBlank(canvas){
   }catch(e){ return false; }
 }
 
-/* عکس‌برداری امن از هر واحد گزارش برای PDF: ابتدا با foreignObjectRendering (برای چسبیدن درست حروف
-   فارسی) امتحان می‌شود؛ اگر روی گوشی خاصی نتیجه‌اش صفحه‌ی سیاه بود، خودکار بدون foreignObjectRendering
-   دوباره تلاش می‌شود تا حداقل محتوا خالی نماند. */
+/* عکس‌برداری امن از هر واحد گزارش برای PDF: روش اصلی همان الگوی دکوراسیون شرق است؛
+   رندر معمول مرورگر با Tahoma/Arial و html2canvas. اگر خروجی روی دستگاه خاصی خالی/سیاه شد،
+   foreignObjectRendering فقط به‌عنوان fallback امتحان می‌شود. */
 async function captureReportNode(node){
-  let canvas = await html2canvas(node, { scale:2, backgroundColor:'#ffffff', useCORS:true, foreignObjectRendering:true });
+  // همان روش دکوراسیون شرق: Tahoma/Arial توسط خود مرورگر رندر می‌شود و بعد html2canvas عکس می‌گیرد.
+  // foreignObjectRendering فقط fallback است تا روی دستگاه‌های خاص گزارش خالی/سیاه نماند.
+  try{ await document.fonts.ready; }catch(e){}
+  let canvas = await html2canvas(node, { scale:1.7, backgroundColor:'#ffffff', useCORS:true, scrollY:-window.scrollY });
   if(isCanvasBlank(canvas)){
-    canvas = await html2canvas(node, { scale:2, backgroundColor:'#ffffff', useCORS:true, foreignObjectRendering:false });
+    canvas = await html2canvas(node, { scale:1.7, backgroundColor:'#ffffff', useCORS:true, foreignObjectRendering:true, scrollY:-window.scrollY });
   }
   return canvas;
 }
 
-async function renderPaginatedReportPdf({ reportTitle, extraHeaderHtml, headers, rows, filename }){
-  // اطمینان از لود کامل فونت فارسی قبل از عکس‌برداری (علت اصلی خراب دیده شدن فونت در PDF)
-  try{
-    await Promise.all([
-      document.fonts.load('900 20px Vazirmatn'),
-      document.fonts.load('800 13px Vazirmatn'),
-      document.fonts.load('700 12px Vazirmatn'),
-      document.fonts.load('500 11px Vazirmatn'),
-      document.fonts.load('400 10.5px Vazirmatn')
-    ].map(p => p.catch(()=>{})));
-    await document.fonts.ready;
-  }catch(e){}
+async function buildPaginatedReportPdf({ reportTitle, extraHeaderHtml, headers, rows, filename }){
+  // همان الگوی پایدار دکوراسیون شرق: رندر مرورگر با Tahoma/Arial و سپس عکس‌برداری از DOM.
+  try{ await document.fonts.ready; }catch(e){}
 
   const { jsPDF } = window.jspdf;
   const pdf = new jsPDF('p', 'pt', 'a4');
+  const previewPages = [];
   const pageW = pdf.internal.pageSize.getWidth();
   const pageH = pdf.internal.pageSize.getHeight();
   const MARGIN_TOP = 22, MARGIN_BOTTOM = 22;
@@ -4964,7 +5125,7 @@ async function renderPaginatedReportPdf({ reportTitle, extraHeaderHtml, headers,
     </div>`;
 
   const holder = document.createElement('div');
-  holder.style.cssText = 'position:fixed; top:0; left:-99999px; width:820px; background:#ffffff; color:#1a1a1a; font-family:Vazirmatn,sans-serif; direction:rtl; padding:28px; box-sizing:border-box;';
+  holder.style.cssText = 'position:fixed; top:0; left:-99999px; width:820px; background:#ffffff; color:#1a1a1a; font-family:Tahoma,Arial,sans-serif; direction:rtl; padding:28px; box-sizing:border-box;';
   document.body.appendChild(holder);
 
   try{
@@ -5076,15 +5237,25 @@ async function renderPaginatedReportPdf({ reportTitle, extraHeaderHtml, headers,
       // در برخی رشته‌ها اشتباه می‌چیند)، از موتور واقعی مرورگر برای رندر متن استفاده بشه — رفع اصلی به‌هم‌ریختگی فونت
       const canvas = await captureReportNode(holder);
       const imgData = canvas.toDataURL('image/jpeg', 0.92);
+      previewPages.push(imgData);
       const imgW = pageW;
       const imgH = canvas.height * (imgW / canvas.width);
       if(p > 0) pdf.addPage();
       pdf.addImage(imgData, 'JPEG', 0, MARGIN_TOP, imgW, imgH);
     }
-    pdf.save(filename);
+    return { blob:pdf.output('blob'), previewPages };
   } finally {
     document.body.removeChild(holder);
   }
+}
+async function renderPaginatedReportPdf(args){
+  const built = await buildPaginatedReportPdf(args);
+  showAfraPdfPreview({
+    title: args.reportTitle,
+    filename: args.filename,
+    blob: built.blob,
+    pages: built.previewPages
+  });
 }
 
 /* ========================================================================
@@ -5143,15 +5314,7 @@ async function exportManagementSummaryPdf(){
   const btn = document.getElementById('mgmtSummaryBtn');
   if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت گزارش...'; }
   try{
-    try{
-      await Promise.all([
-        document.fonts.load('900 20px Vazirmatn'),
-        document.fonts.load('800 12px Vazirmatn'),
-        document.fonts.load('700 10px Vazirmatn'),
-        document.fonts.load('400 9px Vazirmatn')
-      ].map(p => p.catch(()=>{})));
-      await document.fonts.ready;
-    }catch(e){}
+    try{ await document.fonts.ready; }catch(e){}
 
     const active = contracts.filter(c => !isCompleted(c));
     const closedCount = contracts.length - active.length;
@@ -5262,6 +5425,7 @@ async function exportManagementSummaryPdf(){
     // ---------------- صفحه‌بندی واقعی بر اساس ارتفاع دقیق هر واحد — بدون سقف تعداد، با استفاده‌ی کامل از فضای هر صفحه ----------------
     const { jsPDF } = window.jspdf;
     const pdf = new jsPDF('p', 'pt', 'a4');
+    const previewPages = [];
     const pageW = pdf.internal.pageSize.getWidth();
     const pageH = pdf.internal.pageSize.getHeight();
     const MARGIN_TOP = 16, MARGIN_BOTTOM = 16;
@@ -5279,7 +5443,7 @@ async function exportManagementSummaryPdf(){
       </div>`;
 
     const holder = document.createElement('div');
-    holder.style.cssText = 'position:fixed; top:0; left:-99999px; width:820px; background:#ffffff; color:#1a1a1a; font-family:Vazirmatn,sans-serif; direction:rtl; padding:26px; box-sizing:border-box;';
+    holder.style.cssText = 'position:fixed; top:0; left:-99999px; width:820px; background:#ffffff; color:#1a1a1a; font-family:Tahoma,Arial,sans-serif; direction:rtl; padding:26px; box-sizing:border-box;';
     document.body.appendChild(holder);
     try{
       holder.innerHTML = bigHeaderHtml;
@@ -5328,6 +5492,7 @@ async function exportManagementSummaryPdf(){
           count--; // یک واحد را برای صفحه‌ی بعد نگه دار و دوباره امتحان کن
         }
         const imgData = canvas.toDataURL('image/jpeg', 0.92);
+        previewPages.push(imgData);
         if(pageNo > 0) pdf.addPage();
         pdf.addImage(imgData, 'JPEG', 0, MARGIN_TOP, pageW, imgH);
         idx += count;
@@ -5339,23 +5504,12 @@ async function exportManagementSummaryPdf(){
 
     const filename = `خلاصه مدیریتی - ${todayJalaliFileLabel()}.pdf`;
     const blob = pdf.output('blob');
-
-    // پیشنهاد اشتراک‌گذاری مستقیم (شامل واتس‌اپ) از طریق Web Share API؛ در صورت عدم پشتیبانی مرورگر، فایل دانلود می‌شود
-    let shared = false;
-    try{
-      const file = new File([blob], filename, { type:'application/pdf' });
-      if(navigator.canShare && navigator.canShare({ files:[file] })){
-        await navigator.share({ files:[file], title:'خلاصه مدیریتی افراچوب', text:'خلاصه وضعیت قراردادها' });
-        shared = true;
-      }
-    }catch(shareErr){
-      // اگر کاربر خودش اشتراک‌گذاری را لغو کند، خطا می‌گیریم؛ در این حالت دیگر دانلود اجباری نکنیم
-      if(shareErr && shareErr.name === 'AbortError') shared = true;
-    }
-    if(!shared){
-      pdf.save(filename);
-      alert('مرورگر شما امکان اشتراک‌گذاری مستقیم (واتس‌اپ و…) را ندارد؛ فایل PDF دانلود شد و می‌توانید خودتان از همان‌جا ارسال کنید.');
-    }
+    showAfraPdfPreview({
+      title:'خلاصه مدیریتی — وضعیت قراردادها',
+      filename,
+      blob,
+      pages:previewPages
+    });
   }catch(err){
     alert('خطا در ساخت گزارش: ' + err.message);
   }finally{
@@ -5407,7 +5561,7 @@ async function exportPDF(){
   const btn = document.getElementById('exportPdfBtn');
   if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
   try{
-    const stats = computeDashboardStats();
+    const stats = computeExportListStats(getExportContracts());
     const rows = exportRows();
     const kpi = (label, val) => `<div style="border:1px solid #ddd; border-radius:8px; padding:12px; text-align:center;">
         <div style="font-size:20px; font-weight:900;">${val}</div>
@@ -5454,8 +5608,9 @@ function viewerExportRows(){
     'وضعیت': isCompleted(c) ? 'خاتمه‌یافته' : viewerCriticalStatus(c).label
   }));
 }
-function viewerChartRowsForPdf(){
-  const counts = DISPLAY_STAGES.map((s,i) => contracts.filter(c => getDisplayStageIndex(c) === i).length);
+function viewerChartRowsForPdf(list){
+  const src = Array.isArray(list) ? list : getExportContracts();
+  const counts = DISPLAY_STAGES.map((s,i) => src.filter(c => getDisplayStageIndex(c) === i).length);
   const max = Math.max(1, ...counts);
   return DISPLAY_STAGES.map((name,i) => `
     <div style="display:flex; align-items:center; gap:8px; margin-bottom:7px;">
@@ -5474,23 +5629,29 @@ async function exportExcelViewer(){
   const btn = document.getElementById('exportExcelBtn');
   if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
   try{
-    const s = computeViewerStats();
+    const exportList = getExportContracts();
+    const active = exportList.filter(c => !isCompleted(c));
+    const completed = exportList.filter(isCompleted);
+    const criticalList = active.filter(c => viewerCriticalStatus(c).critical);
+    const waitingDeliveryList = active.filter(c => getDisplayStageIndex(c) === DISPLAY_STAGES.length-2);
+    const panelWaitList = active.filter(isPanelWaiting);
+    const avgProgress = active.length ? Math.round(active.reduce((sum,c)=>sum+overallPercent(c),0)/active.length) : 0;
     const summaryRows = [
       ['گزارش افراچوب — مدیر پروژه', ''],
       ['تاریخ گزارش', todayJalaliLabel()],
       ['دامنه‌ی خروجی', exportScopeLabel()],
       [],
-      ['کل قراردادها', contracts.length],
-      ['خاتمه نیافته', s.active.length],
-      ['خاتمه‌یافته', s.completed.length],
-      ['بحرانی', s.criticalList.length],
-      ['در انتظار تحویل‌دهی به مالک', s.waitingDeliveryList.length],
-      ['منتظر نصب صفحه کابینت', s.panelWaitList.length],
-      ['میانگین پیشرفت', s.avgProgress + '٪'],
+      ['کل قراردادها', exportList.length],
+      ['خاتمه نیافته', active.length],
+      ['خاتمه‌یافته', completed.length],
+      ['بحرانی', criticalList.length],
+      ['در انتظار تحویل‌دهی به مالک', waitingDeliveryList.length],
+      ['منتظر نصب صفحه کابینت', panelWaitList.length],
+      ['میانگین پیشرفت', avgProgress + '٪'],
       [],
       ['پراکندگی بر اساس مرحله', '']
     ];
-    STAGES.forEach((st,i) => summaryRows.push([st.name, contracts.filter(c => getDisplayStageIndex(c)===i).length]));
+    STAGES.forEach((st,i) => summaryRows.push([st.name, exportList.filter(c => getDisplayStageIndex(c)===i).length]));
     const wsSummary = XLSX.utils.aoa_to_sheet(summaryRows);
     wsSummary['!cols'] = [{wch:30},{wch:24}];
 
@@ -5517,7 +5678,13 @@ async function exportPDFViewer(){
   const btn = document.getElementById('exportPdfBtn');
   if(btn){ btn.disabled = true; btn.textContent = 'در حال ساخت...'; }
   try{
-    const s = computeViewerStats();
+    const exportList = getExportContracts();
+    const active = exportList.filter(c => !isCompleted(c));
+    const completed = exportList.filter(isCompleted);
+    const criticalList = active.filter(c => viewerCriticalStatus(c).critical);
+    const waitingDeliveryList = active.filter(c => getDisplayStageIndex(c) === DISPLAY_STAGES.length-2);
+    const panelWaitList = active.filter(isPanelWaiting);
+    const avgProgress = active.length ? Math.round(active.reduce((sum,c)=>sum+overallPercent(c),0)/active.length) : 0;
     const rows = viewerExportRows();
     const kpi = (label, val) => `<div style="border:1px solid #ddd; border-radius:8px; padding:12px; text-align:center;">
         <div style="font-size:20px; font-weight:900;">${val}</div>
@@ -5525,16 +5692,16 @@ async function exportPDFViewer(){
       </div>`;
     const extraHeaderHtml = `
       <div style="display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:20px;">
-        ${kpi('کل قراردادها', contracts.length)}
-        ${kpi('خاتمه نیافته', s.active.length)}
-        ${kpi('خاتمه‌یافته', s.completed.length)}
-        ${kpi('بحرانی', s.criticalList.length)}
-        ${kpi('در انتظار تحویل‌دهی به مالک', s.waitingDeliveryList.length)}
-        ${kpi('میانگین پیشرفت', s.avgProgress+'٪')}
+        ${kpi('کل قراردادها', exportList.length)}
+        ${kpi('خاتمه نیافته', active.length)}
+        ${kpi('خاتمه‌یافته', completed.length)}
+        ${kpi('بحرانی', criticalList.length)}
+        ${kpi('در انتظار تحویل‌دهی به مالک', waitingDeliveryList.length)}
+        ${kpi('میانگین پیشرفت', avgProgress+'٪')}
       </div>
-      <div style="font-size:9px; color:#777; margin-bottom:14px;">منتظر نصب صفحه کابینت: ${s.panelWaitList.length} مورد</div>
+      <div style="font-size:9px; color:#777; margin-bottom:14px;">منتظر نصب صفحه کابینت: ${panelWaitList.length} مورد</div>
       <div style="font-size:13px; font-weight:800; margin-bottom:10px;">پراکندگی قراردادها بر اساس مرحله</div>
-      <div style="margin-bottom:22px;">${viewerChartRowsForPdf()}</div>`;
+      <div style="margin-bottom:22px;">${viewerChartRowsForPdf(exportList)}</div>`;
     const headers = ['نام قرارداد','کد قلم','تاریخ قرارداد','سررسید اصلی','سررسید جبرانی','مرحله فعلی','پیشرفت','وضعیت'];
     const tableRows = rows.map(r => [
       r['نام قرارداد'], r['کد قلم'], r['تاریخ قرارداد'], r['سررسید اصلی'], r['سررسید جبرانی'],
