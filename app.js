@@ -43,7 +43,7 @@ let adminFilterStatus = 'all';
 let adminFilterContractMonth = 'all';
 let adminFilterContractYear = '';
 let adminFinancialSearch = ''; // جستجو در لیست «گزارش مالی» مدیر
-let finSectionOpen = { top:false, variance:false, all:false }; // دکمه‌ای‌بودن بخش‌های گزارش مالی
+let finSectionOpen = { top:false, variance:false, all:false, purchases:false }; // دکمه‌ای‌بودن بخش‌های گزارش مالی
 let finFilterMonths = new Set(); // فیلتر گزارش مالی: مجموعه‌ی ماه‌های انتخاب‌شده («۱۴۰۳/۰۲») — خالی یعنی فیلتری فعال نیست (همه نمایش داده می‌شه)
 let finFilterOpen = false; // باز/بسته بودن پنل فیلتر گزارش مالی
 // خرید متریال ماهانه — فقط پنل مدیر؛ داده‌ها در Collection مستقل materialPurchases نگهداری می‌شوند.
@@ -149,6 +149,7 @@ function logActivity(action, contractId, contractName, details){
 // هرجا نام نویسنده‌ی یک کامنت/لاگ نمایش داده می‌شه: اگر مدیر پروژه بوده، به‌جای ایمیلش این عنوان نشان داده می‌شود
 function authorLabel(entry){
   if(entry && entry.byRole === 'viewer') return PMO_DISPLAY_NAME;
+  if(entry && entry.byRole === 'pmoDeputy') return 'معاونت PMO';
   return escapeHtml(((entry && entry.by) || '').split('@')[0]);
 }
 
@@ -598,12 +599,14 @@ async function markPmNotesSeen(filterFn){
     await batch.commit();
   }catch(e){ /* غیر حیاتیه — اگه ناموفق بود، دفعه‌ی بعد دوباره تلاش می‌شه */ }
 }
-function pmMessagesUnseenCountForAdmin(){ return pmNotes.filter(n => n.byRole === 'viewer' && !n.seen).length; }
+function isPmParticipantRole(role){ return role === 'viewer' || role === 'pmoDeputy'; }
+function pmParticipantDisplayName(role){ return role === 'pmoDeputy' ? 'معاونت PMO' : PMO_DISPLAY_NAME; }
+function pmMessagesUnseenCountForAdmin(){ return pmNotes.filter(n => isPmParticipantRole(n.byRole) && !n.seen).length; }
 function pmMessagesUnseenCountForViewer(){ return currentUser ? pmNotes.filter(n => n.byRole === 'admin' && n.toUid === currentUser.uid && !n.seen).length : 0; }
 function renderPmMessageHtml(n){
   const seenTag = n.seen ? '<span class="pm-seen">✓ دیده شد</span>' : '';
   const canDelete = currentUser && (n.byUid === currentUser.uid || myRole === 'admin');
-  const who = n.byRole === 'admin' ? 'مدیر (کنترل پروژه)' : PMO_DISPLAY_NAME;
+  const who = n.byRole === 'admin' ? 'مدیر (کنترل پروژه)' : pmParticipantDisplayName(n.byRole);
   return `
     <div class="comment-item">
       <div class="comment-top">
@@ -623,7 +626,7 @@ function renderPmNotesFlatHtml(){
 function pmConversations(){
   const map = {};
   pmNotes.forEach(n => {
-    const otherUid = n.byRole === 'viewer' ? n.byUid : n.toUid;
+    const otherUid = isPmParticipantRole(n.byRole) ? n.byUid : n.toUid;
     if(!otherUid) return;
     if(!map[otherUid]) map[otherUid] = [];
     map[otherUid].push(n);
@@ -635,7 +638,7 @@ function renderPmConversationsHtml(){
   if(!convos.length) return '<div class="empty">هنوز پیامی از مدیر پروژه دریافت نشده.</div>';
   return convos.map(cv => `
     <div class="pm-thread">
-      <div class="pm-thread-title">${PMO_DISPLAY_NAME}</div>
+      <div class="pm-thread-title">${pmParticipantDisplayName((cv.messages.find(m => isPmParticipantRole(m.byRole)) || {}).byRole)}</div>
       ${cv.messages.map(renderPmMessageHtml).join('')}
       <div class="comment-add-row">
         <input type="text" id="pmReply_${cv.uid}" class="auth-input" style="max-width:none; flex:1;" placeholder="پاسخ...">
@@ -1813,7 +1816,7 @@ function ensureDataSubscriptions(){
       renderAppPreservingInputs();
     }, () => { /* اگه قوانین هنوز آپدیت نشده، فقط این بخش کار نمی‌کنه */ });
   }
-  if(myRole === 'viewer'){
+  if(myRole === 'viewer' || myRole === 'pmoDeputy'){
     db.collection('pmNotes').where('byUid','==', currentUser.uid).onSnapshot((snap) => {
       pmNotesA = snap.docs.map(d => ({ id:d.id, ...d.data() }));
       mergePmNotesAB();
@@ -1959,7 +1962,7 @@ function renderApp(){
   setLoginPageMode(false);
   setPendingPageMode(myRole === 'pending');
 
-  const isProjectManagerPanel = (myRole === 'viewer') || (myRole === 'admin' && adminPreviewRole === 'viewer');
+  const isProjectManagerPanel = (myRole === 'viewer' || myRole === 'pmoDeputy') || (myRole === 'admin' && (adminPreviewRole === 'viewer' || adminPreviewRole === 'pmoDeputy'));
   const headerTitleEl = document.getElementById('headerTitle');
   const headerSubEl = document.getElementById('headerSub');
   if(headerTitleEl && headerSubEl){
@@ -1983,7 +1986,7 @@ function renderApp(){
   }
 
   const badgeText = isProjectManagerPanel
-    ? 'Project Manager'
+    ? ((myRole === 'pmoDeputy' || adminPreviewRole === 'pmoDeputy') ? 'معاونت PMO' : 'Project Manager')
     : (adminPreviewRole
       ? `مدیر · مشاهده ${roleFa(adminPreviewRole)}`
       : (myPosition ? escapeHtml(myPosition) : roleFa(myRole)));
@@ -2051,7 +2054,7 @@ function renderApp(){
   if(myRole === 'supervisor'){ renderSupervisor(el); return; }
   if(myRole === 'viewer'){ renderViewer(el); return; }
   if(myRole === 'afrachoobSupervisor'){ renderAfrachoobSupervisor(el); return; }
-  if(myRole === 'pmoDeputy'){ renderPmoDeputy(el); return; }
+  if(myRole === 'pmoDeputy'){ renderViewer(el); return; }
 
   el.innerHTML = `<div class="center-screen">
     <span class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">در حال بارگذاری…</span></span>
@@ -2071,16 +2074,12 @@ function openAdminPanelPreview(role){
   // هر پیش‌نمایش از صفحه‌ی اصلی همان پنل شروع می‌شود.
   if(role === 'supervisor') supervisorTab = 'contracts';
   if(role === 'afrachoobSupervisor') afrTab = 'dashboard';
-  if(role === 'viewer') {
+  if(role === 'viewer' || role === 'pmoDeputy') {
     viewerTab = 'dashboard';
     viewerDashboardSection = null;
     viewerDashboardSearch = '';
     viewerMoreSection = null;
     viewerExportPanel = null;
-    viewerOpenId = null;
-  }
-  if(role === 'pmoDeputy') {
-    viewerSection = null;
     viewerOpenId = null;
   }
   renderApp();
@@ -2105,7 +2104,7 @@ function renderAdminRolePreview(el, role){
     myRole = role;
     if(role === 'supervisor') renderSupervisor(el);
     else if(role === 'afrachoobSupervisor') renderAfrachoobSupervisor(el);
-    else if(role === 'viewer') renderViewer(el);
+    else if(role === 'viewer' || role === 'pmoDeputy') renderViewer(el);
     else renderPmoDeputy(el);
   }finally{
     myRole = actualRole;
@@ -2345,7 +2344,7 @@ function renderViewer(el){
     <div class="admin-shell">
       <div class="viewer-hero" style="padding:9px 12px; min-height:0; margin-bottom:8px;">
         <div>
-          <div class="viewer-hero-title" style="margin:0;">Welcome, Project Manager 👋</div>
+          <div class="viewer-hero-title" style="margin:0;">${myRole === 'pmoDeputy' ? 'معاونت PMO عزیز، خوش آمدید 👋' : 'Welcome, Project Manager 👋'}</div>
         </div>
       </div>
       <div id="viewerInstallToolbar" class="toolbar" style="margin-bottom:8px;">
@@ -2353,7 +2352,7 @@ function renderViewer(el){
       </div>
       <div id="viewerBody"></div>
       <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
-      <nav class="admin-bottom-nav" aria-label="ناوبری پنل مدیر پروژه">
+      <nav class="admin-bottom-nav" aria-label="${myRole === 'pmoDeputy' ? 'ناوبری پنل معاونت PMO' : 'ناوبری پنل مدیر پروژه'}">
         <button class="${viewerTab==='dashboard'?'active':''}" onclick="switchViewerTab('dashboard')"><span>⌂</span>داشبورد</button>
         <button class="${viewerTab==='contracts'?'active':''}" onclick="switchViewerTab('contracts')"><span>▤</span>قراردادها</button>
         <button class="${viewerTab==='special'?'active':''}" onclick="switchViewerTab('special')"><span>★</span>قراردادهای خاص</button>
@@ -2633,6 +2632,10 @@ function renderViewerExportsHub(){
     outputPairCard('گزارش مالی ماهانه','جمع ارزش قراردادها به تفکیک ماه ثبت','exportFinancialMonthlyPdf()','exportFinancialMonthlyExcel()','📅'),
     outputPairCard('ریز قراردادهای مالی','جزئیات متریال، اجرت، مبلغ کل و پیشرفت','exportFinancialPdf()','exportFinancialExcel()','🧾')
   ];
+  if(financialCanReadMaterialPurchases()) {
+    financialCards.push(outputPairCard('گزارش خرید متریال','ریز خرید متریال به تفکیک ماه و تأمین‌کننده در بازه انتخاب‌شده','exportMaterialPurchasesPdf()','exportMaterialPurchasesExcel()','🛒'));
+    ensureMaterialPurchasesLoaded();
+  }
   body.innerHTML = `
     <div class="toolbar"><button class="btn-secondary" onclick="closeViewerMoreSection()">↩ بازگشت به بیشتر</button></div>
     <div class="section-title" style="margin-top:10px;">خروجی</div>
@@ -2948,7 +2951,7 @@ function renderViewerCard(c){
           <span>تاریخچه ${hOpen ? '▲' : '▼'}</span>
         </div>
         ${hOpen ? histHtml : ''}
-        ${renderCommentsHtml(c, 'v', myRole !== 'pmoDeputy')}
+        ${renderCommentsHtml(c, 'v', myRole === 'viewer' || myRole === 'pmoDeputy')}
       </div>
     </div>`;
 }
@@ -2992,7 +2995,7 @@ function renderAdmin(el){
     document.getElementById('adminBody').innerHTML = renderPmoCommentsHtml();
     renderPmoCommentsList();
   } else if(adminTab === 'pmoMessages'){
-    markPmNotesSeen(n => n.byRole === 'viewer');
+    markPmNotesSeen(n => isPmParticipantRole(n.byRole));
     document.getElementById('adminBody').innerHTML = `
       <div class="section-title" style="margin-top:14px;">✉️ ارتباط با مدیر</div>
       <div class="viewer-report-note">گفتگوی عمومی با مدیر پروژه — مستقل از یک قرارداد خاص. می‌توانید مستقیماً از همین‌جا پاسخ بدهید.</div>
@@ -3379,7 +3382,7 @@ function renderFinancialOutputFilterHtml(){
 }
 function runContractOutputPreset(scope, format){
   exportScope = scope || 'all';
-  const viewerMode = (myRole === 'viewer' && !adminPreviewRole);
+  const viewerMode = ((myRole === 'viewer' || myRole === 'pmoDeputy') && !adminPreviewRole);
   if(format === 'excel') return viewerMode ? exportExcelViewer() : exportExcel();
   return viewerMode ? exportPDFViewer() : exportPDF();
 }
@@ -3394,6 +3397,7 @@ function outputReportGrid(cards){
 function renderAdminExports(){
   const body = document.getElementById('adminBody');
   if(!body) return;
+  ensureMaterialPurchasesLoaded();
   const activeContracts = contracts.filter(c => !isCompleted(c));
   if(!adminPlanContractId || !activeContracts.some(c => c.id === adminPlanContractId)) adminPlanContractId = activeContracts[0]?.id || '';
   const managementCards = [
@@ -3407,7 +3411,8 @@ function renderAdminExports(){
   const financialCards = [
     outputPairCard('گزارش مالی خلاصه','شاخص‌های کلیدی مالی در بازه انتخاب‌شده','exportFinancialSummaryPdf()','exportFinancialSummaryExcel()','💰'),
     outputPairCard('گزارش مالی ماهانه','جمع ارزش قراردادها به تفکیک ماه ثبت','exportFinancialMonthlyPdf()','exportFinancialMonthlyExcel()','📅'),
-    outputPairCard('ریز قراردادهای مالی','جزئیات متریال، اجرت، مبلغ کل و پیشرفت','exportFinancialPdf()','exportFinancialExcel()','🧾')
+    outputPairCard('ریز قراردادهای مالی','جزئیات متریال، اجرت، مبلغ کل و پیشرفت','exportFinancialPdf()','exportFinancialExcel()','🧾'),
+    outputPairCard('گزارش خرید متریال','ریز خرید متریال به تفکیک ماه و تأمین‌کننده در بازه انتخاب‌شده','exportMaterialPurchasesPdf()','exportMaterialPurchasesExcel()','🛒')
   ];
   body.innerHTML = `
     <div class="section-title" style="margin-top:14px;">خروجی</div>
@@ -3573,7 +3578,16 @@ function computeFinancialStats(){
     const pct = overallPercent(c);
     return { c, fin, pct, realized: Math.round(fin.total * pct / 100) };
   });
-  const availableMonths = Array.from(new Set(allRows.map(r => contractMonthKey(r.c)).filter(Boolean))).sort();
+  const monthKeys = new Set(allRows.map(r => contractMonthKey(r.c)).filter(Boolean));
+  // برای مدیر و مدیر پروژه، ماه‌های دارای خرید متریال هم وارد همان فیلتر مالی می‌شوند.
+  // معاونت PMO عمداً هیچ داده‌ای از materialPurchases دریافت نمی‌کند.
+  if(financialCanReadMaterialPurchases() && materialPurchasesLoaded){
+    materialPurchases.forEach(p => {
+      const key = materialPurchaseMonthKey(p);
+      if(key) monthKeys.add(key);
+    });
+  }
+  const availableMonths = Array.from(monthKeys).sort();
   const filterActive = finFilterMonths.size > 0;
   const rows = filterActive
     ? allRows.filter(r => { const mk = contractMonthKey(r.c); return mk && finFilterMonths.has(mk); })
@@ -4047,20 +4061,54 @@ function financialFilteredMaterialPurchases(){
     return key && finFilterMonths.has(key);
   });
 }
+function renderFinancialMaterialPurchaseBreakdown(){
+  if(!financialCanReadMaterialPurchases()) return '';
+  if(materialPurchasesLoading && !materialPurchasesLoaded) return '<div class="empty" style="margin-top:10px;">در حال دریافت خریدهای متریال...</div>';
+  if(materialPurchasesError && !materialPurchasesLoaded){
+    return `<div class="viewer-report-note" style="margin-top:10px; border-inline-start-color:var(--red);">خطا در دریافت خرید متریال: ${escapeHtml(materialPurchasesError)}</div>`;
+  }
+  const rows = financialFilteredMaterialPurchases().slice().sort((a,b) =>
+    (Number(b.year)||0) - (Number(a.year)||0) ||
+    (Number(b.month)||0) - (Number(a.month)||0) ||
+    (Number(b.updatedAt||b.createdAt)||0) - (Number(a.updatedAt||a.createdAt)||0)
+  );
+  if(!rows.length) return '<div class="empty" style="margin-top:10px;">در بازه انتخاب‌شده خرید متریالی ثبت نشده است.</div>';
+  const groups = {};
+  rows.forEach(p => {
+    const key = materialPurchaseMonthKey(p) || 'نامشخص';
+    (groups[key] = groups[key] || []).push(p);
+  });
+  return Object.keys(groups).sort().reverse().map(key => {
+    const monthRows = groups[key];
+    const monthTotal = monthRows.reduce((sum,p) => sum + (Number(p.amount)||0), 0);
+    const suppliers = materialPurchaseSupplierSummary(monthRows);
+    return `
+      <div class="chart-box" style="margin-top:10px;">
+        <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
+          <div class="chart-title" style="margin:0;">ماه ${key}</div>
+          <span class="warn-tag">جمع خرید: ${formatToman(monthTotal)} ریال</span>
+        </div>
+        ${suppliers.length ? `<div style="display:flex; flex-wrap:wrap; gap:7px; margin-top:9px;">${suppliers.map(([name,amount]) => `<span style="border:1px solid var(--line); background:var(--panel-2); border-radius:999px; padding:6px 9px; font-size:10.5px;"><b>${escapeHtml(name)}</b> · ${formatToman(amount)} ریال</span>`).join('')}</div>` : ''}
+        <div style="margin-top:9px;">
+          ${monthRows.map(p => `<div class="warn-item" style="border-inline-start-color:var(--amber); align-items:center;"><div style="min-width:0;"><div class="warn-name">${escapeHtml(p.supplierName || '—')}</div><div class="warn-sub">${p.note ? escapeHtml(p.note) : 'بدون توضیح'}</div></div><span class="warn-tag">${formatToman(p.amount)} ریال</span></div>`).join('')}
+        </div>
+      </div>`;
+  }).join('');
+}
 function financialUiRole(){ return adminPreviewRole || myRole; }
+function financialCanReadMaterialPurchases(){
+  const role = financialUiRole();
+  return role === 'admin' || role === 'viewer';
+}
 function canManageFinancialCardLayout(){
   // در حالت Preview مدیر، تنظیمات نقش دیگر نباید روی حساب Admin ذخیره شود.
   return !adminPreviewRole && (myRole === 'admin' || myRole === 'viewer');
 }
 function rerenderFinancialSurface(){
   const role = financialUiRole();
-  if(role === 'viewer'){
+  if(role === 'viewer' || role === 'pmoDeputy'){
     if(viewerTab === 'financial') renderAdminFinancial();
     else if(viewerTab === 'more' && viewerMoreSection === 'exports') renderViewerExportsHub();
-    return;
-  }
-  if(role === 'pmoDeputy' && viewerSection === 'financial'){
-    renderAdminFinancial();
     return;
   }
   if(myRole === 'admin' && !adminPreviewRole){
@@ -4287,6 +4335,8 @@ function renderAdminFinancial(){
   const finRowOpen = (id) => finEditable ? ` onclick="openContractDetail('${id}')"` : '';
   const topList = st.rows.slice().filter(r => r.fin.total > 0).sort((a,b) => b.fin.total - a.fin.total).slice(0,5);
   const maxMonth = st.monthly.length ? Math.max(...st.monthly.map(m => m.value)) : 0;
+  const purchaseReportRows = financialCanReadMaterialPurchases() ? financialFilteredMaterialPurchases() : [];
+  const purchaseReportCount = materialPurchasesLoaded ? purchaseReportRows.length : '…';
 
   const sectionHeader = (key, title, count) => `
     <div class="section-title" style="margin-top:20px; cursor:pointer; justify-content:space-between;" onclick="toggleFinSection('${key}')">
@@ -4333,7 +4383,7 @@ function renderAdminFinancial(){
           </div>
         </div>`;
       }).join('')}
-    </div>` : `<div class="empty">هیچ قراردادی تاریخ معتبر نداره تا بشه بر اساس ماه/سال فیلترش کرد.</div>`) : ''}
+    </div>` : `<div class="empty">${financialCanReadMaterialPurchases() ? 'هیچ قرارداد یا خرید متریالی با ماه معتبر وجود ندارد.' : 'هیچ قراردادی تاریخ معتبر نداره تا بشه بر اساس ماه/سال فیلترش کرد.'}</div>`) : ''}
 
     ${canManageFinancialCardLayout() ? renderFinancialCardManager() : ''}
     ${(finEditable || viewerFinancial) ? renderFinancialCards(st) : renderViewerFinancialCards(st)}
@@ -4375,6 +4425,9 @@ function renderAdminFinancial(){
     ${finSectionOpen.all ? `
     <input type="text" id="finSearchInput" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(adminFinancialSearch)}" class="auth-input" style="max-width:none;width:100%;margin:10px 0;" oninput="onAdminFinancialSearch(this.value)">
     <div id="finList"></div>` : ''}
+
+    ${financialCanReadMaterialPurchases() ? sectionHeader('purchases', 'خرید متریال به تفکیک ماه', purchaseReportCount) : ''}
+    ${(financialCanReadMaterialPurchases() && finSectionOpen.purchases) ? renderFinancialMaterialPurchaseBreakdown() : ''}
 
     ${st.missing.length ? `
     <div class="section-title" style="margin-top:20px;">⚠️ قراردادهای بدون قیمت ثبت‌شده <span class="cnt">(${st.missing.length})</span></div>
@@ -4576,6 +4629,89 @@ async function exportFinancialMonthlyPdf(){
       filename:`گزارش مالی ماهانه افراچوب - ${todayJalaliFileLabel()}.pdf`
     });
   }catch(err){ alert('خطا در ساخت PDF: '+err.message); }
+}
+
+
+async function ensureMaterialPurchasesReadyForExport(){
+  if(!financialCanReadMaterialPurchases()) return false;
+  if(!materialPurchasesLoaded) await ensureMaterialPurchasesLoaded();
+  if(!materialPurchasesLoaded){
+    alert(materialPurchasesLoading ? 'خریدهای متریال هنوز در حال دریافت هستند؛ چند لحظه بعد دوباره تلاش کنید.' : 'اطلاعات خرید متریال در دسترس نیست.');
+    return false;
+  }
+  return true;
+}
+function materialPurchaseOutputRows(){
+  return financialFilteredMaterialPurchases().slice().sort((a,b) =>
+    (Number(b.year)||0) - (Number(a.year)||0) ||
+    (Number(b.month)||0) - (Number(a.month)||0) ||
+    (Number(b.updatedAt||b.createdAt)||0) - (Number(a.updatedAt||a.createdAt)||0)
+  );
+}
+async function exportMaterialPurchasesExcel(){
+  if(!(await ensureMaterialPurchasesReadyForExport())) return;
+  const rows = materialPurchaseOutputRows();
+  if(!rows.length){ alert('در بازه انتخاب‌شده خرید متریالی ثبت نشده است.'); return; }
+  try{
+    const total = rows.reduce((s,p) => s + (Number(p.amount)||0), 0);
+    const monthMap = {};
+    rows.forEach(p => {
+      const key = materialPurchaseMonthKey(p) || 'نامشخص';
+      if(!monthMap[key]) monthMap[key] = { total:0, count:0 };
+      monthMap[key].total += Number(p.amount)||0;
+      monthMap[key].count += 1;
+    });
+    const wb = XLSX.utils.book_new();
+    wb.Workbook = { Views: [{ RTL:true }] };
+    const summary = XLSX.utils.aoa_to_sheet([
+      ['گزارش خرید متریال افراچوب',''],
+      ['تاریخ گزارش', todayJalaliLabel()],
+      ['بازه‌ی فیلتر', finFilterMonths.size ? Array.from(finFilterMonths).sort().join('، ') : 'همه‌ی ماه‌ها'],
+      ['جمع خرید متریال (ریال)', total],
+      ['تعداد ثبت خرید', rows.length],
+      [],
+      ['ماه','جمع خرید (ریال)','تعداد ثبت'],
+      ...Object.keys(monthMap).sort().reverse().map(key => [key, monthMap[key].total, monthMap[key].count])
+    ]);
+    summary['!cols'] = [{wch:26},{wch:24},{wch:16}];
+    const detail = XLSX.utils.json_to_sheet(rows.map(p => ({
+      'سال': Number(p.year)||'',
+      'ماه': materialPurchaseMonthLabel(p.month),
+      'ماه/سال': materialPurchaseMonthKey(p) || '',
+      'تأمین‌کننده': p.supplierName || '',
+      'مبلغ خرید (ریال)': Number(p.amount)||0,
+      'توضیح': p.note || ''
+    })));
+    detail['!cols'] = [{wch:10},{wch:14},{wch:12},{wch:24},{wch:22},{wch:36}];
+    XLSX.utils.book_append_sheet(wb, summary, 'خلاصه خرید');
+    XLSX.utils.book_append_sheet(wb, detail, 'ریز خریدها');
+    XLSX.writeFile(wb, `گزارش خرید متریال افراچوب - ${todayJalaliFileLabel()}.xlsx`);
+  }catch(err){ alert('خطا در ساخت فایل اکسل خرید متریال: '+err.message); }
+}
+async function exportMaterialPurchasesPdf(){
+  if(!(await ensureMaterialPurchasesReadyForExport())) return;
+  const purchaseRows = materialPurchaseOutputRows();
+  if(!purchaseRows.length){ alert('در بازه انتخاب‌شده خرید متریالی ثبت نشده است.'); return; }
+  try{
+    const total = purchaseRows.reduce((s,p) => s + (Number(p.amount)||0), 0);
+    const suppliers = materialPurchaseSupplierSummary(purchaseRows);
+    const supplierText = suppliers.map(([name,amount]) => `${escapeHtml(name)}: ${formatToman(amount)} ریال`).join(' | ');
+    const extraHeaderHtml = `
+      <div style="font-size:10px;color:#555;margin-bottom:6px;">بازه‌ی فیلتر: ${finFilterMonths.size ? escapeHtml(Array.from(finFilterMonths).sort().join('، ')) : 'همه‌ی ماه‌ها'}</div>
+      <div style="font-size:11px;font-weight:800;margin-bottom:6px;">جمع خرید متریال: ${formatToman(total)} ریال</div>
+      ${supplierText ? `<div style="font-size:9px;color:#666;margin-bottom:10px;">تفکیک تأمین‌کننده: ${supplierText}</div>` : ''}`;
+    const rows = purchaseRows.map(p => [
+      materialPurchaseMonthKey(p) || '—',
+      p.supplierName || '—',
+      formatToman(p.amount),
+      p.note || '—'
+    ]);
+    await renderPaginatedReportPdf({
+      reportTitle:'گزارش خرید متریال افراچوب', extraHeaderHtml,
+      headers:['ماه','تأمین‌کننده','مبلغ خرید (ریال)','توضیح'], rows,
+      filename:`گزارش خرید متریال افراچوب - ${todayJalaliFileLabel()}.pdf`
+    });
+  }catch(err){ alert('خطا در ساخت PDF خرید متریال: '+err.message); }
 }
 
 

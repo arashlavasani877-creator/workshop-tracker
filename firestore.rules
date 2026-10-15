@@ -19,11 +19,10 @@ service cloud.firestore {
     function isApproved() {
       return isSignedIn() && (myRole() == 'admin' || myRole() == 'supervisor' || myRole() == 'viewer' || myRole() == 'afrachoobSupervisor' || myRole() == 'pmoDeputy');
     }
-    // isCommentOnlyUpdate: مدیر پروژه اجازه ندارد هیچ فیلدی از قرارداد را تغییر دهد جز کامنت‌ها —
+    // isCommentOnlyUpdate: مدیر پروژه و معاونت PMO اجازه ندارند هیچ فیلدی از قرارداد را تغییر دهند جز کامنت‌ها —
     // این تابع فقط زمانی true است که در آپدیت، فقط و فقط فیلد comments تغییر کرده باشد (نه فیلد دیگری)
-    // توجه: عمداً معاونت PMO اینجا نیست — این نقش حتی اجازه‌ی ثبت کامنت هم ندارد و فقط باید بتواند بخواند
     function isCommentOnlyUpdate() {
-      return isSignedIn() && myRole() == 'viewer'
+      return isSignedIn() && (myRole() == 'viewer' || myRole() == 'pmoDeputy')
              && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['comments']);
     }
 
@@ -68,6 +67,46 @@ service cloud.firestore {
       allow create: if isEditor() && request.resource.data.byUid == request.auth.uid;
       allow update: if false;
       allow delete: if false;
+    }
+
+    // پیام عمومی مدیر پروژه / معاونت PMO با مدیر کنترل پروژه.
+    // کاربران گزارش‌خوان فقط پیام‌های ارسالی یا دریافتی حساب خودشان را می‌بینند؛ معاونت PMO هیچ دسترسی به خرید متریال نمی‌گیرد.
+    match /pmNotes/{noteId} {
+      allow read: if isAdmin() || (
+                    isSignedIn()
+                    && (myRole() == 'viewer' || myRole() == 'pmoDeputy')
+                    && (resource.data.get('byUid', '') == request.auth.uid || resource.data.get('toUid', '') == request.auth.uid)
+                  );
+
+      allow create: if isAdmin() || (
+                      isSignedIn()
+                      && (myRole() == 'viewer' || myRole() == 'pmoDeputy')
+                      && request.resource.data.keys().hasOnly([
+                        'text', 'by', 'byRole', 'byUid', 'time', 'seen'
+                      ])
+                      && request.resource.data.byUid == request.auth.uid
+                      && request.resource.data.byRole == myRole()
+                      && request.resource.data.text is string
+                      && request.resource.data.text.size() > 0
+                      && request.resource.data.time is int
+                      && request.resource.data.seen == false
+                    );
+
+      allow update: if isSignedIn()
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['seen'])
+                    && request.resource.data.seen == true
+                    && (
+                      isAdmin()
+                      || (
+                        (myRole() == 'viewer' || myRole() == 'pmoDeputy')
+                        && resource.data.get('toUid', '') == request.auth.uid
+                      )
+                    );
+
+      allow delete: if isAdmin() || (
+                      isSignedIn()
+                      && resource.data.get('byUid', '') == request.auth.uid
+                    );
     }
 
     // خرید متریال ماهانه: مدیر امکان کامل دارد؛ مدیر پروژه فقط برای کارت‌های گزارش مالی اجازه‌ی خواندن دارد.
