@@ -222,7 +222,7 @@ function overallPercent(c){
 }
 function isCompleted(c){ return overallPercent(c) === 100; }
 
-/* ---------- مالی (گزارش مالی مدیر): قیمت جنس + اجرت نصب + فاکتور نهایی اختیاری ----------
+/* ---------- مالی (گزارش مالی مدیر): قیمت جنس + اجرت حمل و نصب و بسته بندی + فاکتور نهایی اختیاری ----------
    منطق: اگر فاکتور نهایی (جنس یا اجرت) ثبت شده باشد، همه‌ی محاسبات با فاکتور نهایی انجام می‌شود؛
    در غیر این صورت فاکتور اولیه ملاک است. این بخش کاملاً مستقل است و به هیچ فیلد/تابع قبلی دست نمی‌زند. */
 function formatToman(n){
@@ -2541,7 +2541,7 @@ function renderViewerSpecialContracts(){
         <div class="pmo-fin-name">${escapeHtml(c.name)}</div>
         <div class="pmo-fin-nums">
           <div class="pmo-fin-line"><span>ارزش متریال</span><span>${formatToman(f.material)} ریال</span></div>
-          <div class="pmo-fin-line"><span>اجرت نصب</span><span>${formatToman(f.labor)} ریال</span></div>
+          <div class="pmo-fin-line"><span>اجرت حمل و نصب و بسته بندی</span><span>${formatToman(f.labor)} ریال</span></div>
           <div class="pmo-fin-line total"><span>جمع قرارداد</span><span>${formatToman(f.total)} ریال</span></div>
         </div>
         <span class="pmo-fin-tag ${f.isFinal?'':'soft'}">${f.isFinal?'فاکتور نهایی':'فاکتور اولیه'}</span>
@@ -2557,7 +2557,7 @@ function renderViewerSpecialContracts(){
         <div class="pmo-fin-name">جمع کل</div>
         <div class="pmo-fin-nums">
           <div class="pmo-fin-line"><span>جمع کل ارزش متریال</span><span>${formatToman(totalMaterial)} ریال</span></div>
-          <div class="pmo-fin-line"><span>جمع کل اجرت نصب</span><span>${formatToman(totalLabor)} ریال</span></div>
+          <div class="pmo-fin-line"><span>جمع کل اجرت حمل و نصب و بسته بندی</span><span>${formatToman(totalLabor)} ریال</span></div>
           <div class="pmo-fin-line total"><span>جمع کل (متریال + اجرت)</span><span>${formatToman(totalAll)} ریال</span></div>
         </div>
       </div>
@@ -2840,7 +2840,7 @@ function renderViewerSectionBody(){
           <div class="pmo-fin-name">${escapeHtml(c.name)}</div>
           <div class="pmo-fin-nums">
             <div class="pmo-fin-line"><span>ارزش متریال</span><span>${formatToman(f.material)} ریال</span></div>
-            <div class="pmo-fin-line"><span>اجرت نصب</span><span>${formatToman(f.labor)} ریال</span></div>
+            <div class="pmo-fin-line"><span>اجرت حمل و نصب و بسته بندی</span><span>${formatToman(f.labor)} ریال</span></div>
             <div class="pmo-fin-line total"><span>جمع قرارداد</span><span>${formatToman(f.total)} ریال</span></div>
           </div>
           <span class="pmo-fin-tag ${f.isFinal?'':'soft'}">${f.isFinal?'فاکتور نهایی':'فاکتور اولیه'}</span>
@@ -2859,7 +2859,7 @@ function renderViewerSectionBody(){
           <div class="pmo-fin-name">جمع کل</div>
           <div class="pmo-fin-nums">
             <div class="pmo-fin-line"><span>جمع کل ارزش متریال</span><span>${formatToman(totalMaterial)} ریال</span></div>
-            <div class="pmo-fin-line"><span>جمع کل اجرت نصب</span><span>${formatToman(totalLabor)} ریال</span></div>
+            <div class="pmo-fin-line"><span>جمع کل اجرت حمل و نصب و بسته بندی</span><span>${formatToman(totalLabor)} ریال</span></div>
             <div class="pmo-fin-line total"><span>جمع کل (متریال + اجرت)</span><span>${formatToman(totalMaterial+totalLabor)} ریال</span></div>
           </div>
         </div>` : ''}
@@ -2975,12 +2975,9 @@ function toggleViewerHistory(id){ viewerHistoryOpen[id] = !viewerHistoryOpen[id]
 function renderAccounting(el){
   el.innerHTML = `
     <div class="admin-shell">
-      <div class="viewer-hero" style="padding:9px 12px; min-height:0; margin-bottom:8px;">
-        <div><div class="viewer-hero-title" style="margin:0;">حسابداری عزیز، خوش آمدید 👋</div></div>
-      </div>
       <div id="viewerBody"></div>
       <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
-      <nav class="admin-bottom-nav" aria-label="ناوبری پنل حسابداری">
+      <nav class="admin-bottom-nav" aria-label="ناوبری پنل حسابداری" style="grid-template-columns:repeat(3,1fr);">
         <button class="${accountingTab==='financial'?'active':''}" onclick="switchAccountingTab('financial')"><span>◈</span>گزارش مالی</button>
         <button class="${accountingTab==='contracts'?'active':''}" onclick="switchAccountingTab('contracts')"><span>▤</span>قراردادها</button>
         <button class="${accountingTab==='exports'?'active':''}" onclick="switchAccountingTab('exports')"><span>📤</span>خروجی مالی</button>
@@ -4047,7 +4044,7 @@ function renderMaterialPurchasesSection(){
 const FINANCIAL_CARD_STATIC_META = {
   totalValue:       { label:'ارزش کل قراردادها', cls:'kpi-blue' },
   contractMaterial: { label:'ارزش متریال قراردادها', cls:'' },
-  totalLabor:       { label:'اجرت نصب', cls:'' },
+  totalLabor:       { label:'اجرت حمل و نصب و بسته بندی', cls:'' },
   realizedValue:    { label:'ارزش تحقق‌یافته (بر اساس پیشرفت)', cls:'kpi-amber' },
   avgValue:         { label:'میانگین ارزش هر قرارداد', cls:'kpi-blue' },
   closedValue:      { label:'ارزش قراردادهای خاتمه‌یافته', cls:'' },
@@ -4560,7 +4557,7 @@ async function exportFinancialExcel(){
       [],
       ['ارزش کل قراردادها (ریال)', st.totalValue],
       ['جمع ارزش متریال (ریال)', st.totalMaterial],
-      ['جمع اجرت نصب (ریال)', st.totalLabor],
+      ['جمع اجرت حمل و نصب و بسته بندی (ریال)', st.totalLabor],
       ['میانگین ارزش هر قرارداد (ریال)', st.avgValue],
       ['دارای فاکتور نهایی', st.withFinalCount + ' از ' + st.totalCount],
       ['ارزش تحقق‌یافته بر اساس پیشرفت (ریال)', st.realizedValue],
@@ -4575,7 +4572,7 @@ async function exportFinancialExcel(){
       'نام قرارداد': r.c.name || '',
       'کد قلم': r.c.itemCode || '',
       'ارزش متریال (ریال)': r.fin.material,
-      'اجرت نصب (ریال)': r.fin.labor,
+      'اجرت حمل و نصب و بسته بندی (ریال)': r.fin.labor,
       'مبلغ کل (ریال)': r.fin.total,
       'منبع محاسبه': r.fin.isFinal ? 'فاکتور نهایی' : 'فاکتور اولیه',
       'درصد پیشرفت': r.pct + '٪',
@@ -4634,7 +4631,7 @@ function financialOutputSummaryRows(st){
   return [
     ['ارزش کل قراردادها (ریال)', st.totalValue],
     ['جمع ارزش متریال (ریال)', st.totalMaterial],
-    ['جمع اجرت نصب (ریال)', st.totalLabor],
+    ['جمع اجرت حمل و نصب و بسته بندی (ریال)', st.totalLabor],
     ['میانگین ارزش هر قرارداد (ریال)', st.avgValue],
     ['دارای فاکتور نهایی', `${st.withFinalCount} از ${st.totalCount}`],
     ['ارزش تحقق‌یافته بر اساس پیشرفت (ریال)', st.realizedValue],
@@ -5934,7 +5931,7 @@ function specialContractsExportRows(){
       'نام قرارداد': c.name || '',
       'کد قلم': c.itemCode || '',
       'ارزش متریال (ریال)': f.material,
-      'اجرت نصب (ریال)': f.labor,
+      'اجرت حمل و نصب و بسته بندی (ریال)': f.labor,
       'جمع قرارداد (ریال)': f.total,
       'نوع فاکتور': f.isFinal ? 'فاکتور نهایی' : 'فاکتور اولیه',
       'پیشرفت': overallPercent(c) + '٪',
@@ -5957,7 +5954,7 @@ async function exportSpecialContractsExcel(){
       ['تاریخ گزارش', todayJalaliLabel()],
       ['تعداد قراردادهای خاص', items.length],
       ['جمع ارزش متریال (ریال)', totalMaterial],
-      ['جمع اجرت نصب (ریال)', totalLabor],
+      ['جمع اجرت حمل و نصب و بسته بندی (ریال)', totalLabor],
       ['جمع کل (ریال)', totalMaterial + totalLabor]
     ];
     const wsSummary = XLSX.utils.aoa_to_sheet(summary);
@@ -5986,13 +5983,13 @@ async function exportSpecialContractsPdf(){
     const extraHeaderHtml = `
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;">
         <div style="border:1px solid #ddd;border-radius:8px;padding:8px;"><div style="font-size:9px;color:#666;">جمع ارزش متریال</div><b>${formatToman(totalMaterial)} ریال</b></div>
-        <div style="border:1px solid #ddd;border-radius:8px;padding:8px;"><div style="font-size:9px;color:#666;">جمع اجرت نصب</div><b>${formatToman(totalLabor)} ریال</b></div>
+        <div style="border:1px solid #ddd;border-radius:8px;padding:8px;"><div style="font-size:9px;color:#666;">جمع اجرت حمل و نصب و بسته بندی</div><b>${formatToman(totalLabor)} ریال</b></div>
         <div style="border:1px solid #0f766e;border-radius:8px;padding:8px;"><div style="font-size:9px;color:#666;">جمع کل</div><b>${formatToman(totalMaterial+totalLabor)} ریال</b></div>
       </div>`;
     const rows = specialContractsExportRows();
     const headers = ['نام قرارداد','کد قلم','متریال','اجرت','جمع','فاکتور','پیشرفت','مرحله','سررسید','وضعیت'];
     const tableRows = rows.map(r => [
-      r['نام قرارداد'], r['کد قلم'], formatToman(r['ارزش متریال (ریال)']), formatToman(r['اجرت نصب (ریال)']),
+      r['نام قرارداد'], r['کد قلم'], formatToman(r['ارزش متریال (ریال)']), formatToman(r['اجرت حمل و نصب و بسته بندی (ریال)']),
       formatToman(r['جمع قرارداد (ریال)']), r['نوع فاکتور'], r['پیشرفت'], r['مرحله فعلی'], r['سررسید'], r['وضعیت']
     ]);
     await renderPaginatedReportPdf({
@@ -6409,7 +6406,7 @@ function renderCard(c, isAdmin, forceOpen){
       <button class="field-save" onclick="saveInitialPrices('${c.id}')">ثبت</button>
     </div>
     <div class="field-row">
-      <label>اجرت نصب (فاکتور اولیه):</label>
+      <label>اجرت حمل و نصب و بسته بندی (فاکتور اولیه):</label>
       <input type="text" inputmode="numeric" id="laborprice_${c.id}" placeholder="مثلاً 20000000" style="direction:ltr; text-align:left; font-family:'JetBrains Mono',monospace;" value="${c.laborPrice ? c.laborPrice : ''}">
       <button class="field-save" onclick="saveInitialPrices('${c.id}')">ثبت</button>
     </div>
@@ -6419,7 +6416,7 @@ function renderCard(c, isAdmin, forceOpen){
       <button class="field-save" onclick="saveFinalInvoice('${c.id}')">ثبت</button>
     </div>
     <div class="field-row">
-      <label>فاکتور نهایی — اجرت نصب:</label>
+      <label>فاکتور نهایی — اجرت حمل و نصب و بسته بندی:</label>
       <input type="text" inputmode="numeric" id="flaborprice_${c.id}" placeholder="در صورت وجود" style="direction:ltr; text-align:left; font-family:'JetBrains Mono',monospace;" value="${c.finalLaborPrice ? c.finalLaborPrice : ''}">
       <button class="field-save" onclick="saveFinalInvoice('${c.id}')">ثبت</button>
     </div>
@@ -6612,7 +6609,7 @@ async function saveInitialPrices(id){
   const mRaw = document.getElementById(`matprice_${id}`).value.trim().replace(/,/g,'');
   const lRaw = document.getElementById(`laborprice_${id}`).value.trim().replace(/,/g,'');
   if(mRaw && isNaN(Number(mRaw))){ alert('ارزش متریال باید عدد باشد.'); return; }
-  if(lRaw && isNaN(Number(lRaw))){ alert('اجرت نصب باید عدد باشد.'); return; }
+  if(lRaw && isNaN(Number(lRaw))){ alert('اجرت حمل و نصب و بسته بندی باید عدد باشد.'); return; }
   const materialPrice = mRaw ? Number(mRaw) : 0;
   const laborPrice = lRaw ? Number(lRaw) : 0;
   const c = findAnyContract(id);
@@ -6626,7 +6623,7 @@ async function saveFinalInvoice(id){
   const mRaw = document.getElementById(`fmatprice_${id}`).value.trim().replace(/,/g,'');
   const lRaw = document.getElementById(`flaborprice_${id}`).value.trim().replace(/,/g,'');
   if(mRaw && isNaN(Number(mRaw))){ alert('ارزش متریال فاکتور نهایی باید عدد باشد.'); return; }
-  if(lRaw && isNaN(Number(lRaw))){ alert('اجرت نصب فاکتور نهایی باید عدد باشد.'); return; }
+  if(lRaw && isNaN(Number(lRaw))){ alert('اجرت حمل و نصب و بسته بندی فاکتور نهایی باید عدد باشد.'); return; }
   const finalMaterialPrice = mRaw ? Number(mRaw) : 0;
   const finalLaborPrice = lRaw ? Number(lRaw) : 0;
   const c = findAnyContract(id);
@@ -6734,9 +6731,9 @@ const BULK_IMPORT_HEADERS = {
   dueDate: 'سررسید قرارداد',
   revisedDueDate: 'سررسید جبرانی',
   materialPrice: 'قیمت جنس - فاکتور اولیه (ریال)',
-  laborPrice: 'قیمت اجرت نصب - فاکتور اولیه (ریال)',
+  laborPrice: 'قیمت اجرت حمل و نصب و بسته بندی - فاکتور اولیه (ریال)',
   finalMaterialPrice: 'فاکتور نهایی - جنس (ریال)',
-  finalLaborPrice: 'فاکتور نهایی - اجرت نصب (ریال)',
+  finalLaborPrice: 'فاکتور نهایی - اجرت حمل و نصب و بسته بندی (ریال)',
   status: 'وضعیت',
   description: 'توضیحات'
 };
