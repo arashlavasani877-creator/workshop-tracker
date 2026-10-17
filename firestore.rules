@@ -11,13 +11,19 @@ service cloud.firestore {
     function isAdmin() {
       return isSignedIn() && myRole() == 'admin';
     }
+    function isAccounting() {
+      return isSignedIn() && myRole() == 'accounting';
+    }
+    function canManageMaterialPurchases() {
+      return isAdmin() || isAccounting();
+    }
     // isEditor: کسانی که اجازه‌ی نوشتن/تغییر روی قراردادها دارند (مدیر + سرپرست نصب + سرپرست افراچوب)
     function isEditor() {
       return isSignedIn() && (myRole() == 'admin' || myRole() == 'supervisor' || myRole() == 'afrachoobSupervisor');
     }
     // isApproved: کسانی که فقط اجازه‌ی خواندن دارند هم شامل می‌شود (+ مدیر پروژه و معاونت PMO، هر دو فقط‌گزارش)
     function isApproved() {
-      return isSignedIn() && (myRole() == 'admin' || myRole() == 'supervisor' || myRole() == 'viewer' || myRole() == 'afrachoobSupervisor' || myRole() == 'pmoDeputy');
+      return isSignedIn() && (myRole() == 'admin' || myRole() == 'supervisor' || myRole() == 'viewer' || myRole() == 'afrachoobSupervisor' || myRole() == 'pmoDeputy' || myRole() == 'accounting');
     }
     // isCommentOnlyUpdate: مدیر پروژه و معاونت PMO اجازه ندارند هیچ فیلدی از قرارداد را تغییر دهند جز کامنت‌ها —
     // این تابع فقط زمانی true است که در آپدیت، فقط و فقط فیلد comments تغییر کرده باشد (نه فیلد دیگری)
@@ -111,9 +117,9 @@ service cloud.firestore {
 
     // خرید متریال ماهانه: مدیر امکان کامل دارد؛ مدیر پروژه فقط برای کارت‌های گزارش مالی اجازه‌ی خواندن دارد.
     match /materialPurchases/{purchaseId} {
-      allow read: if isAdmin() || (isSignedIn() && myRole() == 'viewer');
+      allow read: if canManageMaterialPurchases() || (isSignedIn() && myRole() == 'viewer');
 
-      allow create: if isAdmin()
+      allow create: if canManageMaterialPurchases()
                     && request.resource.data.keys().hasOnly([
                       'supplierName', 'amount', 'year', 'month', 'note',
                       'createdBy', 'createdAt', 'updatedBy', 'updatedAt'
@@ -134,7 +140,7 @@ service cloud.firestore {
                     && request.resource.data.createdAt is int
                     && request.resource.data.updatedAt is int;
 
-      allow update: if isAdmin()
+      allow update: if canManageMaterialPurchases()
                     && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
                       'supplierName', 'amount', 'year', 'month', 'note',
                       'updatedBy', 'updatedAt'
@@ -153,7 +159,7 @@ service cloud.firestore {
                     && request.resource.data.updatedBy == request.auth.uid
                     && request.resource.data.updatedAt is int;
 
-      allow delete: if isAdmin();
+      allow delete: if canManageMaterialPurchases();
     }
 
     // تنظیمات شخصی رابط کاربری: Admin و مدیر پروژه فقط تنظیمات حساب خودشان را می‌خوانند/می‌نویسند.

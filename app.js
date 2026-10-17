@@ -78,6 +78,7 @@ let viewerDashboardSection = null;    // critical | panelwait | waitingdelivery
 let viewerDashboardSearch = '';
 let viewerMoreSection = null;         // exports | contact | mycomments
 let viewerExportPanel = null;         // financial | contracts | special
+let accountingTab = 'financial';      // financial | contracts | exports — صفحه اول حسابداری همیشه مالی است
 let viewerHistoryOpen = {};   // id -> bool — برای مدیر پروژه همیشه پیش‌فرض بسته
 let pmNotes = [];             // پیام‌های عمومی «ارتباط با کنترل پروژه» / «ارتباط با مدیر» — لیست ادغام‌شده‌ی نهایی
 let pmNotesA = [];            // نتیجه‌ی listener اول (برای مدیر پروژه: پیام‌های خودش)
@@ -1641,6 +1642,7 @@ function initAuthAndData(){
       viewerDashboardSearch = '';
       viewerMoreSection = null;
       viewerExportPanel = null;
+      accountingTab = 'financial';
       viewerSection = null;
       stopPresenceHeartbeat();
       if(!user){ myRole = null; myPosition = ''; renderApp(); return; }
@@ -1780,7 +1782,7 @@ function renderAppPreservingInputs(){
 
 function ensureDataSubscriptions(){
   if(dataSubscribed) return;
-  if(myRole !== 'admin' && myRole !== 'supervisor' && myRole !== 'viewer' && myRole !== 'afrachoobSupervisor' && myRole !== 'pmoDeputy') return;
+  if(myRole !== 'admin' && myRole !== 'supervisor' && myRole !== 'viewer' && myRole !== 'afrachoobSupervisor' && myRole !== 'pmoDeputy' && myRole !== 'accounting') return;
   dataSubscribed = true;
   db.collection('contracts').orderBy('createdAt','desc').onSnapshot((snap) => {
     const all = snap.docs.map(d => ({ id:d.id, ...d.data() }));
@@ -2055,6 +2057,7 @@ function renderApp(){
   if(myRole === 'viewer'){ renderViewer(el); return; }
   if(myRole === 'afrachoobSupervisor'){ renderAfrachoobSupervisor(el); return; }
   if(myRole === 'pmoDeputy'){ renderViewer(el); return; }
+  if(myRole === 'accounting'){ renderAccounting(el); return; }
 
   el.innerHTML = `<div class="center-screen">
     <span class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">در حال بارگذاری…</span></span>
@@ -2064,10 +2067,10 @@ function renderApp(){
 }
 
 function roleFa(r){
-  return { admin:'مدیر', supervisor:'سرپرست نصب', viewer:'مدیر پروژه', afrachoobSupervisor:'سرپرست افراچوب', pmoDeputy:'معاونت PMO', pending:'در انتظار تایید', blocked:'مسدود' }[r] || r;
+  return { admin:'مدیر', supervisor:'سرپرست نصب', viewer:'مدیر پروژه', afrachoobSupervisor:'سرپرست افراچوب', pmoDeputy:'معاونت PMO', accounting:'حسابداری', pending:'در انتظار تایید', blocked:'مسدود' }[r] || r;
 }
 
-const ADMIN_PREVIEW_ROLES = ['supervisor', 'viewer', 'afrachoobSupervisor', 'pmoDeputy'];
+const ADMIN_PREVIEW_ROLES = ['supervisor', 'viewer', 'afrachoobSupervisor', 'pmoDeputy', 'accounting'];
 function openAdminPanelPreview(role){
   if(myRole !== 'admin' || !ADMIN_PREVIEW_ROLES.includes(role)) return;
   adminPreviewRole = role;
@@ -2080,6 +2083,13 @@ function openAdminPanelPreview(role){
     viewerDashboardSearch = '';
     viewerMoreSection = null;
     viewerExportPanel = null;
+    viewerOpenId = null;
+  }
+  if(role === 'accounting') {
+    accountingTab = 'financial';
+    viewerSearchQuery = '';
+    viewerFilterStage = 'all';
+    viewerFilterStatus = 'all';
     viewerOpenId = null;
   }
   renderApp();
@@ -2105,6 +2115,7 @@ function renderAdminRolePreview(el, role){
     if(role === 'supervisor') renderSupervisor(el);
     else if(role === 'afrachoobSupervisor') renderAfrachoobSupervisor(el);
     else if(role === 'viewer' || role === 'pmoDeputy') renderViewer(el);
+    else if(role === 'accounting') renderAccounting(el);
     else renderPmoDeputy(el);
   }finally{
     myRole = actualRole;
@@ -2490,7 +2501,7 @@ function renderViewerContracts(){
       </select>
     </div>
     <div id="viewerContractsList"></div>
-    ${archivedSectionHtml('viewer', false, true)}`;
+    ${archivedSectionHtml('viewer', false, myRole !== 'accounting')}`;
   renderViewerContractsList();
 }
 function onViewerContractsSearch(v){ viewerSearchQuery = v; renderViewerContractsList(); }
@@ -2917,7 +2928,7 @@ function renderViewerCard(c){
   const panelWait = isPanelWaiting(c);
   const badges = [];
   if(c.itemCode) badges.push('<span class="mini-badge">کد قلم: ' + escapeHtml(c.itemCode) + '</span>');
-  if(commentCount) badges.push('<span class="mini-badge">💬 ' + commentCount + '</span>');
+  if(commentCount && myRole !== 'accounting') badges.push('<span class="mini-badge">💬 ' + commentCount + '</span>');
   const timelineHtml = STAGES.map((st,i) => {
     const s = (c.status||{})[i] || {};
     const stageDone = isStageDone(c.status||{}, i);
@@ -2951,12 +2962,60 @@ function renderViewerCard(c){
           <span>تاریخچه ${hOpen ? '▲' : '▼'}</span>
         </div>
         ${hOpen ? histHtml : ''}
-        ${renderCommentsHtml(c, 'v', myRole === 'viewer' || myRole === 'pmoDeputy')}
+        ${myRole === 'accounting' ? '' : renderCommentsHtml(c, 'v', myRole === 'viewer' || myRole === 'pmoDeputy')}
       </div>
     </div>`;
 }
 function toggleViewerCard(id){ viewerOpenId = viewerOpenId===id ? null : id; renderApp(); }
 function toggleViewerHistory(id){ viewerHistoryOpen[id] = !viewerHistoryOpen[id]; renderApp(); }
+
+
+/* ---------- Accounting role — مالی | قراردادها | خروجی مالی ----------
+   قراردادها فقط‌خواندنی‌اند؛ ثبت/ویرایش/حذف فقط برای خرید متریال مجاز است. */
+function renderAccounting(el){
+  el.innerHTML = `
+    <div class="admin-shell">
+      <div class="viewer-hero" style="padding:9px 12px; min-height:0; margin-bottom:8px;">
+        <div><div class="viewer-hero-title" style="margin:0;">حسابداری عزیز، خوش آمدید 👋</div></div>
+      </div>
+      <div id="viewerBody"></div>
+      <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
+      <nav class="admin-bottom-nav" aria-label="ناوبری پنل حسابداری">
+        <button class="${accountingTab==='financial'?'active':''}" onclick="switchAccountingTab('financial')"><span>◈</span>گزارش مالی</button>
+        <button class="${accountingTab==='contracts'?'active':''}" onclick="switchAccountingTab('contracts')"><span>▤</span>قراردادها</button>
+        <button class="${accountingTab==='exports'?'active':''}" onclick="switchAccountingTab('exports')"><span>📤</span>خروجی مالی</button>
+      </nav>
+    </div>`;
+  renderAccountingTabBody();
+}
+function switchAccountingTab(tab){
+  if(!['financial','contracts','exports'].includes(tab)) return;
+  accountingTab = tab;
+  if(tab !== 'contracts') viewerOpenId = null;
+  renderApp();
+}
+function renderAccountingTabBody(){
+  if(accountingTab === 'contracts'){ renderViewerContracts(); return; }
+  if(accountingTab === 'exports'){ renderAccountingFinancialExports(); return; }
+  renderAdminFinancial();
+}
+function renderAccountingFinancialExports(){
+  const body = document.getElementById('viewerBody');
+  if(!body) return;
+  ensureMaterialPurchasesLoaded();
+  const financialCards = [
+    outputPairCard('گزارش مالی خلاصه','شاخص‌های کلیدی مالی در بازه انتخاب‌شده','exportFinancialSummaryPdf()','exportFinancialSummaryExcel()','💰'),
+    outputPairCard('گزارش مالی ماهانه','جمع ارزش قراردادها به تفکیک ماه ثبت','exportFinancialMonthlyPdf()','exportFinancialMonthlyExcel()','📅'),
+    outputPairCard('ریز قراردادهای مالی','جزئیات متریال، اجرت، مبلغ کل و پیشرفت','exportFinancialPdf()','exportFinancialExcel()','🧾'),
+    outputPairCard('گزارش خرید متریال','ریز خرید متریال به تفکیک ماه و تأمین‌کننده در بازه انتخاب‌شده','exportMaterialPurchasesPdf()','exportMaterialPurchasesExcel()','🛒')
+  ];
+  body.innerHTML = `
+    <div class="section-title" style="margin-top:14px;">📤 خروجی مالی</div>
+    <div class="viewer-report-note">خروجی‌های مالی حسابداری با همان فیلتر سال/ماه گزارش مالی ساخته می‌شوند.</div>
+    ${renderFinancialOutputFilterHtml()}
+    ${outputReportGrid(financialCards)}`;
+  localizeFinancialDigits(body);
+}
 
 
 /* ---------- Admin view (V9 — Professional Dashboard) ---------- */
@@ -3180,6 +3239,7 @@ function renderAdminPanels(){
       <button onclick="openAdminPanelPreview('viewer')"><span>📋</span>مدیر پروژه</button>
       <button onclick="openAdminPanelPreview('afrachoobSupervisor')"><span>🪵</span>سرپرست افراچوب</button>
       <button onclick="openAdminPanelPreview('pmoDeputy')"><span>📊</span>معاونت PMO</button>
+      <button onclick="openAdminPanelPreview('accounting')"><span>🧮</span>حسابداری</button>
     </div>`;
 }
 
@@ -3640,8 +3700,12 @@ function sortMaterialPurchases(){
     (Number(b.updatedAt||b.createdAt)||0) - (Number(a.updatedAt||a.createdAt)||0)
   );
 }
+function canManageMaterialPurchases(){
+  const role = financialUiRole();
+  return role === 'admin' || role === 'accounting';
+}
 async function ensureMaterialPurchasesLoaded(){
-  if((myRole !== 'admin' && myRole !== 'viewer') || !db || materialPurchasesLoaded || materialPurchasesLoading) return;
+  if(!['admin','viewer','accounting'].includes(financialUiRole()) || !db || materialPurchasesLoaded || materialPurchasesLoading) return;
   materialPurchasesLoading = true;
   materialPurchasesError = '';
 
@@ -3723,7 +3787,7 @@ function toggleMaterialPurchaseSection(){
   renderAdminFinancial();
 }
 function openMaterialPurchaseForm(id){
-  if(myRole !== 'admin') return;
+  if(!canManageMaterialPurchases()) return;
   materialPurchaseEditId = id || null;
   materialPurchaseFormOpen = true;
   renderAdminFinancial();
@@ -3746,7 +3810,7 @@ function setMaterialPurchaseMonth(v){
   renderAdminFinancial();
 }
 async function saveMaterialPurchase(){
-  if(myRole !== 'admin' || !db || !currentUser || materialPurchaseSaving) return;
+  if(!canManageMaterialPurchases() || !db || !currentUser || materialPurchaseSaving) return;
   const supplierName = (document.getElementById('materialSupplierInput')?.value || '').trim();
   const amount = materialPurchaseAmountValue(document.getElementById('materialAmountInput')?.value || '');
   const year = Number(materialPurchaseToEnglishDigits(document.getElementById('materialYearInput')?.value || ''));
@@ -3798,7 +3862,7 @@ async function saveMaterialPurchase(){
   }
 }
 async function deleteMaterialPurchase(id){
-  if(myRole !== 'admin' || !db || !currentUser || !id) return;
+  if(!canManageMaterialPurchases() || !db || !currentUser || !id) return;
   const purchase = materialPurchases.find(p => p.id === id);
   if(!purchase) return;
 
@@ -3819,7 +3883,7 @@ async function deleteMaterialPurchase(id){
   }
 }
 function renderMaterialPurchasesSection(){
-  if(myRole !== 'admin') return '';
+  if(!canManageMaterialPurchases()) return '';
   ensureMaterialPurchaseDefaultFilter();
 
   if(!materialPurchaseSectionOpen){
@@ -3876,7 +3940,7 @@ function renderMaterialPurchasesSection(){
       <div style="display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;">
         <div>
           <div class="chart-title" style="margin-bottom:3px;">🧾 خرید متریال ماهانه</div>
-          <div style="font-size:10.5px; color:var(--ink-soft);">ثبت تجمیعی خرید از تأمین‌کننده‌ها — فقط مدیر</div>
+          <div style="font-size:10.5px; color:var(--ink-soft);">ثبت تجمیعی خرید از تأمین‌کننده‌ها — مدیر و حسابداری</div>
         </div>
         <div style="display:flex; gap:7px; flex-wrap:wrap;">
           <button class="btn-primary" style="width:auto; padding:9px 14px;" onclick="openMaterialPurchaseForm()">+ ثبت خرید جدید</button>
@@ -4028,7 +4092,7 @@ function normalizeFinancialCardLayout(layout){
   return out;
 }
 function financialActiveCardLayout(){
-  if(adminPreviewRole === 'viewer') return financialDefaultCardLayout();
+  if(adminPreviewRole === 'viewer' || adminPreviewRole === 'accounting') return financialDefaultCardLayout();
   if(financialCardSettingsLoaded) return financialCardLayout.slice();
   if(financialCardLayout.length) return financialCardLayout.slice();
   return financialDefaultCardLayout();
@@ -4098,7 +4162,7 @@ function renderFinancialMaterialPurchaseBreakdown(){
 function financialUiRole(){ return adminPreviewRole || myRole; }
 function financialCanReadMaterialPurchases(){
   const role = financialUiRole();
-  return role === 'admin' || role === 'viewer';
+  return role === 'admin' || role === 'viewer' || role === 'accounting';
 }
 function canManageFinancialCardLayout(){
   // در حالت Preview مدیر، تنظیمات نقش دیگر نباید روی حساب Admin ذخیره شود.
@@ -4109,6 +4173,11 @@ function rerenderFinancialSurface(){
   if(role === 'viewer' || role === 'pmoDeputy'){
     if(viewerTab === 'financial') renderAdminFinancial();
     else if(viewerTab === 'more' && viewerMoreSection === 'exports') renderViewerExportsHub();
+    return;
+  }
+  if(role === 'accounting'){
+    if(accountingTab === 'financial') renderAdminFinancial();
+    else if(accountingTab === 'exports') renderAccountingFinancialExports();
     return;
   }
   if(myRole === 'admin' && !adminPreviewRole){
@@ -4327,10 +4396,11 @@ function renderAdminFinancial(){
   const finEditable = (myRole === 'admin' && !adminPreviewRole);
   const viewerFinancial = (uiRole === 'viewer');
   const pmoFinancial = (uiRole === 'pmoDeputy');
+  const accountingFinancial = (uiRole === 'accounting');
   const body = finEditable ? document.getElementById('adminBody') : (document.getElementById('viewerBody') || document.getElementById('viewerSectionBody'));
   if(!body) return;
   const st = computeFinancialStats();
-  if(finEditable || viewerFinancial) ensureMaterialPurchasesLoaded();
+  if(finEditable || viewerFinancial || accountingFinancial) ensureMaterialPurchasesLoaded();
   if(canManageFinancialCardLayout()) ensureFinancialCardSettingsLoaded();
   const finRowOpen = (id) => finEditable ? ` onclick="openContractDetail('${id}')"` : '';
   const topList = st.rows.slice().filter(r => r.fin.total > 0).sort((a,b) => b.fin.total - a.fin.total).slice(0,5);
@@ -4386,9 +4456,9 @@ function renderAdminFinancial(){
     </div>` : `<div class="empty">${financialCanReadMaterialPurchases() ? 'هیچ قرارداد یا خرید متریالی با ماه معتبر وجود ندارد.' : 'هیچ قراردادی تاریخ معتبر نداره تا بشه بر اساس ماه/سال فیلترش کرد.'}</div>`) : ''}
 
     ${canManageFinancialCardLayout() ? renderFinancialCardManager() : ''}
-    ${(finEditable || viewerFinancial) ? renderFinancialCards(st) : renderViewerFinancialCards(st)}
+    ${(finEditable || viewerFinancial || accountingFinancial) ? renderFinancialCards(st) : renderViewerFinancialCards(st)}
 
-    ${finEditable ? renderMaterialPurchasesSection() : ''}
+    ${canManageMaterialPurchases() ? renderMaterialPurchasesSection() : ''}
 
     ${st.monthly.length ? `
     <div class="chart-box">
@@ -6079,7 +6149,7 @@ function renderAdminUsers(){
     if(u.role === 'pending'){
       actions = `<button class="btn-approve" onclick="openApproveModal('${u.id}','${escapeHtml(u.name||'')}')">تایید و تعیین سمت</button>
                  <button class="btn-block" onclick="setUserRole('${u.id}','blocked')">رد</button>`;
-    } else if(u.role === 'supervisor' || u.role === 'viewer' || u.role === 'afrachoobSupervisor' || u.role === 'pmoDeputy'){
+    } else if(u.role === 'supervisor' || u.role === 'viewer' || u.role === 'afrachoobSupervisor' || u.role === 'pmoDeputy' || u.role === 'accounting'){
       actions = `<button class="btn-revoke" onclick="setUserRole('${u.id}','pending')">لغو دسترسی</button>
                  <button class="btn-block" onclick="setUserRole('${u.id}','blocked')">مسدود کن</button>`;
     } else if(u.role === 'blocked'){
@@ -6174,7 +6244,7 @@ function renderSupervisorRow(c, isAdminView, canOpen){
   const done = isCompleted(c);
   const due = dueStatus(c);
   const badges = (c.itemCode ? `<span class="mini-badge">کد قلم: ${escapeHtml(c.itemCode)}</span>` : '')
-    + (myRole !== 'afrachoobSupervisor' && myRole !== 'supervisor' && (c.comments||[]).length ? `<span class="mini-badge">💬 ${c.comments.length}</span>` : '');
+    + (myRole !== 'afrachoobSupervisor' && myRole !== 'supervisor' && myRole !== 'accounting' && (c.comments||[]).length ? `<span class="mini-badge">💬 ${c.comments.length}</span>` : '');
   return `
     <div class="card"${canOpen ? ` style="cursor:pointer;" onclick="openContractDetail('${c.id}', ${isAdminView ? 'true' : 'false'})"` : ''}>
       <div class="card-head">
@@ -6216,7 +6286,7 @@ function renderCard(c, isAdmin, forceOpen){
 
   const badges = [];
   if(c.itemCode) badges.push('<span class="mini-badge">کد قلم: ' + escapeHtml(c.itemCode) + '</span>');
-  if(myRole !== 'afrachoobSupervisor' && myRole !== 'supervisor' && (c.comments||[]).length) badges.push('<span class="mini-badge">💬 ' + c.comments.length + '</span>');
+  if(myRole !== 'afrachoobSupervisor' && myRole !== 'supervisor' && myRole !== 'accounting' && (c.comments||[]).length) badges.push('<span class="mini-badge">💬 ' + c.comments.length + '</span>');
 
   const timelineHtml = STAGES.map((st,i) => {
     const s = status[i] || {};
