@@ -117,7 +117,7 @@ service cloud.firestore {
 
     // خرید متریال ماهانه: مدیر امکان کامل دارد؛ مدیر پروژه فقط برای کارت‌های گزارش مالی اجازه‌ی خواندن دارد.
     match /materialPurchases/{purchaseId} {
-      allow read: if canManageMaterialPurchases() || (isSignedIn() && myRole() == 'viewer');
+      allow read: if canManageMaterialPurchases() || (isSignedIn() && (myRole() == 'viewer' || myRole() == 'afrachoobSupervisor'));
 
       allow create: if canManageMaterialPurchases()
                     && request.resource.data.keys().hasOnly([

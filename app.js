@@ -99,7 +99,8 @@ let logDateFrom = '';
 let logDateTo = '';
 let splashHidden = false;
 /* ---------- V10: پنل «سرپرست افراچوب» — کاملاً جدا از متغیرهای بالا ---------- */
-let afrTab = 'dashboard';     // 'dashboard' | 'contracts' | 'warnings' | 'closed' | 'pmoComments'
+let afrTab = 'dashboard';     // 'dashboard' | 'contracts' | 'financial' | 'more'
+let afrMoreSection = null;   // null | 'warnings' | 'pmoComments' | 'exports'
 let afrSearchQuery = '';
 let afrDashSection = null;    // null | 'critical' | 'waitingdelivery' | 'panelwait'
 let afrDashSearch = '';
@@ -2076,7 +2077,7 @@ function openAdminPanelPreview(role){
   adminPreviewRole = role;
   // هر پیش‌نمایش از صفحه‌ی اصلی همان پنل شروع می‌شود.
   if(role === 'supervisor') supervisorTab = 'contracts';
-  if(role === 'afrachoobSupervisor') afrTab = 'dashboard';
+  if(role === 'afrachoobSupervisor') { afrTab = 'dashboard'; afrMoreSection = null; }
   if(role === 'viewer' || role === 'pmoDeputy') {
     viewerTab = 'dashboard';
     viewerDashboardSection = null;
@@ -2203,58 +2204,139 @@ function renderSupervisorList(){
    با چارت و سه دکمه‌ی بحرانی/در انتظار تحویل‌دهی/منتظر نصب صفحه — با همون منطق مدیر پروژه و مدیر.
    کامنت‌گذاری روی قرارداد و تاریخچه برای این نقش غیرفعال است. */
 function renderAfrachoobSupervisor(el){
-  const closedCount = contracts.filter(isCompleted).length;
   const pmoUnseen = pmoUnseenCount();
   el.innerHTML = `
-    <div class="toolbar"><button id="installBtn" class="btn-secondary" onclick="installApp()">نصب اپلیکیشن روی گوشی</button></div>
-    <div class="tabs">
-      <button class="${afrTab==='dashboard'?'active':''}" onclick="switchAfrTab('dashboard')">داشبورد</button>
-      <button class="${afrTab==='contracts'?'active':''}" onclick="switchAfrTab('contracts')">قراردادها</button>
-      <button class="${afrTab==='closed'?'active':''}" onclick="switchAfrTab('closed')">خاتمه‌ها ${closedCount?('('+closedCount+')'):''}</button>
+    <div class="admin-shell">
+      <div id="afrInstallToolbar" class="toolbar" style="margin-bottom:8px;"><button id="installBtn" class="btn-secondary" onclick="installApp()">نصب اپلیکیشن روی گوشی</button></div>
+      <div id="afrBody"></div>
+      <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
+      <nav class="admin-bottom-nav" aria-label="ناوبری پنل سرپرست افراچوب" style="grid-template-columns:repeat(4,1fr);">
+        <button class="${afrTab==='dashboard'?'active':''}" onclick="switchAfrTab('dashboard')"><span>⌂</span>داشبورد</button>
+        <button class="${afrTab==='contracts'?'active':''}" onclick="switchAfrTab('contracts')"><span>▤</span>قراردادها</button>
+        <button class="${afrTab==='financial'?'active':''}" onclick="switchAfrTab('financial')"><span>◈</span>گزارش مالی</button>
+        <button class="${afrTab==='more'?'active':''}" onclick="switchAfrTab('more')"><span>•••</span>بیشتر${(pmoUnseen && afrTab!=='more')?(' ('+pmoUnseen+')'):''}</button>
+      </nav>
     </div>
-    <div class="tabs" style="margin-top:8px;">
-      <button class="${afrTab==='warnings'?'active':''}" onclick="switchAfrTab('warnings')">هشدار سررسید</button>
-      <button class="${afrTab==='pmoComments'?'active':''}" onclick="switchAfrTab('pmoComments')">💬 کامنت‌های مدیر پروژه ${pmoUnseen?('('+pmoUnseen+')'):''}</button>
-    </div>
-    <div id="afrBody"></div>
-    <div class="sync-note"><span class="dot" id="statusDot"></span><span id="syncNote">همگام — لحظه‌ای</span></div>
   `;
   const installBtn = document.getElementById('installBtn');
-  if(installBtn) installBtn.style.display = window.__deferredPrompt ? 'block' : 'none';
+  const installToolbar = document.getElementById('afrInstallToolbar');
+  const canInstall = !!window.__deferredPrompt;
+  if(installBtn) installBtn.style.display = canInstall ? 'block' : 'none';
+  if(installToolbar) installToolbar.style.display = canInstall ? 'flex' : 'none';
+  renderAfrTabBody();
+}
+function renderAfrTabBody(){
   const body = document.getElementById('afrBody');
+  if(!body) return;
   if(afrTab === 'dashboard'){
     renderAfrDashboard(body);
-  } else if(afrTab === 'contracts'){
-    body.innerHTML = `
-      <div class="section-title" style="margin-top:14px;">قراردادها <span class="cnt" id="afrCount"></span></div>
-      <input type="text" id="afrSearch" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(afrSearchQuery)}" class="auth-input" style="max-width:none;width:100%;margin-bottom:10px;" oninput="onAfrSearch(this.value)">
-      <div style="display:flex; gap:8px; margin-bottom:14px;">
-        <select id="afrStageFilter" class="admin-select" onchange="onAfrStageFilter(this.value)">
-          <option value="all">همه مراحل</option>
-          ${DISPLAY_STAGES.map((name,i) => `<option value="${i}" ${afrFilterStage===String(i)?'selected':''}>${name}</option>`).join('')}
-        </select>
-        <select id="afrStatusFilter" class="admin-select" onchange="onAfrStatusFilter(this.value)">
-          <option value="all">همه وضعیت‌ها</option>
-          <option value="late" ${afrFilterStatus==='late'?'selected':''}>عقب‌افتاده</option>
-          <option value="near" ${afrFilterStatus==='near'?'selected':''}>نزدیک سررسید</option>
-          <option value="stale" ${afrFilterStatus==='stale'?'selected':''}>بروزرسانی نشده</option>
-          <option value="closed" ${afrFilterStatus==='closed'?'selected':''}>خاتمه‌یافته</option>
-        </select>
-      </div>
-      <div id="list"></div>
-      ${archivedSectionHtml('afr', false)}`;
-    renderAfrList();
-  } else if(afrTab === 'warnings'){
-    body.innerHTML = renderWarningsHtml();
-  } else if(afrTab === 'pmoComments'){
-    body.innerHTML = renderPmoCommentsHtml();
-    renderPmoCommentsList();
-  } else {
-    body.innerHTML = `<div class="section-title" style="margin-top:14px;">خاتمه‌ها <span class="cnt">${closedCount} مورد</span></div><div id="list"></div>`;
-    renderList(false, isCompleted);
+    return;
   }
+  if(afrTab === 'financial'){
+    renderAdminFinancial();
+    return;
+  }
+  if(afrTab === 'more'){
+    renderAfrMore();
+    return;
+  }
+  body.innerHTML = `
+    <div class="section-title" style="margin-top:14px;">قراردادها <span class="cnt" id="afrCount"></span></div>
+    <input type="text" id="afrSearch" placeholder="جستجو بر اساس نام یا کد قلم..." value="${escapeHtml(afrSearchQuery)}" class="auth-input" style="max-width:none;width:100%;margin-bottom:10px;" oninput="onAfrSearch(this.value)">
+    <div style="display:flex; gap:8px; margin-bottom:14px;">
+      <select id="afrStageFilter" class="admin-select" onchange="onAfrStageFilter(this.value)">
+        <option value="all">همه مراحل</option>
+        ${DISPLAY_STAGES.map((name,i) => `<option value="${i}" ${afrFilterStage===String(i)?'selected':''}>${name}</option>`).join('')}
+      </select>
+      <select id="afrStatusFilter" class="admin-select" onchange="onAfrStatusFilter(this.value)">
+        <option value="all">همه وضعیت‌ها</option>
+        <option value="late" ${afrFilterStatus==='late'?'selected':''}>عقب‌افتاده</option>
+        <option value="near" ${afrFilterStatus==='near'?'selected':''}>نزدیک سررسید</option>
+        <option value="stale" ${afrFilterStatus==='stale'?'selected':''}>بروزرسانی نشده</option>
+        <option value="closed" ${afrFilterStatus==='closed'?'selected':''}>خاتمه‌یافته</option>
+      </select>
+    </div>
+    <div id="list"></div>
+    ${archivedSectionHtml('afr', false)}`;
+  renderAfrList();
 }
-function switchAfrTab(t){ afrTab = t; renderApp(); }
+function switchAfrTab(t){
+  if(!['dashboard','contracts','financial','more'].includes(t)) return;
+  afrTab = t;
+  if(t === 'more') afrMoreSection = null;
+  renderApp();
+}
+function renderAfrMore(){
+  const body = document.getElementById('afrBody');
+  if(!body) return;
+  if(afrMoreSection === 'warnings'){
+    body.innerHTML = `<div class="toolbar"><button class="btn-secondary" onclick="closeAfrMoreSection()">↩ بازگشت</button></div>${renderWarningsHtml()}`;
+    return;
+  }
+  if(afrMoreSection === 'pmoComments'){
+    body.innerHTML = `<div class="toolbar"><button class="btn-secondary" onclick="closeAfrMoreSection()">↩ بازگشت</button></div>${renderPmoCommentsHtml()}`;
+    renderPmoCommentsList();
+    return;
+  }
+  if(afrMoreSection === 'exports'){
+    renderAfrExportsHub();
+    return;
+  }
+  const pmoUnseen = pmoUnseenCount();
+  body.innerHTML = `
+    <div class="section-title" style="margin-top:14px;">بیشتر</div>
+    <div class="admin-hub-grid">
+      <button onclick="openAfrMoreSection('warnings')"><span>⚠️</span>هشدار سررسید</button>
+      <button onclick="openAfrMoreSection('pmoComments')"><span>💬</span>کامنت‌های مدیر پروژه${pmoUnseen?(' ('+pmoUnseen+')'):''}</button>
+      <button onclick="openAfrMoreSection('exports')"><span>📤</span>خروجی‌ها</button>
+    </div>`;
+}
+function openAfrMoreSection(section){ afrMoreSection = section; renderApp(); }
+function closeAfrMoreSection(){ afrMoreSection = null; renderApp(); }
+function runAfrContractOutputPreset(scope, format){
+  exportScope = scope || 'all';
+  if(format === 'excel') return exportExcelViewer();
+  return exportPDFViewer();
+}
+function runCurrentAfrContractOutput(format){
+  const sel = document.getElementById('exportScopeSelect');
+  return runAfrContractOutputPreset(sel ? sel.value : exportScope, format);
+}
+function renderAfrExportsHub(){
+  const body = document.getElementById('afrBody');
+  if(!body) return;
+  ensureMaterialPurchasesLoaded();
+  const managementCards = [
+    outputPairCard('همه قراردادها','بدون فیلتر تاریخ شامل قراردادهای بایگانی‌شده هم می‌شود؛ با فیلتر فقط ماه‌های انتخابی',"runAfrContractOutputPreset('all','pdf')","runAfrContractOutputPreset('all','excel')",'📋'),
+    outputPairCard('قراردادهای بحرانی','فقط قراردادهای خاتمه‌نیافته با وضعیت بحرانی',"runAfrContractOutputPreset('critical','pdf')","runAfrContractOutputPreset('critical','excel')",'🔴'),
+    outputPairCard('نزدیک سررسید','قراردادهای خاتمه‌نیافته نزدیک سررسید',"runAfrContractOutputPreset('near','pdf')","runAfrContractOutputPreset('near','excel')",'🟡'),
+    outputPairCard('در انتظار تحویل‌دهی','قراردادهای رسیده به مرحله تحویل به مالک',"runAfrContractOutputPreset('waiting','pdf')","runAfrContractOutputPreset('waiting','excel')",'📦'),
+    outputPairCard('قراردادهای خاص','تمام قراردادهای علامت‌گذاری‌شده به‌عنوان قرارداد خاص','exportSpecialContractsPdf()','exportSpecialContractsExcel()','🌟'),
+    outputPairCard('خلاصه مدیریتی','خلاصه مدیریتی کل وضعیت قراردادها','exportManagementSummaryPdf()','exportManagementSummaryExcel()','📱')
+  ];
+  const financialCards = [
+    outputPairCard('گزارش مالی خلاصه','شاخص‌های کلیدی مالی در بازه انتخاب‌شده','exportFinancialSummaryPdf()','exportFinancialSummaryExcel()','💰'),
+    outputPairCard('گزارش مالی ماهانه','جمع ارزش قراردادها به تفکیک ماه ثبت','exportFinancialMonthlyPdf()','exportFinancialMonthlyExcel()','📅'),
+    outputPairCard('ریز قراردادهای مالی','جزئیات متریال، اجرت، مبلغ کل و پیشرفت','exportFinancialPdf()','exportFinancialExcel()','🧾'),
+    outputPairCard('گزارش خرید متریال','ریز خرید متریال به تفکیک ماه و تأمین‌کننده در بازه انتخاب‌شده','exportMaterialPurchasesPdf()','exportMaterialPurchasesExcel()','🛒')
+  ];
+  body.innerHTML = `
+    <div class="toolbar"><button class="btn-secondary" onclick="closeAfrMoreSection()">↩ بازگشت به بیشتر</button></div>
+    <div class="section-title" style="margin-top:10px;">خروجی</div>
+    <div class="viewer-report-note">تمام خروجی‌های مدیریتی و مالی در این بخش فقط برای دریافت گزارش هستند.</div>
+    ${renderAfrOutputDateFilterHtml()}
+    <div class="section-title" style="margin-top:18px;">خروجی‌های مدیریتی</div>
+    ${outputReportGrid(managementCards)}
+    ${renderFinancialOutputFilterHtml()}
+    <div class="section-title" style="margin-top:18px;">خروجی‌های مالی</div>
+    ${outputReportGrid(financialCards)}`;
+  localizeFinancialDigits(body);
+}
+function renderAfrOutputDateFilterHtml(){
+  return renderOutputDateFilterHtml(true)
+    .replace(/runCurrentContractOutput\('pdf'\)/g, "runCurrentAfrContractOutput('pdf')")
+    .replace(/runCurrentContractOutput\('excel'\)/g, "runCurrentAfrContractOutput('excel')");
+}
 function onAfrSearch(v){ afrSearchQuery = v; renderAfrList(); }
 function onAfrStageFilter(v){ afrFilterStage = v; renderAfrList(); }
 function onAfrStatusFilter(v){ afrFilterStatus = v; renderAfrList(); }
@@ -3336,7 +3418,8 @@ function contractOutputFilterLabel(){
 }
 function rerenderContractOutputSurface(){
   if(currentAfraPdfPreview) closeAfraPdfPreview();
-  if(document.getElementById('viewerBody')) renderViewerExportsHub();
+  if(document.getElementById('afrBody') && financialUiRole() === 'afrachoobSupervisor' && afrTab === 'more' && afrMoreSection === 'exports') renderAfrExportsHub();
+  else if(document.getElementById('viewerBody')) renderViewerExportsHub();
   else if(document.getElementById('adminBody')) renderAdminExports();
 }
 function toggleExportFilterPanel(){
@@ -3702,7 +3785,7 @@ function canManageMaterialPurchases(){
   return role === 'admin' || role === 'accounting';
 }
 async function ensureMaterialPurchasesLoaded(){
-  if(!['admin','viewer','accounting'].includes(financialUiRole()) || !db || materialPurchasesLoaded || materialPurchasesLoading) return;
+  if(!['admin','viewer','afrachoobSupervisor','accounting'].includes(financialUiRole()) || !db || materialPurchasesLoaded || materialPurchasesLoading) return;
   materialPurchasesLoading = true;
   materialPurchasesError = '';
 
@@ -4089,7 +4172,7 @@ function normalizeFinancialCardLayout(layout){
   return out;
 }
 function financialActiveCardLayout(){
-  if(adminPreviewRole === 'viewer' || adminPreviewRole === 'accounting') return financialDefaultCardLayout();
+  if(adminPreviewRole === 'viewer' || adminPreviewRole === 'afrachoobSupervisor' || adminPreviewRole === 'accounting') return financialDefaultCardLayout();
   if(financialCardSettingsLoaded) return financialCardLayout.slice();
   if(financialCardLayout.length) return financialCardLayout.slice();
   return financialDefaultCardLayout();
@@ -4159,7 +4242,7 @@ function renderFinancialMaterialPurchaseBreakdown(){
 function financialUiRole(){ return adminPreviewRole || myRole; }
 function financialCanReadMaterialPurchases(){
   const role = financialUiRole();
-  return role === 'admin' || role === 'viewer' || role === 'accounting';
+  return role === 'admin' || role === 'viewer' || role === 'afrachoobSupervisor' || role === 'accounting';
 }
 function canManageFinancialCardLayout(){
   // در حالت Preview مدیر، تنظیمات نقش دیگر نباید روی حساب Admin ذخیره شود.
@@ -4170,6 +4253,11 @@ function rerenderFinancialSurface(){
   if(role === 'viewer' || role === 'pmoDeputy'){
     if(viewerTab === 'financial') renderAdminFinancial();
     else if(viewerTab === 'more' && viewerMoreSection === 'exports') renderViewerExportsHub();
+    return;
+  }
+  if(role === 'afrachoobSupervisor'){
+    if(afrTab === 'financial') renderAdminFinancial();
+    else if(afrTab === 'more' && afrMoreSection === 'exports') renderAfrExportsHub();
     return;
   }
   if(role === 'accounting'){
@@ -4392,12 +4480,13 @@ function renderAdminFinancial(){
   const uiRole = financialUiRole();
   const finEditable = (myRole === 'admin' && !adminPreviewRole);
   const viewerFinancial = (uiRole === 'viewer');
+  const afraFinancial = (uiRole === 'afrachoobSupervisor');
   const pmoFinancial = (uiRole === 'pmoDeputy');
   const accountingFinancial = (uiRole === 'accounting');
-  const body = finEditable ? document.getElementById('adminBody') : (document.getElementById('viewerBody') || document.getElementById('viewerSectionBody'));
+  const body = finEditable ? document.getElementById('adminBody') : (document.getElementById('viewerBody') || document.getElementById('viewerSectionBody') || document.getElementById('afrBody'));
   if(!body) return;
   const st = computeFinancialStats();
-  if(finEditable || viewerFinancial || accountingFinancial) ensureMaterialPurchasesLoaded();
+  if(finEditable || viewerFinancial || afraFinancial || accountingFinancial) ensureMaterialPurchasesLoaded();
   if(canManageFinancialCardLayout()) ensureFinancialCardSettingsLoaded();
   const finRowOpen = (id) => finEditable ? ` onclick="openContractDetail('${id}')"` : '';
   const topList = st.rows.slice().filter(r => r.fin.total > 0).sort((a,b) => b.fin.total - a.fin.total).slice(0,5);
@@ -4453,7 +4542,7 @@ function renderAdminFinancial(){
     </div>` : `<div class="empty">${financialCanReadMaterialPurchases() ? 'هیچ قرارداد یا خرید متریالی با ماه معتبر وجود ندارد.' : 'هیچ قراردادی تاریخ معتبر نداره تا بشه بر اساس ماه/سال فیلترش کرد.'}</div>`) : ''}
 
     ${canManageFinancialCardLayout() ? renderFinancialCardManager() : ''}
-    ${(finEditable || viewerFinancial || accountingFinancial) ? renderFinancialCards(st) : renderViewerFinancialCards(st)}
+    ${(finEditable || viewerFinancial || afraFinancial || accountingFinancial) ? renderFinancialCards(st) : renderViewerFinancialCards(st)}
 
     ${canManageMaterialPurchases() ? renderMaterialPurchasesSection() : ''}
 
